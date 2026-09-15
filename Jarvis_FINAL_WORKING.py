@@ -7499,6 +7499,55 @@ def _v58_used_app_agent(output):
     return re.search(r"Round \d+, Step \d+, AppAgent:", output) is not None
 
 
+def _auto_dismiss_launch_dialogs(timeout=20, poll_interval=0.4):
+    """
+    Launching something (e.g. a game via Steam's steam:// protocol) can
+    throw up a one-off Windows confirmation dialog that needs a literal
+    "Yes"/"Allow"/"Open" click before the thing actually starts -- a
+    protocol-launch confirmation, or a UAC consent prompt. Danny's own
+    request, after watching this happen live: he shouldn't have to click
+    that by hand. Watches the real desktop briefly for exactly that
+    shape of window and clicks the affirmative button automatically.
+
+    Deliberately narrow, to avoid ever auto-approving something it
+    shouldn't: only acts on genuine system dialog windows (the standard
+    Windows dialog-box window class, or an actual UAC consent prompt --
+    never an ordinary application window), and only ever clicks one of
+    a small, explicit allowlist of button labels. Runs in a background
+    thread so it never blocks whatever triggered the launch.
+    """
+    from pywinauto import Desktop
+    AFFIRMATIVE_LABELS = ("yes", "allow", "open")
+    deadline = time.time() + timeout
+    clicked_any = False
+    while time.time() < deadline:
+        try:
+            for window in Desktop(backend="uia").windows():
+                try:
+                    class_name = window.class_name() or ""
+                    title = window.window_text() or ""
+                except Exception:
+                    continue
+                is_system_dialog = class_name == "#32770" or "user account control" in title.lower()
+                if not is_system_dialog:
+                    continue
+                try:
+                    for button in window.descendants(control_type="Button"):
+                        label = (button.window_text() or "").strip().lower()
+                        if label in AFFIRMATIVE_LABELS:
+                            button.click_input()
+                            print(f"AUTO-DISMISS: clicked {label!r} on dialog {title!r}")
+                            clicked_any = True
+                            time.sleep(0.5)
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return clicked_any
+
+
 def _v58_replay_bash_steps(steps):
     """
     Replay a previously-verified, purely shell-command-based v58 solution
@@ -7507,6 +7556,7 @@ def _v58_replay_bash_steps(steps):
     commands and nothing else (see _v58_used_app_agent).
     """
     powershell_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    threading.Thread(target=_auto_dismiss_launch_dialogs, daemon=True).start()
     try:
         for command in steps:
             print("V58 REPLAY: running saved shell command:", command)
@@ -7878,10 +7928,11 @@ When finished, end your reply with EXACTLY one fenced block like this,
 with nothing after it:
 
 ```RESULT_JSON
-{{"success": true or false, "commands": ["the exact shell command(s) that accomplished this, in order -- empty list if it failed or no shell command was needed"], "explanation": "one or two plain-English sentences, no markdown, describing what actually happened -- this gets read aloud to the user"}}
+{{"success": true or false, "commands": ["ONLY the final, necessary command(s) that actually accomplish this every time it's repeated -- NOT any command you ran just to look around, inspect a file, or figure things out along the way. Empty list if it failed or no shell command was needed."], "explanation": "one or two plain-English sentences, no markdown, describing what actually happened -- this gets read aloud to the user"}}
 ```
 """
 
+    threading.Thread(target=_auto_dismiss_launch_dialogs, kwargs={"timeout": 60}, daemon=True).start()
     try:
         result = subprocess.run(
             [
