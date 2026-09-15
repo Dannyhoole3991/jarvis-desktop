@@ -7170,6 +7170,213 @@ def _offer_teaching_before_research(task):
     return False
 
 
+# ============================================================
+# SELF-REPAIR -- A DEEPER DIAGNOSTIC, RUN ON JARVIS'S OWN CODE
+#
+# The absolute last resort, and the only tier that costs real usage
+# time: when an automated attempt has genuinely failed, Jarvis can run a
+# real coding agent against its OWN source code -- investigating live on
+# this machine the same way a developer would, and permanently fixing
+# the underlying capability rather than just completing the one task.
+#
+# Danny's explicit request: never say "I called Claude" out loud -- the
+# character-facing wording is always framed as Jarvis running his own
+# deeper diagnostic. Both of us know what it actually is; the character
+# doesn't say so.
+#
+# Safety model:
+#   - Only ever offered, never automatic -- explicit confirmation first,
+#     since it costs real time and (Claude subscription) usage.
+#   - A git commit is taken immediately before, as a real revert point.
+#   - The fix is independently compile-checked (never just trusted from
+#     the agent's own report) before being accepted; a failed compile
+#     -- or a run that timed out mid-edit -- is rolled back via git and
+#     reported honestly, never left half-broken.
+#   - Runs in a background thread so Jarvis's main loop stays
+#     responsive; the user is told up front this will take a while.
+# ============================================================
+
+def _find_claude_cli():
+    """
+    Locate the claude.exe binary on this machine. Confirmed live: this
+    install is a Windows-packaged (MSIX) app, which stores its real
+    files under AppData\\Local\\Packages\\<PackageFamilyName>\\LocalCache\\...
+    rather than the classic AppData\\Roaming path a packaged app's own
+    processes see (that path is a virtualized alias only visible from
+    inside the same package identity) -- a plain, unpackaged process
+    like this one only ever sees the real Packages\\...\\LocalCache
+    location. Picks the newest version folder if more than one is
+    present, since the app auto-updates.
+    """
+    import glob
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    patterns = [
+        os.path.join(local_appdata, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code", "*", "claude.exe"),
+        os.path.join(local_appdata, "Programs", "claude", "claude.exe"),
+    ]
+    candidates = []
+    for pattern in patterns:
+        candidates.extend(glob.glob(pattern))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"[.\\/]", p)])
+    return candidates[-1]
+
+
+def _git(*args, cwd=None):
+    """Run a git command in the Jarvis folder, returning (ok, output)."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd or os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.returncode == 0, (result.stdout + result.stderr).strip()
+    except Exception as error:
+        return False, str(error)
+
+
+def _run_self_repair_agent(task, context=None):
+    """
+    Run a real coding agent against Jarvis's own source code to
+    permanently fix the capability that just failed, rather than just
+    completing the one task once. See module docstring above for the
+    safety model (git checkpoint, independent compile verification,
+    automatic rollback on failure).
+    """
+    claude_exe = _find_claude_cli()
+    if not claude_exe:
+        say("I couldn't find my own diagnostic tools on this machine, so I can't do that right now.")
+        return False
+
+    jarvis_file = os.path.abspath(__file__)
+    jarvis_dir = os.path.dirname(jarvis_file)
+
+    say(
+        "Let me run a deeper diagnostic on my own systems, sir. This will "
+        "take a few minutes -- I'll let you know the moment I'm done."
+    )
+
+    # Safety checkpoint: commit whatever's currently on disk BEFORE any
+    # self-repair attempt, so a bad change always has a clean revert path.
+    _git("add", "-A", cwd=jarvis_dir)
+    _git("commit", "-m", f"Checkpoint before self-repair attempt: {task}", cwd=jarvis_dir)
+    before_ok, _before_hash = _git("rev-parse", "HEAD", cwd=jarvis_dir)
+
+    briefing = f"""You are fixing a real, currently-running personal assistant program called
+Jarvis, written as a single Python file at:
+{jarvis_file}
+
+TASK THAT FAILED: {task}
+
+{"CONTEXT / WHAT WAS ALREADY TRIED: " + str(context)[:1500] if context else ""}
+
+Your job: figure out why Jarvis can't currently do this, and fix it by
+editing {os.path.basename(jarvis_file)} directly, so it works reliably
+the next time this exact task (or the same category of task) comes up --
+not just complete it manually once.
+
+Investigate for real: read the relevant existing code first (search for
+how similar tasks are already handled, to stay consistent with the
+existing style/patterns), and use the terminal to inspect the ACTUAL
+live state of this Windows machine (running processes, UI Automation
+trees, installed apps, etc.) rather than guessing -- the same way you'd
+debug a real bug.
+
+Before you finish:
+1. Run `python -m py_compile "{jarvis_file}"` and confirm it succeeds.
+2. If at all practical, actually verify the new/fixed capability works
+   live against the real system (not just that the file compiles).
+3. Write a short, plain-English summary of exactly what you changed and
+   why, as your final message -- this will be read back to the user
+   directly, so make it clear and non-technical where possible.
+
+Do not touch any file outside this project folder. Do not modify git
+history or run destructive commands (no deleting user files, no system
+setting changes unrelated to this task).
+"""
+
+    def worker():
+        summary = "(no summary returned)"
+        timed_out = False
+        try:
+            result = subprocess.run(
+                [
+                    claude_exe, "-p", briefing,
+                    "--add-dir", jarvis_dir,
+                    "--allow-dangerously-skip-permissions",
+                ],
+                cwd=jarvis_dir,
+                capture_output=True, text=True, timeout=1200,
+            )
+            summary = (result.stdout or "").strip() or summary
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        except Exception as error:
+            say(f"The diagnostic couldn't run: {error}")
+            return
+
+        # Verify independently -- never just trust the agent's own
+        # report, and check this even after a timeout, since a killed
+        # process can still have left a half-finished edit on disk.
+        try:
+            compile_result = subprocess.run(
+                [sys.executable, "-m", "py_compile", jarvis_file],
+                capture_output=True, text=True, timeout=30,
+            )
+            compiled_ok = compile_result.returncode == 0
+        except Exception:
+            compiled_ok = False
+
+        if not compiled_ok:
+            if before_ok:
+                _git("checkout", "--", os.path.basename(jarvis_file), cwd=jarvis_dir)
+            if timed_out:
+                say("Sir, that diagnostic ran too long and left things in a bad state -- I've reverted it, so nothing is broken.")
+            else:
+                say("Sir, my own diagnostic made a change that didn't actually work -- I've reverted it, so nothing is broken.")
+            return
+
+        _git("add", "-A", cwd=jarvis_dir)
+        _git("commit", "-m", f"Self-repair: {task}\n\n{summary[:2000]}", cwd=jarvis_dir)
+        say(f"Done, sir. {summary[:500]} I've saved the fix -- restart me when convenient to actually use it.")
+        log_recent_action(f"Self-repair applied for: {task}")
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
+
+
+def _offer_self_repair_or_teach(task, research_hint=None):
+    """
+    After an automated attempt has genuinely failed, offer BOTH real
+    options: walk through it together (free, immediate), or a deeper
+    self-diagnostic that permanently fixes the underlying capability
+    (costs real time/usage, but never has to be solved this way again).
+    Defaults to the walkthrough unless self-repair is clearly requested,
+    since it's the heavier option.
+    """
+    if research_hint:
+        say(
+            "Sir, this isn't working the automatic way. Here's what I found "
+            f"researching it: {str(research_hint)[:400]} Would you like to "
+            "walk through it together, or should I run a deeper diagnostic "
+            "on my own systems to actually fix this properly? The "
+            "diagnostic takes a few minutes."
+        )
+    else:
+        say(
+            "That didn't work. Would you like to walk through it together, "
+            "or should I run a deeper diagnostic on my own systems to fix "
+            "this properly? The diagnostic takes a few minutes."
+        )
+
+    answer = get_confirmation_input().lower()
+    repair_words = ("diagnostic", "diagnose", "fix yourself", "fix it yourself", "figure it out", "your own", "permanently", "properly")
+    if any(word in answer for word in repair_words):
+        return _run_self_repair_agent(task, context=research_hint)
+    return _run_teaching_session(task, research_hint=research_hint)
+
+
 def _v58_research_task(task):
     """
     Ask the online Jarvis brain to research the task before execution.
@@ -7936,13 +8143,16 @@ def handle_v58_autonomous_commands(command, force=False):
             except Exception as error:
                 print("V58 MEMORY: could not update local experience:", error)
 
-        # Rather than just reporting a dead end, fall back to a guided
-        # walkthrough seeded with whatever research already turned up --
-        # danny's explicit request: "he researches the task and it loops
-        # ... he then stops and says sir this is not working, I've
-        # googled how to do the task, this is it, if we walk through it
-        # together I can still save it as a routine once completed."
-        _run_teaching_session(execution_task, research_hint=research)
+        # Rather than just reporting a dead end, offer both real options:
+        # a guided walkthrough seeded with whatever research already
+        # turned up -- danny's explicit request: "he researches the task
+        # and it loops ... he then stops and says sir this is not
+        # working, I've googled how to do the task, this is it, if we
+        # walk through it together I can still save it as a routine once
+        # completed." -- OR a deeper self-diagnostic that permanently
+        # fixes the underlying capability, for when a one-off walkthrough
+        # isn't worth it and it's worth truly never happening again.
+        _offer_self_repair_or_teach(execution_task, research_hint=research)
 
     return True
 
