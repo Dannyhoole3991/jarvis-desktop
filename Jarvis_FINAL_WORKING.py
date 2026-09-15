@@ -7285,16 +7285,34 @@ debug a real bug.
 
 Before you finish:
 1. Run `python -m py_compile "{jarvis_file}"` and confirm it succeeds.
-2. If at all practical, actually verify the new/fixed capability works
-   live against the real system (not just that the file compiles).
+2. If at all practical, verify the specific fixed logic works -- e.g. by
+   importing just the one function/class in a small separate throwaway
+   script, or by tracing the logic carefully -- rather than running the
+   whole file.
 3. Write a short, plain-English summary of exactly what you changed and
    why, as your final message -- this will be read back to the user
    directly, so make it clear and non-technical where possible.
+
+IMPORTANT: never run `{os.path.basename(jarvis_file)}` itself (no
+`python {os.path.basename(jarvis_file)}`, no importing it as a whole
+module). It has no `if __name__ == "__main__":` guard, so doing either
+starts the ENTIRE live voice assistant -- microphone listener, text-to-
+speech, wake-word detection, and a network server on a fixed port --
+and a real instance of it is very likely already running as a separate
+process right now. A second instance would fight the first one for the
+microphone and that network port. This restriction is absolute, even if
+it seems like the most direct way to verify your fix.
 
 Do not touch any file outside this project folder. Do not modify git
 history or run destructive commands (no deleting user files, no system
 setting changes unrelated to this task).
 """
+
+    try:
+        with open(jarvis_file, "rb") as handle:
+            content_before = handle.read()
+    except Exception:
+        content_before = None
 
     def worker():
         summary = "(no summary returned)"
@@ -7304,6 +7322,7 @@ setting changes unrelated to this task).
                 [
                     claude_exe, "-p", briefing,
                     "--add-dir", jarvis_dir,
+                    "--dangerously-skip-permissions",
                     "--allow-dangerously-skip-permissions",
                 ],
                 cwd=jarvis_dir,
@@ -7317,8 +7336,22 @@ setting changes unrelated to this task).
             return
 
         # Verify independently -- never just trust the agent's own
-        # report, and check this even after a timeout, since a killed
-        # process can still have left a half-finished edit on disk.
+        # report. Two checks, both must pass: it actually changed the
+        # file (a report of success with zero changes is exactly what
+        # a permission or tooling problem inside the agent looks like),
+        # and the changed file still compiles. Checked even after a
+        # timeout, since a killed process can still leave a half-edit.
+        try:
+            with open(jarvis_file, "rb") as handle:
+                content_after = handle.read()
+        except Exception:
+            content_after = None
+        actually_changed = (
+            content_before is not None
+            and content_after is not None
+            and content_before != content_after
+        )
+
         try:
             compile_result = subprocess.run(
                 [sys.executable, "-m", "py_compile", jarvis_file],
@@ -7327,6 +7360,12 @@ setting changes unrelated to this task).
             compiled_ok = compile_result.returncode == 0
         except Exception:
             compiled_ok = False
+
+        if not actually_changed:
+            if before_ok:
+                _git("checkout", "--", os.path.basename(jarvis_file), cwd=jarvis_dir)
+            say(f"Sir, my own diagnostic didn't actually make any changes -- it reported: {summary[:300]}")
+            return
 
         if not compiled_ok:
             if before_ok:
