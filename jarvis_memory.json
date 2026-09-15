@@ -1,0 +1,532 @@
+{
+  "memory_1": "my favourite drink is hot chocolate",
+  "favourite drink": "hot chocolate",
+  "facts": {
+    "memory_1": "my favourite drink is hot chocolate",
+    "favourite drink": "coffee",
+    "memory_3": "my favourite game is cyberpunk",
+    "routines": {
+      "hogwarts legacy": {
+        "type": "steam_play",
+        "game": "Hogwarts Legacy",
+        "steps": [
+          "open_or_focus_steam",
+          "search_steam_for_game",
+          "open_matching_game_result",
+          "find_and_click_play"
+        ]
+      }
+    },
+    "learned_routines": {
+      "how to open bluetooth settings": {
+        "task": "how to open bluetooth settings",
+        "method": "Windows Settings Bluetooth page",
+        "steps": [
+          "open_windows_bluetooth_settings",
+          "verify_bluetooth_settings_visible"
+        ],
+        "source": "learn-by-doing",
+        "state": "failed",
+        "verified": false,
+        "attempts": 1
+      }
+    },
+    "app_skills": {
+      "settings::display": {
+        "application": "Settings",
+        "control": "Display",
+        "steps": [
+          {
+            "application": "Settings",
+            "control": "Display"
+          }
+        ]
+      }
+    }
+  },
+  "reminders": [
+    "buy milk"
+  ],
+  "routines": {
+    "hogwarts legacy": {
+      "type": "steam_play",
+      "game": "Hogwarts Legacy",
+      "steps": [
+        "open_or_focus_steam",
+        "search_steam_for_game",
+        "open_matching_game_result",
+        "find_and_click_play"
+      ]
+    }
+  },
+  "learned_routines": {
+    "how to open bluetooth settings": {
+      "task": "how to open bluetooth settings",
+      "method": "Windows Settings Bluetooth page",
+      "steps": [
+        "open_windows_bluetooth_settings",
+        "verify_bluetooth_settings_visible"
+      ],
+      "source": "learn-by-doing",
+      "state": "verified",
+      "verified": true,
+      "attempts": 5
+    },
+    "open calculator": {
+      "task": "Open Calculator",
+      "method": "Use the Windows Start menu to find and launch the built-in Calculator app via search, then confirm the Calculator window is visible. This plan uses only standard, non-destructive UI actions.",
+      "steps": [
+        "action: Click the Windows Start button (Windows icon) in the lower-left corner of the screen or press the Windows key on the keyboard. | verify: The Start menu opens and the search box or app tiles are visible on the screen.",
+        "action: Type the word \"calculator\" into the Start menu search box. | verify: Search results show an entry named \"Calculator\" with the calculator icon among the top results.",
+        "action: Click the \"Calculator\" app result (or press Enter if it is highlighted) to launch it. | verify: A window titled \"Calculator\" opens and displays the calculator interface (buttons for numbers and operations are visible)."
+      ],
+      "source": "learn-by-doing-verified",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad": {
+      "task": "Open Notepad",
+      "method": "Use the Windows Start menu search to locate and launch the Notepad application (quick, standard approach on Windows).",
+      "steps": [
+        "action: Click the Start button (Windows icon) in the lower-left corner of the screen or press the Windows key. | verify: The Start menu opens and a search box, search cursor, or tiles are visible.",
+        "action: Type notepad into the Start menu search box. | verify: Search results list an app named 'Notepad' (or an icon labeled Notepad) near the top of the results.",
+        "action: Click the Notepad app result in the search results to launch it. | verify: A Notepad window appears (commonly titled 'Untitled - Notepad' or showing 'Notepad' in the title bar) with an empty text area."
+      ],
+      "source": "learn-by-doing-verified",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open windows update": {
+      "task": "Open Windows Update",
+      "method": "Use the Windows 11 Settings app: open Settings with the Win+I shortcut, then select 'Windows Update' from the left-hand sidebar to reach the Windows Update page.",
+      "steps": [
+        "action: Press the Windows key + I to open the Settings app. | verify: A Settings window appears with a header/title 'Settings' and the System page content (or Settings content) is visible.",
+        "action: In the Settings window, click 'Windows Update' in the left-hand sidebar (the last item in the list). | verify: The Windows Update page is displayed (page title 'Windows Update' visible) and the 'Check for updates' button or 'Last checked' status is shown."
+      ],
+      "source": "learn-by-doing-verified",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad and type hello": {
+      "task": "open notepad and type hello",
+      "method": "Notepad has been opened, and the text 'hello' has been typed into it. Task completed.",
+      "steps": [
+        "tool: app_tool",
+        "tool: type_tool",
+        "done"
+      ],
+      "source": "windows-use-autonomous-agent",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open note pad type “jarvis is working” and save it to desktop as jarvisisworking.bat": {
+      "task": "open note pad type “jarvis is working” and save it to desktop as jarvisisworking.bat",
+      "method": "The task cannot be completed as the 'File name' field in the 'Save As' dialog is corrupted with repeated text. Repeated attempts to clear and type the correct name have failed, indicating a UI state loop. The task cannot be completed safely with the current approach.",
+      "steps": [
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: shortcut_tool",
+        "tool: shortcut_tool",
+        "tool: shortcut_tool",
+        "tool: shortcut_tool",
+        "tool: shortcut_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "done"
+      ],
+      "source": "windows-use-autonomous-agent",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad open new page write “jarvis is working” and save to desktop as iamstupid.bat": {
+      "task": "open notepad open new page write “jarvis is working” and save to desktop as iamstupid.bat",
+      "method": "The file 'iamstupid.bat' has been successfully created on the desktop with the content 'jarvis is working'. The task is complete.",
+      "steps": [
+        "tool: app_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: click_tool",
+        "tool: shell_tool",
+        "tool: shell_tool",
+        "done"
+      ],
+      "source": "windows-use-autonomous-agent",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad and open a new , type this is my second test and save it on my desktop as thisismysecondtest.txt": {
+      "task": "open notepad and open a new , type this is my second test and save it on my desktop as thisismysecondtest.txt",
+      "method": "Autonomous agent is attempting this task.",
+      "steps": [],
+      "source": "learned",
+      "state": "testing",
+      "verified": false,
+      "attempts": 0
+    },
+    "open notepad type this is my second test and save it to desktop as thisismysecondtest.txt": {
+      "task": "open notepad type this is my second test and save it to desktop as thisismysecondtest.txt",
+      "method": "The task cannot be completed as the 'File name' field in the 'Save As' dialog is corrupted with repeated text. Repeated attempts to clear and type the correct name have failed, indicating a UI state loop. The task cannot be completed safely with the current approach.",
+      "steps": [
+        "tool: app_tool",
+        "tool: type_tool",
+        "tool: app_tool",
+        "tool: shortcut_tool",
+        "tool: type_tool",
+        "tool: type_tool",
+        "tool: type_tool",
+        "tool: type_tool",
+        "tool: click_tool",
+        "done"
+      ],
+      "source": "windows-use-autonomous-agent",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad, write “hello dan, jarvis is working.” and save it to the desktop as jarvistest.txt": {
+      "task": "open notepad, write “hello dan, jarvis is working.” and save it to the desktop as jarvistest.txt",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [
+        "Execution brief for the Windows agent (Windows 11, build 26200)\n\n1) What the task requires\n- Open Notepad.\n- Enter the exact text: \"hello dan, jarvis is working.\"\n- Save the file to the current user's Desktop with the filename jarvistest.txt.\n- Do not overwrite an existing file without confirmation.\n\n2) Safest / fastest method (step‑by‑step)\n1. Open Notepad:\n   - Press Win, type Notepad, press Enter. (Alternative: Win+R → type notepad → Enter.)\n2. Insert the text:\n   - Type exactly: hello dan, jarvis is working.\n     (Include the period at the end; match capitalization and spacing exactly.)\n3. Save to Desktop:\n   - Press Ctrl+S.\n   - In the Save / Save As dialog:\n     - In the File name field enter: jarvistest.txt\n     - In the folder navigation area, select Desktop (or paste %USERPROFILE%\\Desktop into the address bar and press Enter).\n     - Confirm Save as type is a text file (Text Documents (*.txt)).\n     - Click Save.\n   - If a \"file already exists\" prompt appears, do NOT overwrite"
+      ],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open notepad, write a short shopping list, save it to my desktop as shopping list.txt, then verify that the file exists": {
+      "task": "open notepad, write a short shopping list, save it to my desktop as shopping list.txt, then verify that the file exists",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [
+        "Execution brief to perform (but not execute) the requested task on Windows 11 (build 26200)\n\n1) What the task requires\n- Open Notepad.\n- Put a short shopping list into the new document (I provide suggested text below).\n- Save the file to the current user’s Desktop with the filename: shopping list.txt.\n- Verify the file exists on the Desktop.\n- Do not overwrite an existing shopping list.txt without explicit confirmation.\n\nSuggested shopping-list content (exact text to write):\nMilk\nEggs\nBread\nApples\nCoffee\n\n2) Safest / fastest method (step‑by‑step, keyboard-first)\nA. Open Notepad\n- Press Win+R, type: notepad, press Enter.\n  (Alternative: press Win, type Notepad, press Enter.)\n\nB. Insert the shopping list\n- Type or paste the five-line list shown above.\n\nC. Save to Desktop without accidental overwrite\n- First check if the target file exists:\n  - Open File Explorer (Win+E) → Desktop, or run a quick check via command:\n    - CMD: dir \"%USERPROFILE%\\Desktop\\shopping list.txt\"\n    - PowerShell:"
+      ],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open the battle.net app thats installed on my pc and then click play on call of duty": {
+      "task": "open the battle.net app thats installed on my pc and then click play on call of duty",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [
+        "Execution brief for Jarvis (Windows 11, build 26200) — open Battle.net and click Play on Call of Duty\n\n1) What the task requires\n- Launch the installed Battle.net (Blizzard) desktop app on this Windows 11 PC and start the installed Call of Duty title by clicking its Play button in the Battle.net UI. If the Play button is not available (Install / Update / Locate / Scan & Repair states), take the minimal non-destructive steps needed to get to a playable state or report the blocker back to the user.\n\n2) Safest & fastest method (preferred order)\n- Fastest (recommended):\n  1. Start the Battle.net desktop app process. Prefer using the installed executable if present:\n     - Typical default executable: C:\\Program Files (x86)\\Battle.net\\Battle.net Launcher.exe. If that path exists, Start-Process that EXE. ([us.forums.blizzard.com](https://us.forums.blizzard.com/en/blizzard/t/battlenet-uac-prompt-with-fresh-install/55188?utm_source=openai))\n  2. Wait until the Battle.net app has fully loaded an"
+      ],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open note pad write a short shopping list and save it": {
+      "task": "open note pad write a short shopping list and save it",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [
+        "Execution brief — open Notepad, write a short shopping list, and save it (for the Windows 11 agent)\n\n1) What the task requires\n- Launch the built-in Notepad app.\n- Enter a short shopping list (plain-text lines).\n- Save the file as a .txt document in a safe location (avoid overwriting existing files).\n\n2) Safest / fastest method (keystroke-driven)\n- Open Notepad:\n  - Press Win, type: notepad, press Enter.\n  - (Alternative: Win+R, type notepad, Enter.)\n- Type the shopping list exactly as below (each item on its own line):\n  Milk\n  Eggs\n  Bread\n  Apples\n  Coffee\n  Toilet paper\n- Save the file:\n  - Press Ctrl+S.\n  - In the Save dialog, set the folder to Documents (or another user-preferred folder).\n  - Use a non-conflicting filename to avoid overwriting, e.g. shopping-list-2026-09-10.txt.\n  - Ensure \"Save as type\" is Text Documents (*.txt) and click Save (or press Enter).\n  - If a replace/overwrite prompt appears, do NOT overwrite without confirmation — choose a different filename instead."
+      ],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to display": {
+      "task": "open settings and go to display",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these named-control clicks, so they are replayed directly next time via free local UI Automation, with a free local vision check — no cloud AI cost.",
+      "steps": [
+        {
+          "application": "Settings",
+          "control": "Display"
+        }
+      ],
+      "source": "jarvis-v58-ufo2-click-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open setting and go to display": {
+      "task": "open setting and go to display",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [
+        "Execution brief — Open Settings and go to Display (Windows 11, build 26200)\n\n1) What the task actually requires\n- Launch the Windows Settings app and open the Display settings page (Settings → System → Display), so the user can view or change display-related options (brightness, scale, resolution, multiple displays, HDR, night light, etc.).\n\n2) Safest / fastest method\n- Safest (GUI, least risk): Press Win + I to open Settings, then in the left navigation click System, then click Display in the System header (or confirm the page title reads “Display”).\n- Fastest (direct): Open Run (Win + R) and enter ms-settings:display then Enter. This opens Settings directly to the Display page.\n\n3) Application-specific details or UI notes (Windows 11, build 26200)\n- Settings app name and location: the app is called “Settings” (ms-settings). In Windows 11 it usually opens centered with a left-hand navigation pane. The System category appears near the top of the left pane.\n- Page title: the Display pag"
+      ],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open steam and play hogwarts legacy": {
+      "task": "open steam and play hogwarts legacy",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "start steam://rungameid/990080"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to bluetooth": {
+      "task": "open settings and go to bluetooth",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "start ms-settings:bluetooth"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to network": {
+      "task": "open settings and go to network",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "explorer ms-settings:network"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open network and internet settings": {
+      "task": "open network and internet settings",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "ms-settings:network",
+        "start ms-settings:network"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to sound": {
+      "task": "open settings and go to sound",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "start ms-settings:sound"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to privacy": {
+      "task": "open settings and go to privacy",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "start ms-settings:privacy"
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open settings and go to personalization": {
+      "task": "open settings and go to personalization",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "explorer.exe \"ms-settings:personalization\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open playnite": {
+      "task": "open playnite",
+      "method": "Taught directly by sir -- recorded live clicks, replayed via free local UI Automation.",
+      "steps": [
+        {
+          "action": "click",
+          "application": "Unknown",
+          "control": "File Explorer pinned"
+        },
+        {
+          "action": "click",
+          "application": "Home - File Explorer",
+          "control": "Documents (pinned)"
+        },
+        {
+          "action": "click",
+          "application": "Documents - File Explorer",
+          "control": "Playnite"
+        },
+        {
+          "action": "click",
+          "application": "Playnite - File Explorer",
+          "control": "Playnite.DesktopApp"
+        }
+      ],
+      "source": "jarvis-v58-ufo2-click-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    }
+  },
+  "app_skills": {
+    "settings::display": {
+      "application": "Settings",
+      "control": "Display",
+      "steps": [
+        {
+          "application": "Settings",
+          "control": "Display"
+        }
+      ]
+    },
+    "settings::bluetooth": {
+      "application": "Settings",
+      "control": "Bluetooth",
+      "kind": "bash",
+      "steps": [
+        "start ms-settings:bluetooth"
+      ]
+    },
+    "settings::network": {
+      "application": "Settings",
+      "control": "Network",
+      "kind": "bash",
+      "steps": [
+        "explorer ms-settings:network"
+      ]
+    },
+    "settings::privacy": {
+      "application": "Settings",
+      "control": "Privacy",
+      "kind": "bash",
+      "steps": [
+        "start ms-settings:privacy"
+      ]
+    },
+    "settings::personalization": {
+      "application": "Settings",
+      "control": "Personalization",
+      "kind": "bash",
+      "steps": [
+        "explorer.exe \"ms-settings:personalization\""
+      ]
+    },
+    "settings::sound": {
+      "application": "Settings",
+      "control": "Sound",
+      "kind": "bash",
+      "steps": [
+        "start ms-settings:sound"
+      ]
+    },
+    "playnite - file explorer::name": {
+      "application": "Playnite - File Explorer",
+      "control": "Name",
+      "kind": "click",
+      "steps": [
+        {
+          "action": "click",
+          "application": "Unknown",
+          "control": "Start"
+        },
+        {
+          "action": "click",
+          "application": "Start",
+          "control": "File Explorer"
+        },
+        {
+          "action": "click",
+          "application": "Home - File Explorer",
+          "control": "Documents"
+        },
+        {
+          "action": "click",
+          "application": "Home - File Explorer",
+          "control": "Documents"
+        },
+        {
+          "action": "click",
+          "application": "Home - File Explorer",
+          "control": "Documents"
+        },
+        {
+          "action": "click",
+          "application": "Documents - File Explorer",
+          "control": "Name"
+        },
+        {
+          "action": "click",
+          "application": "Documents - File Explorer",
+          "control": "Name"
+        },
+        {
+          "action": "click",
+          "application": "Playnite - File Explorer",
+          "control": "Name"
+        },
+        {
+          "action": "click",
+          "application": "Playnite - File Explorer",
+          "control": "Name"
+        }
+      ]
+    },
+    "search::coreinput": {
+      "application": "Search",
+      "control": "CoreInput",
+      "kind": "click",
+      "steps": [
+        {
+          "application": "Unknown",
+          "control": "Search"
+        },
+        {
+          "application": "Search",
+          "control": "CoreInput"
+        }
+      ]
+    },
+    "playnite - file explorer::playnite.desktopapp": {
+      "application": "Playnite - File Explorer",
+      "control": "Playnite.DesktopApp",
+      "kind": "click",
+      "steps": [
+        {
+          "action": "click",
+          "application": "Unknown",
+          "control": "File Explorer pinned"
+        },
+        {
+          "action": "click",
+          "application": "Home - File Explorer",
+          "control": "Documents (pinned)"
+        },
+        {
+          "action": "click",
+          "application": "Documents - File Explorer",
+          "control": "Playnite"
+        },
+        {
+          "action": "click",
+          "application": "Playnite - File Explorer",
+          "control": "Playnite.DesktopApp"
+        }
+      ]
+    }
+  }
+}

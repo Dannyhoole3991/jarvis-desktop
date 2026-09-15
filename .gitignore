@@ -1,0 +1,23 @@
+# Allowlist approach: ignore everything by default, then explicitly
+# un-ignore only the active Jarvis system's own files. Far more robust
+# than trying to enumerate this folder's many old backup folders
+# individually (tried that first -- missed several; this folder has
+# accumulated ~15+ old version snapshots from before git existed here).
+# Nothing on disk is touched or deleted by any of this -- it only
+# controls what git tracks going forward.
+*
+
+!.gitignore
+!Jarvis_FINAL_WORKING.py
+!Jarvis_Desktop_HUD.py
+!jarvis_hud.html
+!jarvis_memory.json
+!START_JARVIS_FINAL_WORKING.bat
+!eva_prompter.py
+!host_agent_processor.py
+
+# LibreHardwareMonitor: vendored third-party tool, not source code --
+# only track our own config for it, not its ~19MB of binaries/DLLs.
+!LibreHardwareMonitor/
+LibreHardwareMonitor/*
+!LibreHardwareMonitor/LibreHardwareMonitor.config
