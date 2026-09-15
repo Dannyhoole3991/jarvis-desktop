@@ -7499,6 +7499,22 @@ def _v58_used_app_agent(output):
     return re.search(r"Round \d+, Step \d+, AppAgent:", output) is not None
 
 
+_GAME_LAUNCH_SIGNALS = ("steam://", "rungameid", "epicgames://", "steamapps\\common", "steamapps/common")
+
+
+def _looks_like_game_launch(steps):
+    """
+    Cheap heuristic over a set of shell-command steps: does executing
+    these actually start a game? Used to decide whether it's worth
+    freeing the local AI's ~12GB from memory first (see
+    unload_ollama_models) -- worth doing for a game, not worth the
+    reload cost on the next chat turn for an ordinary shortcut like a
+    Settings deep link.
+    """
+    joined = " ".join(str(step) for step in steps).lower()
+    return any(signal in joined for signal in _GAME_LAUNCH_SIGNALS)
+
+
 def _auto_dismiss_launch_dialogs(timeout=20, poll_interval=0.4):
     """
     Launching something (e.g. a game via Steam's steam:// protocol) can
@@ -7556,6 +7572,11 @@ def _v58_replay_bash_steps(steps):
     commands and nothing else (see _v58_used_app_agent).
     """
     powershell_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    if _looks_like_game_launch(steps):
+        # Free the local AI's ~12GB from memory before the game itself
+        # starts loading assets -- same reasoning as the older dedicated
+        # Steam/Xbox launch routines, just reached through this path now.
+        unload_ollama_models()
     threading.Thread(target=_auto_dismiss_launch_dialogs, daemon=True).start()
     try:
         for command in steps:
@@ -7897,6 +7918,13 @@ def _run_agentic_pc_task(task, context=None):
     claude_exe = _find_claude_cli()
     if not claude_exe:
         return False, "Couldn't find my own execution tools on this machine.", [], []
+
+    # This is the slower, one-off cold path (a task never solved before),
+    # so it's always worth freeing the local AI's ~12GB first, whether or
+    # not this specific task turns out to be a game -- unlike the fast,
+    # frequently-hit cached replay path, a few seconds' reload cost on
+    # the next chat turn is a non-issue here.
+    unload_ollama_models()
 
     jarvis_dir = os.path.dirname(os.path.abspath(__file__))
 
