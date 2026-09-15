@@ -7160,8 +7160,8 @@ def _offer_teaching_before_research(task):
     """
     say(
         "I don't know how to do that yet. Would you like to walk me "
-        "through it yourself, or should I research it? Researching costs "
-        "a small amount."
+        "through it yourself, or should I work it out and do it myself? "
+        "That takes a little longer than something I already know."
     )
     answer = get_confirmation_input().lower()
     teach_words = ("teach", "walk", "show you", "i'll show", "ill show", "myself", "together")
@@ -7820,6 +7820,100 @@ def _v58_verify_with_local_vision(task):
         return True
 
 
+def _run_agentic_pc_task(task, context=None):
+    """
+    Let a real reasoning-and-execution agent actually work out and carry
+    out a PC task live -- finding the right install path, protocol, or
+    command itself (the way a person doing it for you would), rather
+    than trying to click through a GUI the way the older UFO² pipeline
+    below did. Danny's own framing: he wants Jarvis able to do this
+    "like Claude can" -- open apps, launch games, run/test/build
+    programs -- without being taught or pre-programmed for each one.
+
+    Returns the same (ok, detail, bash_steps, click_steps) shape as
+    _v58_run_ufo, so it plugs into the exact same save_learned_routine /
+    zero-cost-replay caching logic already in
+    handle_v58_autonomous_commands with no changes needed there: a task
+    solved once this way is replayed directly (no agent call at all)
+    every time after, via the existing Tier 1 bash-step replay.
+
+    Runs with full, unsupervised system access every time (Danny's
+    explicit choice, since there's no reliable way to know in advance
+    which commands opening an arbitrary app or game will need). The
+    safety net is upstream, not here: _v58_dangerous_task() still runs
+    before this is ever called, and the briefing below carries Danny's
+    actual ground rules for what not to touch.
+    """
+    claude_exe = _find_claude_cli()
+    if not claude_exe:
+        return False, "Couldn't find my own execution tools on this machine.", [], []
+
+    jarvis_dir = os.path.dirname(os.path.abspath(__file__))
+
+    briefing = f"""You are controlling a real Windows 11 PC on behalf of its owner, live,
+right now -- not writing code for later. The task:
+
+{task}
+
+{"ADDITIONAL CONTEXT: " + str(context)[:1000] if context else ""}
+
+Actually accomplish this task for real using the terminal (PowerShell or
+cmd), the same way you would if you were doing it yourself for a user.
+Prefer the most direct, repeatable mechanism -- an official URL protocol
+or CLI flag (e.g. Steam's steam:// protocol with the game's real app ID
+looked up from its own local library manifest files, rather than
+clicking through the Steam GUI), a documented command-line switch, or a
+short PowerShell command -- over simulating mouse clicks, since an exact
+command can be replayed next time at zero cost, while a click sequence
+is fragile and expensive to redo. Only resort to UI automation or a
+written helper script if there is genuinely no direct command-line way
+to do it.
+
+Install nothing and change no system-wide settings unless the task
+explicitly requires it. Do not touch personal files unrelated to this
+task. If it would be destructive, irreversible, or looks unsafe, stop
+and report that instead of doing it.
+
+When finished, end your reply with EXACTLY one fenced block like this,
+with nothing after it:
+
+```RESULT_JSON
+{{"success": true or false, "commands": ["the exact shell command(s) that accomplished this, in order -- empty list if it failed or no shell command was needed"], "explanation": "one or two plain-English sentences, no markdown, describing what actually happened -- this gets read aloud to the user"}}
+```
+"""
+
+    try:
+        result = subprocess.run(
+            [
+                claude_exe, "-p", briefing,
+                "--add-dir", jarvis_dir,
+                "--dangerously-skip-permissions",
+                "--allow-dangerously-skip-permissions",
+            ],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = (result.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        return False, "The task took too long and timed out.", [], []
+    except Exception as error:
+        return False, f"Couldn't run the execution agent: {error}", [], []
+
+    match = re.search(r"```RESULT_JSON\s*(\{.*?\})\s*```", output, re.DOTALL)
+    if not match:
+        return False, output[-1500:] or "No result reported.", [], []
+
+    try:
+        parsed = json.loads(match.group(1))
+    except Exception:
+        return False, output[-1500:], [], []
+
+    success = bool(parsed.get("success"))
+    commands = [c for c in (parsed.get("commands") or []) if isinstance(c, str) and c.strip()]
+    explanation = str(parsed.get("explanation", "")).strip() or output[-500:]
+
+    return success, explanation, commands, []
+
+
 def _v58_run_ufo(task, research):
     """
     Run UFO² as a separate process so the stable Jarvis process and v53
@@ -8084,11 +8178,11 @@ def handle_v58_autonomous_commands(command, force=False):
         if not used_known_navigation:
             if _offer_teaching_before_research(execution_task):
                 return True
-            say("I'll research the task first, then use the fastest reliable way to carry it out.")
-        research = _v58_research_task(execution_task)
+            say("Let me work that out and get it done.")
+        research = None
         verified = False
 
-    ok, detail, bash_steps, click_steps_new = _v58_run_ufo(execution_task, research)
+    ok, detail, bash_steps, click_steps_new = _run_agentic_pc_task(execution_task, research)
     if ok:
         # Record the task as an autonomous experience candidate. UFO's own
         # experience-learning layer remains the authoritative executor memory.
