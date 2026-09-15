@@ -10986,6 +10986,237 @@ def _ask_user_mcp_config_arg():
 
 
 # ============================================================
+# JARVIS CODE — a live, ongoing coding session narrated by Jarvis
+#
+# Danny's explicit request: "do this in code" should open a real,
+# visible Claude Code session (its own window, titled "Jarvis Code")
+# for an actual back-and-forth project, with Jarvis speaking every
+# reply aloud in parallel so it feels like he's the one doing it, and
+# with Danny directing the whole thing by voice the entire time -- he
+# keeps talking to Jarvis; Jarvis relays it in as the next message.
+#
+# Unlike self-repair / _run_agentic_pc_task (one-shot, fully autonomous
+# calls), this is ONE persistent claude.exe process kept alive for the
+# whole session, fed one message at a time over its stdin as Danny
+# talks -- proven live to genuinely remember context turn to turn.
+# ============================================================
+
+_CODE_MODE_TRIGGERS = ("do this in code", "do that in code", "lets do this in code", "let's do this in code")
+_CODE_MODE_EXIT_PHRASES = (
+    "stop coding", "exit code mode", "leave code mode", "done coding",
+    "finished coding", "close code", "that's it", "thats it", "close jarvis code",
+)
+
+
+def _looks_like_code_mode_request(command):
+    return any(trigger in command for trigger in _CODE_MODE_TRIGGERS)
+
+
+def _extract_code_mode_task(user_message, command):
+    """
+    Pull out whatever follows the trigger phrase as the first task, if
+    any was said in the same breath (e.g. "do this in code, fix the
+    login bug" -> "fix the login bug"). Returns "" if the trigger was
+    said on its own, so the caller asks what to do instead.
+    """
+    lower = user_message.lower()
+    for trigger in _CODE_MODE_TRIGGERS:
+        idx = lower.find(trigger)
+        if idx != -1:
+            remainder = user_message[idx + len(trigger):].strip(" ,.:;-")
+            return remainder
+    return ""
+
+
+def _is_code_mode_exit_phrase(command):
+    stripped = command.strip(" .!").lower()
+    return stripped in _CODE_MODE_EXIT_PHRASES
+
+
+class _JarvisCodeSession:
+    """
+    One persistent, --print --input-format stream-json claude.exe
+    process, kept alive for the whole "do this in code" session. Each
+    call to send() writes one more user turn to its stdin; a background
+    reader thread turns the streamed reply into (a) lines appended to a
+    transcript file a separate, visible "Jarvis Code" window tails live,
+    and (b) the same sentence-chunked, streamed speech used everywhere
+    else in Jarvis, so replies get spoken as they're generated.
+    """
+
+    def __init__(self):
+        self.claude_exe = _find_claude_cli()
+        self.jarvis_dir = os.path.dirname(os.path.abspath(__file__))
+        self.transcript_path = os.path.join(self.jarvis_dir, "_jarvis_code_transcript.log")
+        self.proc = None
+        self.window_proc = None
+        self.ready = False
+
+    def start(self):
+        if not self.claude_exe:
+            return False
+        try:
+            with open(self.transcript_path, "w", encoding="utf-8") as handle:
+                handle.write("=== Jarvis Code session started ===\n")
+        except Exception as error:
+            print("JARVIS CODE: couldn't create transcript:", error)
+            return False
+
+        try:
+            self.proc = subprocess.Popen(
+                [
+                    self.claude_exe, "-p",
+                    "--input-format", "stream-json",
+                    "--output-format", "stream-json",
+                    "--include-partial-messages",
+                    "--verbose",
+                    "--add-dir", self.jarvis_dir,
+                    "--dangerously-skip-permissions",
+                    "--allow-dangerously-skip-permissions",
+                ],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1, cwd=self.jarvis_dir,
+            )
+        except Exception as error:
+            print("JARVIS CODE: couldn't start session:", error)
+            return False
+
+        threading.Thread(target=self._read_loop, daemon=True).start()
+        self._open_window()
+        self.ready = True
+        return True
+
+    def _open_window(self):
+        powershell_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        command = (
+            f"$Host.UI.RawUI.WindowTitle = 'Jarvis Code'; "
+            f"Get-Content -Path '{self.transcript_path}' -Wait -Tail 50"
+        )
+        try:
+            self.window_proc = subprocess.Popen(
+                [powershell_path, "-NoExit", "-Command", command],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        except Exception as error:
+            print("JARVIS CODE: couldn't open display window:", error)
+
+    def _append_transcript(self, text):
+        try:
+            with open(self.transcript_path, "a", encoding="utf-8") as handle:
+                handle.write(text)
+        except Exception:
+            pass
+
+    def send(self, text):
+        if not self.proc or self.proc.poll() is not None:
+            say("Sir, the code session isn't running anymore.")
+            return False
+        self._append_transcript(f"\n> {text}\n\n")
+        message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+        try:
+            self.proc.stdin.write(json.dumps(message) + "\n")
+            self.proc.stdin.flush()
+            return True
+        except Exception as error:
+            print("JARVIS CODE: couldn't send message:", error)
+            return False
+
+    def _flush_spoken_sentences(self, buffer):
+        # Same sentence-boundary chunking used for every other streamed
+        # reply in Jarvis, so this speaks in natural pieces as they
+        # arrive instead of one giant block at the very end.
+        while True:
+            match = _SENTENCE_BOUNDARY_RE.search(buffer)
+            if not match:
+                return buffer
+            end = match.end()
+            if _ABBREVIATION_RE.search(buffer[:end]):
+                return buffer
+            sentence, buffer = buffer[:end], buffer[end:]
+            sentence = sentence.strip()
+            if sentence:
+                _speak_chunk_blocking(sentence)
+
+    def _read_loop(self):
+        spoken_buffer = ""
+        try:
+            for line in self.proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+
+                event_type = event.get("type")
+                if event_type == "stream_event":
+                    inner = event.get("event") or {}
+                    inner_type = inner.get("type")
+                    if inner_type == "content_block_start":
+                        block = inner.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            self._append_transcript(f"\n[working: {block.get('name', 'tool')}]\n")
+                    elif inner_type == "content_block_delta":
+                        delta = inner.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text", "")
+                            self._append_transcript(text)
+                            spoken_buffer += text
+                            spoken_buffer = self._flush_spoken_sentences(spoken_buffer)
+                elif event_type == "result":
+                    leftover = spoken_buffer.strip()
+                    if leftover:
+                        _speak_chunk_blocking(leftover)
+                    spoken_buffer = ""
+                    self._append_transcript("\n")
+        except Exception as error:
+            print("JARVIS CODE: reader loop ended:", error)
+
+    def close(self):
+        try:
+            if self.proc and self.proc.poll() is None:
+                try:
+                    self.proc.stdin.close()
+                except Exception:
+                    pass
+                self.proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self.window_proc and self.window_proc.poll() is None:
+                self.window_proc.terminate()
+        except Exception:
+            pass
+
+
+_jarvis_code_session = None
+
+
+def _start_jarvis_code_session(user_message, command):
+    global _jarvis_code_session
+    initial_task = _extract_code_mode_task(user_message, command)
+    say("Alright, let's do this in code, sir.")
+    session = _JarvisCodeSession()
+    if not session.start():
+        say("I couldn't start that — I'll stay on voice for now.")
+        return
+    _jarvis_code_session = session
+    if initial_task:
+        session.send(initial_task)
+    else:
+        say("What would you like to do?")
+
+
+def _close_jarvis_code_session():
+    global _jarvis_code_session
+    if _jarvis_code_session:
+        _jarvis_code_session.close()
+    _jarvis_code_session = None
+    say("Stepping out of code mode, sir.")
+
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 
@@ -11033,6 +11264,21 @@ while True:
 
         if is_stop_command(user_message):
             stop_jarvis_speaking()
+            continue
+
+        # Jarvis Code: once a session is active, everything said goes
+        # straight into it (or exits the mode) — nothing else in this
+        # loop gets a look, so an ordinary command word mid-project
+        # doesn't get misrouted to some unrelated handler.
+        if _jarvis_code_session is not None:
+            if _is_code_mode_exit_phrase(command):
+                _close_jarvis_code_session()
+            else:
+                _jarvis_code_session.send(user_message)
+            continue
+
+        if _looks_like_code_mode_request(command):
+            _start_jarvis_code_session(user_message, command)
             continue
 
         if handle_smart_routine_phrases(command):
