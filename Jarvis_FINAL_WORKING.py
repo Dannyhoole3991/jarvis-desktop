@@ -7283,6 +7283,14 @@ live state of this Windows machine (running processes, UI Automation
 trees, installed apps, etc.) rather than guessing -- the same way you'd
 debug a real bug.
 
+You have an "ask_user" tool. Use it ONLY if you hit a genuine decision
+you can't reasonably make yourself -- a real choice between multiple
+valid approaches, or something significant you'd want explicit
+go-ahead on -- not for routine steps you can just decide and continue
+with. It speaks your question aloud to Danny and returns his real
+answer as text (or a note that he didn't respond, in which case use
+your own judgement and continue). Use it sparingly.
+
 Before you finish:
 1. Run `python -m py_compile "{jarvis_file}"` and confirm it succeeds.
 2. If at all practical, verify the specific fixed logic works -- e.g. by
@@ -7324,6 +7332,7 @@ setting changes unrelated to this task).
                     "--add-dir", jarvis_dir,
                     "--dangerously-skip-permissions",
                     "--allow-dangerously-skip-permissions",
+                    "--mcp-config", _ask_user_mcp_config_arg(),
                 ],
                 cwd=jarvis_dir,
                 capture_output=True, text=True, timeout=1200,
@@ -7952,6 +7961,14 @@ explicitly requires it. Do not touch personal files unrelated to this
 task. If it would be destructive, irreversible, or looks unsafe, stop
 and report that instead of doing it.
 
+You have an "ask_user" tool. Use it ONLY if you hit a genuine decision
+you can't reasonably make yourself -- e.g. two installed copies of the
+same game and no clear way to tell which one Danny means, or a real
+choice between meaningfully different ways to do this -- not for
+routine steps. It speaks your question aloud to Danny and returns his
+real answer as text (or a note that he didn't respond, in which case
+use your own judgement and continue). Use it sparingly.
+
 When finished, end your reply with EXACTLY one fenced block like this,
 with nothing after it:
 
@@ -7968,8 +7985,9 @@ with nothing after it:
                 "--add-dir", jarvis_dir,
                 "--dangerously-skip-permissions",
                 "--allow-dangerously-skip-permissions",
+                "--mcp-config", _ask_user_mcp_config_arg(),
             ],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=600,
         )
         output = (result.stdout or "").strip()
     except subprocess.TimeoutExpired:
@@ -10873,6 +10891,98 @@ def start_game_crash_monitor():
 
 
 start_game_crash_monitor()
+
+
+# ============================================================
+# ASK-USER BRIDGE — lets a self-repair / PC-task execution agent ask a
+# real question through Jarvis's own voice, mid-run
+#
+# The agent gets an "ask_user" MCP tool (see jarvis_ask_user_mcp.py) for
+# genuine decisions it can't reasonably make on its own -- danny's
+# explicit request, distinct from the OS-level Yes/Allow dialogs that
+# _auto_dismiss_launch_dialogs already handles on its own. That tool
+# writes a small question file; this watcher (running in the always-on
+# Jarvis process, not the short-lived agent subprocess) notices it,
+# speaks the question, gets a real answer through the exact same
+# get_confirmation_input() channel used everywhere else (voice, mobile,
+# console), and writes the answer back for the waiting tool to pick up.
+# ============================================================
+
+_AGENT_QUESTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_agent_question.json")
+
+
+def _agent_answer_file_path(question_id):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"_agent_answer_{question_id}.json")
+
+
+def _poll_for_agent_question():
+    if not os.path.exists(_AGENT_QUESTION_FILE):
+        return
+    try:
+        with open(_AGENT_QUESTION_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as error:
+        print("AGENT QUESTION: couldn't read question file:", error)
+        try:
+            os.remove(_AGENT_QUESTION_FILE)
+        except Exception:
+            pass
+        return
+
+    try:
+        os.remove(_AGENT_QUESTION_FILE)
+    except Exception:
+        pass
+
+    question_id = payload.get("id")
+    question = str(payload.get("question", "")).strip()
+    options = payload.get("options") or []
+    if not question_id or not question:
+        return
+
+    prompt = question
+    if options:
+        prompt += " Options: " + ", ".join(str(option) for option in options) + "."
+    print("AGENT QUESTION: asking:", prompt)
+    say(prompt)
+
+    answer = get_confirmation_input()
+    print("AGENT QUESTION: got answer:", answer)
+
+    try:
+        with open(_agent_answer_file_path(question_id), "w", encoding="utf-8") as handle:
+            json.dump({"answer": answer}, handle)
+    except Exception as error:
+        print("AGENT QUESTION: couldn't write answer file:", error)
+
+
+def _agent_question_watcher_loop():
+    while True:
+        try:
+            _poll_for_agent_question()
+        except Exception as error:
+            print("Agent question watcher error:", error)
+        time.sleep(1.0)
+
+
+def start_agent_question_watcher():
+    threading.Thread(target=_agent_question_watcher_loop, daemon=True).start()
+
+
+start_agent_question_watcher()
+
+
+def _ask_user_mcp_config_arg():
+    """
+    The --mcp-config value granting a self-repair / execution agent the
+    ask_user tool. Built as an inline JSON string (the CLI accepts a
+    JSON string directly, no config file needed) pointing at the
+    standalone bridge script with THIS interpreter, so it works
+    regardless of what "python" resolves to on PATH.
+    """
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_ask_user_mcp.py")
+    config = {"mcpServers": {"jarvis": {"command": sys.executable, "args": [script_path]}}}
+    return json.dumps(config)
 
 
 # ============================================================

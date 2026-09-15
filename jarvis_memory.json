@@ -381,6 +381,29 @@
       "state": "verified",
       "verified": true,
       "attempts": 0
+    },
+    "open steam and launch grand theft auto v legacy": {
+      "task": "open steam and launch Grand Theft Auto V Legacy",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "Get-Content 'H:\\SteamLibrary\\steamapps\\appmanifest_271590.acf'",
+        "Start-Process \"steam://rungameid/271590\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open gta v": {
+      "task": "open gta v",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "Start-Process \"steam://rungameid/271590\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
     }
   },
   "app_skills": {
