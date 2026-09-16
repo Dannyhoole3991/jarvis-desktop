@@ -531,6 +531,28 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if self.path == "/unload_ai":
+            # Lets the execution agent (_run_agentic_pc_task) free the
+            # local AI's memory at the exact moment IT knows a game is
+            # actually about to launch, rather than Jarvis guessing
+            # upfront -- guessing early was unloading the AI even for
+            # tasks that never end up launching a game at all (e.g.
+            # searching the Xbox library and finding nothing), leaving
+            # it needlessly unloaded for a long time for no reason.
+            try:
+                unload_ollama_models()
+                body = json.dumps({"reply": "Unloaded."}, ensure_ascii=True).encode("ascii")
+                self.send_response(200)
+            except Exception as error:
+                body = json.dumps({"error": str(error)}, ensure_ascii=True).encode("ascii")
+                self.send_response(400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/stop":
             try:
                 stop_jarvis_speaking()
@@ -7928,13 +7950,6 @@ def _run_agentic_pc_task(task, context=None):
     if not claude_exe:
         return False, "Couldn't find my own execution tools on this machine.", [], []
 
-    # This is the slower, one-off cold path (a task never solved before),
-    # so it's always worth freeing the local AI's ~12GB first, whether or
-    # not this specific task turns out to be a game -- unlike the fast,
-    # frequently-hit cached replay path, a few seconds' reload cost on
-    # the next chat turn is a non-issue here.
-    unload_ollama_models()
-
     jarvis_dir = os.path.dirname(os.path.abspath(__file__))
 
     briefing = f"""You are controlling a real Windows 11 PC on behalf of its owner, live,
@@ -7968,6 +7983,13 @@ choice between meaningfully different ways to do this -- not for
 routine steps. It speaks your question aloud to Danny and returns his
 real answer as text (or a note that he didn't respond, in which case
 use your own judgement and continue). Use it sparingly.
+
+If (and only if) this task is actually going to launch a game, run
+`curl -X POST http://localhost:8765/unload_ai` immediately before the
+real launch command (not before -- e.g. not while still searching for
+or confirming the game), so the local AI's memory is freed right when
+the game is actually about to start loading, not needlessly early for
+a task that might not end up launching anything.
 
 When finished, end your reply with EXACTLY one fenced block like this,
 with nothing after it:
@@ -8893,8 +8915,8 @@ def run_local_command_flow(command, user_message):
         return True
     if handle_file_folder_commands(command):
         return True
-    if handle_xbox_game_command(command):
-        return True
+    # handle_xbox_game_command now runs earlier, directly in the main
+    # loop (before v58) -- see there for why.
     if handle_media_commands(command):
         return True
     if handle_learning_executor_commands(command):
@@ -11337,6 +11359,20 @@ while True:
             continue
 
         if handle_smart_routine_phrases(command):
+            continue
+
+        # Already-proven, free, instant dedicated handlers get first
+        # crack at a command before the (slower, sometimes paid) v58
+        # pipeline ever sees it -- otherwise v58's composite-task
+        # heuristic ("X and Y") swallows something like "open xbox and
+        # play spider-man" BEFORE handle_xbox_game_command (which
+        # already knows Spider-Man is in the Xbox library, already
+        # waits correctly for its UI to be ready, and already unloads
+        # the local AI at exactly the right moment) ever gets a turn --
+        # confirmed live: it re-discovered all of that from scratch via
+        # the agent, slowly, instead of just using what Jarvis already
+        # knew how to do for free.
+        if handle_xbox_game_command(command):
             continue
 
         # v58 autonomous route runs before v53's single-app handlers so
