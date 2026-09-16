@@ -219,30 +219,55 @@ def _find_worker_w():
     icons (above the wallpaper). Asking Progman to spawn one, then finding
     it, is the standard technique wallpaper-engine-style apps use to
     render something that looks like it's part of the desktop.
+
+    The naive version of this (find the WorkerW that comes immediately
+    after the one hosting SHELLDLL_DefView in z-order) is a known-fragile
+    match on some Windows 11 builds -- confirmed live here: it found
+    nothing at all. This version is more permissive: collect every
+    WorkerW that exists, and pick any one that ISN'T itself hosting the
+    icon view, since that's the "empty" one apps are meant to render into.
     """
     user32 = ctypes.windll.user32
     progman = user32.FindWindowW("Progman", None)
     if not progman:
+        _desktop_log("no Progman window found at all.")
         return None
 
     result = ctypes.c_ulong()
     user32.SendMessageTimeoutW(progman, 0x052C, 0, 0, 0x0, 1000, ctypes.byref(result))
+    time.sleep(0.3)  # Explorer creates the WorkerW asynchronously
 
-    worker_w = [None]
+    icon_host = [None]
+    all_worker_w = []
 
     def enum_windows_proc(hwnd, _lparam):
-        shell_view = user32.FindWindowExW(hwnd, None, "SHELLDLL_DefView", None)
-        if shell_view:
-            candidate = user32.FindWindowExW(None, hwnd, "WorkerW", None)
-            if candidate:
-                worker_w[0] = candidate
+        class_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_buf, 256)
+        if class_buf.value == "WorkerW":
+            all_worker_w.append(hwnd)
+        if user32.FindWindowExW(hwnd, None, "SHELLDLL_DefView", None):
+            icon_host[0] = hwnd
         return True
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     user32.EnumWindows(WNDENUMPROC(enum_windows_proc), 0)
-    return worker_w[0]
+
+    _desktop_log(f"found {len(all_worker_w)} WorkerW window(s); icon host = {icon_host[0]}.")
+
+    for candidate in all_worker_w:
+        if candidate != icon_host[0]:
+            return candidate
+
+    # Some Windows versions host the icon view directly under Progman,
+    # with no separate WorkerW at all -- Progman itself is then the
+    # right thing to attach behind.
+    if icon_host[0] == progman:
+        return progman
+
+    return None
 
 
+HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
 HWND_BOTTOM = 1
 SWP_NOMOVE = 0x0002
@@ -271,13 +296,18 @@ def attach_window_to_desktop(hwnd):
             _desktop_log("couldn't find the WorkerW layer; staying as a floating orb.")
             return False
 
+        # Only drop "always on top" once we know reparenting is actually
+        # going to happen -- leaving it topmost is the correct, safe
+        # fallback for the "couldn't find it" case above, so the orb
+        # never ends up as a normal window that windows can bury.
         ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & ~WS_EX_TOPMOST)
         user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
 
         result = user32.SetParent(hwnd, worker_w)
         if not result:
-            _desktop_log("SetParent returned failure.")
+            _desktop_log("SetParent returned failure; restoring always-on-top.")
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
             return False
 
         user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
@@ -285,6 +315,10 @@ def attach_window_to_desktop(hwnd):
         return True
     except Exception as error:
         _desktop_log(f"couldn't attach to the desktop layer: {error}")
+        try:
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+        except Exception:
+            pass
         return False
 
 
@@ -437,7 +471,7 @@ def main():
         frameless=True,
         easy_drag=False,   # only .pywebview-drag-region elements drag the window
         transparent=True,
-        on_top=(False if DESKTOP_MODE else ALWAYS_ON_TOP),
+        on_top=ALWAYS_ON_TOP,  # attach_window_to_desktop drops this itself, only on success
         js_api=HudApi(),
     )
 
