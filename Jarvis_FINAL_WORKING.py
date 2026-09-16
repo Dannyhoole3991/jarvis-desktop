@@ -6449,12 +6449,12 @@ def _wait_for_xbox_ready(timeout=30.0):
     return _foreground_is_xbox()
 
 
-def _invoke_foreground_uia_target(target_names):
+def _invoke_foreground_uia_target(target_names, exclude_substrings=()):
     """Find and invoke one exact/near-exact target in the current foreground window."""
     if not UI_AUTOMATION_AVAILABLE:
         return False
     for target in target_names:
-        result = _find_target_via_windows_uia(target)
+        result = _find_target_via_windows_uia(target, exclude_substrings=exclude_substrings)
         if not result:
             continue
         element = result.get('uia_element')
@@ -6726,7 +6726,7 @@ def _run_xbox_game_routine(game, xbox_explicit):
                 time.sleep(0.5)
                 continue
 
-            if _invoke_foreground_uia_target(('play', 'launch', 'start')):
+            if _invoke_foreground_uia_target(('play', 'launch', 'start'), exclude_substrings=('history',)):
                 print(f"XBOX ROUTINE: Play control found and invoked for {game!r}.")
                 # Danny's explicit requirement, for every game: never free
                 # the local AI's memory until the Play/Launch control has
@@ -6739,7 +6739,7 @@ def _run_xbox_game_routine(game, xbox_explicit):
                 break
 
             # Some Xbox builds expose the control with a longer accessible name.
-            if _invoke_foreground_uia_target(('play button', 'launch button', 'start button')):
+            if _invoke_foreground_uia_target(('play button', 'launch button', 'start button'), exclude_substrings=('history',)):
                 print(f"XBOX ROUTINE: named Play control found and invoked for {game!r}.")
                 unload_ollama_models()
                 launched = True
@@ -9520,7 +9520,7 @@ def _ui_element_visible(element):
         return False
 
 
-def _find_target_via_windows_uia(target):
+def _find_target_via_windows_uia(target, exclude_substrings=()):
     """Use Windows UI Automation only inside the current foreground window.
 
     v22 proved that direct UIA invocation can reliably activate controls such
@@ -9528,6 +9528,14 @@ def _find_target_via_windows_uia(target):
     must NEVER search unrelated background windows.  If the target is not
     exposed by the foreground application, this function returns None and the
     normal visual fallback can inspect what is actually visible on screen.
+
+    `exclude_substrings` rules out a real, legitimately-matching control
+    that happens to also contain the target word -- confirmed live: on
+    Xbox, searching for "play" matched the real "Play History" button
+    (a completely different feature) via ordinary substring scoring,
+    since Spider-Man's actual Play button hadn't rendered yet. Excluding
+    "history" for that specific search lets it keep waiting for the
+    genuine button instead of confidently clicking the wrong one.
     """
     if not UI_AUTOMATION_AVAILABLE:
         return None
@@ -9572,6 +9580,8 @@ def _find_target_via_windows_uia(target):
             except Exception:
                 continue
             if not name or not _ui_element_visible(control):
+                continue
+            if exclude_substrings and any(bad in name for bad in exclude_substrings):
                 continue
 
             rect = _ui_element_rect(control)

@@ -426,6 +426,15 @@
       "state": "verified",
       "verified": true,
       "attempts": 0
+    },
+    "check the state of the pc": {
+      "task": "check the state of the pc",
+      "method": "Completed through Jarvis v58 online research + Microsoft UFO² hybrid execution.",
+      "steps": [],
+      "source": "jarvis-v58-ufo2",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
     }
   },
   "app_skills": {
