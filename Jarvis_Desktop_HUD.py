@@ -63,15 +63,22 @@ WINDOW_MIN_SIZE = (320, 300)
 ALWAYS_ON_TOP = True
 
 # Danny's request: he wants Jarvis to genuinely feel like part of his
-# desktop, not a widget floating on top of it. When True, on startup this
-# (a) sets the desktop wallpaper to WALLPAPER_IMAGE, and (b) reparents the
-# orb window into the WorkerW layer Windows keeps directly behind the
-# desktop icons -- the same technique wallpaper-engine-style apps use, so
-# the orb renders behind icons/windows like it's painted onto the desktop
-# itself, rather than floating above everything. Both steps fail safe:
-# if either doesn't work on this Windows build, the orb just stays a
-# normal always-on-top floating window as before -- nothing breaks.
+# desktop. DESKTOP_MODE controls the safe part: setting the wallpaper.
+#
+# ATTEMPT_DESKTOP_ATTACH controls the risky part -- reparenting the orb
+# window into the WorkerW layer Windows keeps behind desktop icons, so
+# it renders behind them instead of floating on top. Confirmed live on
+# this machine that this DOESN'T work the standard way: this Windows
+# build never creates a fresh WorkerW when asked, and there are 13
+# pre-existing, unrelated WorkerW windows already present, so a
+# permissive "any WorkerW that isn't the icon host" match grabbed one of
+# those instead -- which is why the orb vanished entirely (parented into
+# some unrelated hidden window). Left OFF until this is solved properly
+# (most likely by using an existing, actively-maintained tool built for
+# exactly this -- e.g. Lively Wallpaper -- instead of hand-rolling
+# undocumented Windows internals against a moving target).
 DESKTOP_MODE = True
+ATTEMPT_DESKTOP_ATTACH = False
 
 jarvis_process = None          # Popen handle, only set if WE started the engine
 window = None                  # webview.Window
@@ -325,6 +332,9 @@ def attach_window_to_desktop(hwnd):
 def enable_desktop_mode():
     """Runs once the webview window actually exists. See DESKTOP_MODE above."""
     set_desktop_wallpaper(WALLPAPER_IMAGE)
+
+    if not ATTEMPT_DESKTOP_ATTACH:
+        return
 
     hwnd = None
     for _ in range(20):
