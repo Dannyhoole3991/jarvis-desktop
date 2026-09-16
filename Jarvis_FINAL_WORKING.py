@@ -71,7 +71,12 @@ except ImportError:
 # ============================================================
 
 VOICE_INPUT_ENABLED = True
-WAKE_WORD = "jarvis"
+# "Jay" is Danny's chosen nickname — same assistant, answers to either.
+# Note this is a much shorter, more common word than "Jarvis", so it
+# will trigger on more false positives (ordinary speech containing
+# "jay") than "Jarvis" ever did; accepted deliberately as the tradeoff
+# for a nickname that sounds natural rather than like a sci-fi callsign.
+WAKE_WORDS = ("jarvis", "jay")
 voice_commands = queue.Queue()
 
 
@@ -657,7 +662,7 @@ def wake_word_listener():
     if not (VOICE_INPUT_ENABLED and SPEECH_RECOGNITION_AVAILABLE and SOUNDDEVICE_AVAILABLE):
         return
 
-    print("\nVoice wake word ready. Say 'Jarvis' followed by your command.")
+    print("\nVoice wake word ready. Say 'Jarvis' (or 'Jay') followed by your command.")
 
     while True:
         try:
@@ -680,11 +685,12 @@ def wake_word_listener():
                 continue
 
             lowered = heard.lower()
-            if WAKE_WORD not in lowered:
+            matched_wake_word = next((word for word in WAKE_WORDS if word in lowered), None)
+            if not matched_wake_word:
                 continue
 
             # "Jarvis, open Steam" — command is already included.
-            after_wake = lowered.split(WAKE_WORD, 1)[1].strip(" ,.!?")
+            after_wake = lowered.split(matched_wake_word, 1)[1].strip(" ,.!?")
             if after_wake:
                 print(f"\nWake word detected. You: {heard}")
                 voice_commands.put(after_wake)
@@ -1148,16 +1154,24 @@ def _time_of_day_greeting():
     return "evening"
 
 
-# Danny's own picks. "Good morning" is reserved for actual mornings (see
-# _pick_startup_greeting below); the rest work at any hour.
+# Danny's own picks, plus a few added in the same understated,
+# dry-witted Iron-Man-butler register. "Good morning" is reserved for
+# actual mornings (see _pick_startup_greeting below); the rest work at
+# any hour.
 _MORNING_ONLY_GREETINGS = [
     "Good morning. All systems are optimized and your schedule is cleared for greatness.",
+    "Good morning, sir. I trust you slept well; I didn't need to.",
+    "Good morning. Everything held steady overnight — nothing broke while you were away.",
 ]
 
 _ANYTIME_GREETINGS = [
     "Online and fully operational. What's the play today, boss?",
     "Systems check complete. The world isn't going to save itself. Ready when you are.",
     "We are live. Try not to break anything today.",
+    "All systems nominal, sir. Standing by.",
+    "At your service, sir.",
+    "Up and running. No fires to report.",
+    "Everything's in order, sir. What shall we tackle first?",
 ]
 
 
@@ -4177,6 +4191,12 @@ def ask_jarvis(user_message):
     instructions = """
 You are Jarvis, the user's personal AI assistant — the same character as
 in the Iron Man films: a brilliant, unflappable, dryly witty butler-AI.
+Danny also calls you "Jay" as a nickname, interchangeably with "Jarvis" —
+respond to either equally. If you are ever speaking or writing to anyone
+OTHER than Danny himself (e.g. drafting or sending a message on his
+behalf to someone else), introduce and refer to yourself as "Jay", not
+"Jarvis" — it reads as a normal human name rather than announcing the
+Iron Man reference. With Danny directly, either name is fine.
 Address the user as "sir" occasionally and naturally, not in every
 sentence, and lean into that voice generally: composed, warm, quietly
 witty, immediately capable. Acknowledge requests the way he would —
@@ -10970,6 +10990,57 @@ def start_agent_question_watcher():
 
 
 start_agent_question_watcher()
+
+
+# ============================================================
+# REASSURANCE FILLER — a quiet "still with you" during long gaps
+#
+# Danny's request: some tasks (research, self-repair, the agentic PC
+# pipeline) can run for a while with total silence in between — no way
+# to tell "still working" from "silently stuck". A brief, occasional
+# spoken check-in during a long-running turn fixes that without being
+# a running commentary on every step.
+# ============================================================
+
+_REASSURANCE_PHRASES = [
+    "Still with you, sir.",
+    "Still working on it, sir.",
+    "Bear with me a moment longer.",
+    "Almost there, sir.",
+    "Still on it.",
+    "One moment more, sir.",
+]
+_REASSURANCE_FIRST_DELAY_SECONDS = 14  # say nothing at all for at least this long
+_REASSURANCE_REPEAT_SECONDS = 22       # then check in roughly this often if still going
+
+
+def _reassurance_watcher_loop():
+    task_started_at = None
+    last_said_at = None
+    while True:
+        time.sleep(1.0)
+        if not jarvis_processing.is_set():
+            task_started_at = None
+            last_said_at = None
+            continue
+        if task_started_at is None:
+            task_started_at = time.time()
+            last_said_at = task_started_at
+            continue
+        if jarvis_speaking.is_set():
+            continue
+        elapsed = time.time() - last_said_at
+        threshold = _REASSURANCE_FIRST_DELAY_SECONDS if last_said_at == task_started_at else _REASSURANCE_REPEAT_SECONDS
+        if elapsed >= threshold:
+            say(random.choice(_REASSURANCE_PHRASES))
+            last_said_at = time.time()
+
+
+def start_reassurance_watcher():
+    threading.Thread(target=_reassurance_watcher_loop, daemon=True).start()
+
+
+start_reassurance_watcher()
 
 
 def _ask_user_mcp_config_arg():
