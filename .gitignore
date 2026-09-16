@@ -17,6 +17,7 @@
 !host_agent_processor.py
 !jarvis_ask_user_mcp.py
 !jarvis_sky_background.jpg
+!_gen_wallpaper.py
 
 # LibreHardwareMonitor: vendored third-party tool, not source code --
 # only track our own config for it, not its ~19MB of binaries/DLLs.
