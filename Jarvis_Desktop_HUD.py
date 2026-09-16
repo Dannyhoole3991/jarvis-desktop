@@ -48,6 +48,7 @@ from PIL import Image, ImageDraw
 HERE = os.path.dirname(os.path.abspath(__file__))
 JARVIS_SCRIPT = os.path.join(HERE, "Jarvis_FINAL_WORKING.py")
 HUD_HTML = os.path.join(HERE, "jarvis_hud.html")
+WALLPAPER_IMAGE = os.path.join(HERE, "jarvis_sky_background.jpg")
 
 STATUS_URL = "http://localhost:8765/status"
 STOP_URL = "http://localhost:8765/stop"
@@ -60,6 +61,17 @@ WINDOW_MIN_SIZE = (320, 300)
 # than a full dashboard window -- it should sit on top of whatever else
 # is on screen, like a companion widget, not a normal app window.
 ALWAYS_ON_TOP = True
+
+# Danny's request: he wants Jarvis to genuinely feel like part of his
+# desktop, not a widget floating on top of it. When True, on startup this
+# (a) sets the desktop wallpaper to WALLPAPER_IMAGE, and (b) reparents the
+# orb window into the WorkerW layer Windows keeps directly behind the
+# desktop icons -- the same technique wallpaper-engine-style apps use, so
+# the orb renders behind icons/windows like it's painted onto the desktop
+# itself, rather than floating above everything. Both steps fail safe:
+# if either doesn't work on this Windows build, the orb just stays a
+# normal always-on-top floating window as before -- nothing breaks.
+DESKTOP_MODE = True
 
 jarvis_process = None          # Popen handle, only set if WE started the engine
 window = None                  # webview.Window
@@ -157,6 +169,101 @@ def stop_jarvis_engine_if_ours():
     except Exception as error:
         print(f"Could not stop Jarvis engine process: {error}")
     jarvis_process = None
+
+
+# ------------------------------------------------------------------
+# Desktop mode: wallpaper + reparenting the orb behind desktop icons
+# ------------------------------------------------------------------
+
+SPI_SETDESKWALLPAPER = 20
+SPIF_UPDATEINIFILE = 0x01
+SPIF_SENDCHANGE = 0x02
+
+
+def set_desktop_wallpaper(path):
+    """Set the Windows desktop wallpaper. Safe/reversible -- just a normal
+    wallpaper change, the same as doing it from Settings by hand."""
+    if not os.path.exists(path):
+        print(f"Wallpaper image not found, skipping: {path}")
+        return False
+    try:
+        ctypes.windll.user32.SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER, 0, path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+        )
+        return True
+    except Exception as error:
+        print(f"Could not set desktop wallpaper: {error}")
+        return False
+
+
+def _find_worker_w():
+    """
+    Windows keeps a hidden 'WorkerW' window directly behind the desktop
+    icons (above the wallpaper). Asking Progman to spawn one, then finding
+    it, is the standard technique wallpaper-engine-style apps use to
+    render something that looks like it's part of the desktop.
+    """
+    user32 = ctypes.windll.user32
+    progman = user32.FindWindowW("Progman", None)
+    if not progman:
+        return None
+
+    result = ctypes.c_ulong()
+    user32.SendMessageTimeoutW(progman, 0x052C, 0, 0, 0x0, 1000, ctypes.byref(result))
+
+    worker_w = [None]
+
+    def enum_windows_proc(hwnd, _lparam):
+        shell_view = user32.FindWindowExW(hwnd, None, "SHELLDLL_DefView", None)
+        if shell_view:
+            candidate = user32.FindWindowExW(None, hwnd, "WorkerW", None)
+            if candidate:
+                worker_w[0] = candidate
+        return True
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumWindows(WNDENUMPROC(enum_windows_proc), 0)
+    return worker_w[0]
+
+
+def attach_window_to_desktop(hwnd):
+    """
+    Reparent our own window into the WorkerW layer so it renders behind
+    the desktop icons instead of floating on top of everything. Returns
+    True on success; the caller should just leave the window as a normal
+    floating one if this returns False -- nothing else depends on it.
+    """
+    try:
+        worker_w = _find_worker_w()
+        if not worker_w:
+            print("Desktop mode: couldn't find the WorkerW layer; staying as a floating orb.")
+            return False
+        ctypes.windll.user32.SetParent(hwnd, worker_w)
+        return True
+    except Exception as error:
+        print(f"Desktop mode: couldn't attach to the desktop layer: {error}")
+        return False
+
+
+def enable_desktop_mode():
+    """Runs once the webview window actually exists. See DESKTOP_MODE above."""
+    set_desktop_wallpaper(WALLPAPER_IMAGE)
+
+    hwnd = None
+    for _ in range(20):
+        try:
+            hwnd = window.native.Handle.ToInt32()
+            if hwnd:
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+
+    if not hwnd:
+        print("Desktop mode: window handle never became available; staying as a floating orb.")
+        return
+
+    attach_window_to_desktop(hwnd)
 
 
 # ------------------------------------------------------------------
@@ -291,7 +398,7 @@ def main():
         js_api=HudApi(),
     )
 
-    webview.start()
+    webview.start(func=(enable_desktop_mode if DESKTOP_MODE else None))
 
     # webview.start() returns once the window is closed/destroyed.
     quit_app()
