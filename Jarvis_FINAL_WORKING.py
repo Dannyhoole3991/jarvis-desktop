@@ -71,12 +71,7 @@ except ImportError:
 # ============================================================
 
 VOICE_INPUT_ENABLED = True
-# "Jay" is Danny's chosen nickname — same assistant, answers to either.
-# Note this is a much shorter, more common word than "Jarvis", so it
-# will trigger on more false positives (ordinary speech containing
-# "jay") than "Jarvis" ever did; accepted deliberately as the tradeoff
-# for a nickname that sounds natural rather than like a sci-fi callsign.
-WAKE_WORDS = ("jarvis", "jay")
+WAKE_WORD = "jarvis"
 voice_commands = queue.Queue()
 
 
@@ -531,28 +526,6 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path == "/unload_ai":
-            # Lets the execution agent (_run_agentic_pc_task) free the
-            # local AI's memory at the exact moment IT knows a game is
-            # actually about to launch, rather than Jarvis guessing
-            # upfront -- guessing early was unloading the AI even for
-            # tasks that never end up launching a game at all (e.g.
-            # searching the Xbox library and finding nothing), leaving
-            # it needlessly unloaded for a long time for no reason.
-            try:
-                unload_ollama_models()
-                body = json.dumps({"reply": "Unloaded."}, ensure_ascii=True).encode("ascii")
-                self.send_response(200)
-            except Exception as error:
-                body = json.dumps({"error": str(error)}, ensure_ascii=True).encode("ascii")
-                self.send_response(400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
         if self.path == "/stop":
             try:
                 stop_jarvis_speaking()
@@ -684,7 +657,7 @@ def wake_word_listener():
     if not (VOICE_INPUT_ENABLED and SPEECH_RECOGNITION_AVAILABLE and SOUNDDEVICE_AVAILABLE):
         return
 
-    print("\nVoice wake word ready. Say 'Jarvis' (or 'Jay') followed by your command.")
+    print("\nVoice wake word ready. Say 'Jarvis' followed by your command.")
 
     while True:
         try:
@@ -707,12 +680,11 @@ def wake_word_listener():
                 continue
 
             lowered = heard.lower()
-            matched_wake_word = next((word for word in WAKE_WORDS if word in lowered), None)
-            if not matched_wake_word:
+            if WAKE_WORD not in lowered:
                 continue
 
             # "Jarvis, open Steam" — command is already included.
-            after_wake = lowered.split(matched_wake_word, 1)[1].strip(" ,.!?")
+            after_wake = lowered.split(WAKE_WORD, 1)[1].strip(" ,.!?")
             if after_wake:
                 print(f"\nWake word detected. You: {heard}")
                 voice_commands.put(after_wake)
@@ -1176,24 +1148,16 @@ def _time_of_day_greeting():
     return "evening"
 
 
-# Danny's own picks, plus a few added in the same understated,
-# dry-witted Iron-Man-butler register. "Good morning" is reserved for
-# actual mornings (see _pick_startup_greeting below); the rest work at
-# any hour.
+# Danny's own picks. "Good morning" is reserved for actual mornings (see
+# _pick_startup_greeting below); the rest work at any hour.
 _MORNING_ONLY_GREETINGS = [
     "Good morning. All systems are optimized and your schedule is cleared for greatness.",
-    "Good morning, sir. I trust you slept well; I didn't need to.",
-    "Good morning. Everything held steady overnight — nothing broke while you were away.",
 ]
 
 _ANYTIME_GREETINGS = [
     "Online and fully operational. What's the play today, boss?",
     "Systems check complete. The world isn't going to save itself. Ready when you are.",
     "We are live. Try not to break anything today.",
-    "All systems nominal, sir. Standing by.",
-    "At your service, sir.",
-    "Up and running. No fires to report.",
-    "Everything's in order, sir. What shall we tackle first?",
 ]
 
 
@@ -4213,12 +4177,6 @@ def ask_jarvis(user_message):
     instructions = """
 You are Jarvis, the user's personal AI assistant — the same character as
 in the Iron Man films: a brilliant, unflappable, dryly witty butler-AI.
-Danny also calls you "Jay" as a nickname, interchangeably with "Jarvis" —
-respond to either equally. If you are ever speaking or writing to anyone
-OTHER than Danny himself (e.g. drafting or sending a message on his
-behalf to someone else), introduce and refer to yourself as "Jay", not
-"Jarvis" — it reads as a normal human name rather than announcing the
-Iron Man reference. With Danny directly, either name is fine.
 Address the user as "sir" occasionally and naturally, not in every
 sentence, and lean into that voice generally: composed, warm, quietly
 witty, immediately capable. Acknowledge requests the way he would —
@@ -6642,6 +6600,12 @@ def handle_xbox_game_command(command):
     say(f"Opening Xbox, then I'll launch {game}.")
     print(f"XBOX ROUTINE: requested game {game!r}.")
 
+    # Free the local AI's ~12GB from memory as early as possible, so it
+    # has the whole rest of this routine (opening Xbox, navigating to the
+    # game page, waiting for Play) to actually finish before the game
+    # itself starts loading assets.
+    unload_ollama_models()
+
     if not _foreground_is_xbox():
         found = find_and_open_app('Xbox')
         if not found:
@@ -6676,20 +6640,12 @@ def handle_xbox_game_command(command):
 
             if _invoke_foreground_uia_target(('play', 'launch', 'start')):
                 print(f"XBOX ROUTINE: Play control found and invoked for {game!r}.")
-                # Danny's explicit requirement: never free the local AI's
-                # memory until the Play/Launch control has actually been
-                # pressed -- not while still opening Xbox, searching the
-                # library, or waiting for its UI, since that wait alone
-                # (e.g. a library refresh) can take a long time for no
-                # game-loading benefit at all.
-                unload_ollama_models()
                 launched = True
                 break
 
             # Some Xbox builds expose the control with a longer accessible name.
             if _invoke_foreground_uia_target(('play button', 'launch button', 'start button')):
                 print(f"XBOX ROUTINE: named Play control found and invoked for {game!r}.")
-                unload_ollama_models()
                 launched = True
                 break
 
@@ -6887,15 +6843,16 @@ Rules:
 # ============================================================
 # LEARN BY DOING -- RECORD REAL CLICKS, NOT NARRATION
 #
-# _run_teaching_session is the walkthrough itself. It's only ever
-# offered now via _offer_self_repair_or_teach, AFTER a genuine hybrid-
-# agent attempt has already failed -- a brand-new task no longer asks
-# permission up front ("show me or should I figure it out"); Jarvis
-# just announces it and lets the hybrid agent try first (Danny's
-# explicit call: the agent generally works, so asking first is just
-# friction). Rather than just reporting failure, Jarvis shares what it
-# already found and offers to walk through it together, or run a
-# deeper self-repair, instead of a dead end.
+# Two entry points into the same walkthrough:
+#   1. _offer_teaching_before_research -- asked BEFORE any AI research
+#      spend happens, for a task Jarvis has never done before. Danny's
+#      explicit request: give him the option to just show Jarvis rather
+#      than defaulting straight to the paid research pipeline.
+#   2. _run_teaching_session called directly with a research_hint --
+#      the fallback when a paid research+UFO2 attempt already ran and
+#      failed/looped without completing. Rather than just reporting
+#      failure, Jarvis shares what it already found and offers to walk
+#      through it together instead of a dead end.
 #
 # Danny's explicit correction after the first version of this (which
 # recorded the user's spoken/typed NARRATION of each step): "no i want
@@ -7192,6 +7149,25 @@ def _run_teaching_session(task, research_hint=None):
     _save_recorded_click_routine(task, steps)
     say(f"Saved. I now know how to {task}, in {len(steps)} step{'s' if len(steps) != 1 else ''}.")
     return True
+
+
+def _offer_teaching_before_research(task):
+    """
+    Before spending any money on research, ask whether sir would rather
+    just show Jarvis how to do this himself. Returns True if he taught it
+    (task fully handled), False if he'd rather let the AI research it
+    (falls through to the existing paid pipeline as before).
+    """
+    say(
+        "I don't know how to do that yet. Would you like to walk me "
+        "through it yourself, or should I work it out and do it myself? "
+        "That takes a little longer than something I already know."
+    )
+    answer = get_confirmation_input().lower()
+    teach_words = ("teach", "walk", "show you", "i'll show", "ill show", "myself", "together")
+    if any(word in answer for word in teach_words):
+        return _run_teaching_session(task)
+    return False
 
 
 # ============================================================
@@ -7535,19 +7511,17 @@ def _v58_used_app_agent(output):
 _GAME_LAUNCH_SIGNALS = ("steam://", "rungameid", "epicgames://", "steamapps\\common", "steamapps/common")
 
 
-def _is_game_launch_command(command):
-    """True if this single shell command is the one that actually starts
-    a game (see _GAME_LAUNCH_SIGNALS) -- works for any game, current or
-    future, since it's a signal check, not a per-game list."""
-    lowered = str(command).lower()
-    return any(signal in lowered for signal in _GAME_LAUNCH_SIGNALS)
-
-
 def _looks_like_game_launch(steps):
-    """Same check across a whole list of steps -- used where we only need
-    to know "does this routine launch a game at all", not which exact
-    step does it."""
-    return any(_is_game_launch_command(step) for step in steps)
+    """
+    Cheap heuristic over a set of shell-command steps: does executing
+    these actually start a game? Used to decide whether it's worth
+    freeing the local AI's ~12GB from memory first (see
+    unload_ollama_models) -- worth doing for a game, not worth the
+    reload cost on the next chat turn for an ordinary shortcut like a
+    Settings deep link.
+    """
+    joined = " ".join(str(step) for step in steps).lower()
+    return any(signal in joined for signal in _GAME_LAUNCH_SIGNALS)
 
 
 def _auto_dismiss_launch_dialogs(timeout=20, poll_interval=0.4):
@@ -7607,16 +7581,14 @@ def _v58_replay_bash_steps(steps):
     commands and nothing else (see _v58_used_app_agent).
     """
     powershell_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    if _looks_like_game_launch(steps):
+        # Free the local AI's ~12GB from memory before the game itself
+        # starts loading assets -- same reasoning as the older dedicated
+        # Steam/Xbox launch routines, just reached through this path now.
+        unload_ollama_models()
     threading.Thread(target=_auto_dismiss_launch_dialogs, daemon=True).start()
     try:
         for command in steps:
-            if _is_game_launch_command(command):
-                # Danny's explicit requirement, applies to every game,
-                # current or future: never free the local AI's memory
-                # until the actual launch command is about to run -- not
-                # any earlier step (e.g. an inspection command) that
-                # might still be sitting in an older cached routine.
-                unload_ollama_models()
             print("V58 REPLAY: running saved shell command:", command)
             subprocess.Popen(
                 command,
@@ -7956,6 +7928,13 @@ def _run_agentic_pc_task(task, context=None):
     if not claude_exe:
         return False, "Couldn't find my own execution tools on this machine.", [], []
 
+    # This is the slower, one-off cold path (a task never solved before),
+    # so it's always worth freeing the local AI's ~12GB first, whether or
+    # not this specific task turns out to be a game -- unlike the fast,
+    # frequently-hit cached replay path, a few seconds' reload cost on
+    # the next chat turn is a non-issue here.
+    unload_ollama_models()
+
     jarvis_dir = os.path.dirname(os.path.abspath(__file__))
 
     briefing = f"""You are controlling a real Windows 11 PC on behalf of its owner, live,
@@ -7989,13 +7968,6 @@ choice between meaningfully different ways to do this -- not for
 routine steps. It speaks your question aloud to Danny and returns his
 real answer as text (or a note that he didn't respond, in which case
 use your own judgement and continue). Use it sparingly.
-
-If (and only if) this task is actually going to launch a game, run
-`curl -X POST http://localhost:8765/unload_ai` immediately before the
-real launch command (not before -- e.g. not while still searching for
-or confirming the game), so the local AI's memory is freed right when
-the game is actually about to start loading, not needlessly early for
-a task that might not end up launching anything.
 
 When finished, end your reply with EXACTLY one fenced block like this,
 with nothing after it:
@@ -8301,13 +8273,9 @@ def handle_v58_autonomous_commands(command, force=False):
         print("V58 AUTONOMOUS: reusing saved research brief for:", task)
     else:
         if not used_known_navigation:
-            # Danny's explicit call: don't ask permission for a brand-new
-            # task anymore ("do you want to show me or should I figure
-            # it out") -- just announce it and let the hybrid agent try.
-            # The choice between teaching and self-repair is now offered
-            # only AFTER a genuine failure (_offer_self_repair_or_teach
-            # below), not pre-emptively before the first attempt.
-            say("This is a new task, sir — let me take a moment and figure that one out.")
+            if _offer_teaching_before_research(execution_task):
+                return True
+            say("Let me work that out and get it done.")
         research = None
         verified = False
 
@@ -8921,8 +8889,8 @@ def run_local_command_flow(command, user_message):
         return True
     if handle_file_folder_commands(command):
         return True
-    # handle_xbox_game_command now runs earlier, directly in the main
-    # loop (before v58) -- see there for why.
+    if handle_xbox_game_command(command):
+        return True
     if handle_media_commands(command):
         return True
     if handle_learning_executor_commands(command):
@@ -11004,57 +10972,6 @@ def start_agent_question_watcher():
 start_agent_question_watcher()
 
 
-# ============================================================
-# REASSURANCE FILLER — a quiet "still with you" during long gaps
-#
-# Danny's request: some tasks (research, self-repair, the agentic PC
-# pipeline) can run for a while with total silence in between — no way
-# to tell "still working" from "silently stuck". A brief, occasional
-# spoken check-in during a long-running turn fixes that without being
-# a running commentary on every step.
-# ============================================================
-
-_REASSURANCE_PHRASES = [
-    "Still with you, sir.",
-    "Still working on it, sir.",
-    "Bear with me a moment longer.",
-    "Almost there, sir.",
-    "Still on it.",
-    "One moment more, sir.",
-]
-_REASSURANCE_FIRST_DELAY_SECONDS = 14  # say nothing at all for at least this long
-_REASSURANCE_REPEAT_SECONDS = 22       # then check in roughly this often if still going
-
-
-def _reassurance_watcher_loop():
-    task_started_at = None
-    last_said_at = None
-    while True:
-        time.sleep(1.0)
-        if not jarvis_processing.is_set():
-            task_started_at = None
-            last_said_at = None
-            continue
-        if task_started_at is None:
-            task_started_at = time.time()
-            last_said_at = task_started_at
-            continue
-        if jarvis_speaking.is_set():
-            continue
-        elapsed = time.time() - last_said_at
-        threshold = _REASSURANCE_FIRST_DELAY_SECONDS if last_said_at == task_started_at else _REASSURANCE_REPEAT_SECONDS
-        if elapsed >= threshold:
-            say(random.choice(_REASSURANCE_PHRASES))
-            last_said_at = time.time()
-
-
-def start_reassurance_watcher():
-    threading.Thread(target=_reassurance_watcher_loop, daemon=True).start()
-
-
-start_reassurance_watcher()
-
-
 def _ask_user_mcp_config_arg():
     """
     The --mcp-config value granting a self-repair / execution agent the
@@ -11365,20 +11282,6 @@ while True:
             continue
 
         if handle_smart_routine_phrases(command):
-            continue
-
-        # Already-proven, free, instant dedicated handlers get first
-        # crack at a command before the (slower, sometimes paid) v58
-        # pipeline ever sees it -- otherwise v58's composite-task
-        # heuristic ("X and Y") swallows something like "open xbox and
-        # play spider-man" BEFORE handle_xbox_game_command (which
-        # already knows Spider-Man is in the Xbox library, already
-        # waits correctly for its UI to be ready, and already unloads
-        # the local AI at exactly the right moment) ever gets a turn --
-        # confirmed live: it re-discovered all of that from scratch via
-        # the agent, slowly, instead of just using what Jarvis already
-        # knew how to do for free.
-        if handle_xbox_game_command(command):
             continue
 
         # v58 autonomous route runs before v53's single-app handlers so
