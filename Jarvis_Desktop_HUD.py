@@ -175,6 +175,23 @@ def stop_jarvis_engine_if_ours():
 # Desktop mode: wallpaper + reparenting the orb behind desktop icons
 # ------------------------------------------------------------------
 
+DESKTOP_MODE_LOG = os.path.join(HERE, "_desktop_mode_debug.log")
+
+
+def _desktop_log(message):
+    """
+    This launcher normally runs console-free (pythonw), so plain print()
+    here goes nowhere anyone can see. Log to a file instead so desktop-mode
+    issues can actually be diagnosed after the fact.
+    """
+    print(f"Desktop mode: {message}")
+    try:
+        with open(DESKTOP_MODE_LOG, "a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {message}\n")
+    except Exception:
+        pass
+
+
 SPI_SETDESKWALLPAPER = 20
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
@@ -184,7 +201,7 @@ def set_desktop_wallpaper(path):
     """Set the Windows desktop wallpaper. Safe/reversible -- just a normal
     wallpaper change, the same as doing it from Settings by hand."""
     if not os.path.exists(path):
-        print(f"Wallpaper image not found, skipping: {path}")
+        _desktop_log(f"wallpaper image not found, skipping: {path}")
         return False
     try:
         ctypes.windll.user32.SystemParametersInfoW(
@@ -192,7 +209,7 @@ def set_desktop_wallpaper(path):
         )
         return True
     except Exception as error:
-        print(f"Could not set desktop wallpaper: {error}")
+        _desktop_log(f"could not set desktop wallpaper: {error}")
         return False
 
 
@@ -226,22 +243,48 @@ def _find_worker_w():
     return worker_w[0]
 
 
+HWND_NOTOPMOST = -2
+HWND_BOTTOM = 1
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+GWL_EXSTYLE = -20
+WS_EX_TOPMOST = 0x00000008
+
+
 def attach_window_to_desktop(hwnd):
     """
     Reparent our own window into the WorkerW layer so it renders behind
     the desktop icons instead of floating on top of everything. Returns
     True on success; the caller should just leave the window as a normal
     floating one if this returns False -- nothing else depends on it.
+
+    Also explicitly drops the "always on top" style pywebview's on_top=True
+    sets (TopMost, via SetWindowPos/HWND_TOPMOST under the hood) -- a
+    topmost window fights this reparenting and can still render above the
+    icons even once SetParent has succeeded, which is exactly the "orb is
+    floating on the icons instead of behind them" symptom this fixes.
     """
+    user32 = ctypes.windll.user32
     try:
         worker_w = _find_worker_w()
         if not worker_w:
-            print("Desktop mode: couldn't find the WorkerW layer; staying as a floating orb.")
+            _desktop_log("couldn't find the WorkerW layer; staying as a floating orb.")
             return False
-        ctypes.windll.user32.SetParent(hwnd, worker_w)
+
+        ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & ~WS_EX_TOPMOST)
+        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+
+        result = user32.SetParent(hwnd, worker_w)
+        if not result:
+            _desktop_log("SetParent returned failure.")
+            return False
+
+        user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+        _desktop_log("attached to the desktop WorkerW layer successfully.")
         return True
     except Exception as error:
-        print(f"Desktop mode: couldn't attach to the desktop layer: {error}")
+        _desktop_log(f"couldn't attach to the desktop layer: {error}")
         return False
 
 
@@ -260,7 +303,7 @@ def enable_desktop_mode():
         time.sleep(0.25)
 
     if not hwnd:
-        print("Desktop mode: window handle never became available; staying as a floating orb.")
+        _desktop_log("window handle never became available; staying as a floating orb.")
         return
 
     attach_window_to_desktop(hwnd)
@@ -394,7 +437,7 @@ def main():
         frameless=True,
         easy_drag=False,   # only .pywebview-drag-region elements drag the window
         transparent=True,
-        on_top=ALWAYS_ON_TOP,
+        on_top=(False if DESKTOP_MODE else ALWAYS_ON_TOP),
         js_api=HudApi(),
     )
 
