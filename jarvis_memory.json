@@ -572,6 +572,23 @@
           "control": "Playnite.DesktopApp"
         }
       ]
+    },
+    "__game__::hogwarts legacy": {
+      "application": "__game__",
+      "control": "hogwarts legacy",
+      "kind": "bash",
+      "steps": [
+        "start steam://rungameid/990080"
+      ]
+    },
+    "__game__::grand theft auto v legacy": {
+      "application": "__game__",
+      "control": "grand theft auto v legacy",
+      "kind": "bash",
+      "steps": [
+        "Get-Content 'H:\\SteamLibrary\\steamapps\\appmanifest_271590.acf'",
+        "Start-Process \"steam://rungameid/271590\""
+      ]
     }
   }
 }

@@ -7594,6 +7594,38 @@ def _looks_like_game_launch(steps):
     return any(_is_game_launch_command(step) for step in steps)
 
 
+def _extract_game_name_from_task(task):
+    """
+    Pull just the game name out of a launch-style task phrase, so
+    differently-worded requests for the same game ("play X", "open
+    steam and launch X", "open xbox and play X") can all find the same
+    learned routine -- indexed into the existing app_skills store under
+    the "__game__" sentinel application (see get_app_skill/save_app_skill),
+    which already does fuzzy word-overlap matching for exactly this
+    "same thing, worded differently" problem. Confirmed live: without
+    this, a Steam/Xbox routine learned under one phrasing was invisible
+    to any other phrasing of the same game, even though Spider-Man
+    (hardcoded in handle_xbox_game_command) already didn't have this
+    problem. Returns "" if this doesn't look like a launch-a-game phrase.
+    """
+    t = task.strip()
+    lowered = t.lower()
+
+    composite = re.search(r'\band\s+(?:play|launch|start|open)\s+(.+)$', lowered)
+    if composite:
+        return t[composite.start(1):].strip()
+
+    prefixes = (
+        "i'm ready to play ", "im ready to play ", "i am ready to play ",
+        "ready to play ", "let's play ", "lets play ",
+        "play ", "launch ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return t[len(prefix):].strip()
+    return ""
+
+
 def _auto_dismiss_launch_dialogs(timeout=20, poll_interval=0.4):
     """
     Launching something (e.g. a game via Steam's steam:// protocol) can
@@ -8280,6 +8312,24 @@ def handle_v58_autonomous_commands(command, force=False):
                 print("V58 MEMORY: could not update local experience:", error)
             verified = False
 
+    # Tier 1b — same idea as Tier 1, but for a game asked about in a
+    # DIFFERENT phrasing than whatever phrase originally taught it (e.g.
+    # today: "open steam and launch X"; tomorrow: "play X"). The exact
+    # task-key lookup above only ever finds an identical phrase; this
+    # looks the game up by name alone (see _extract_game_name_from_task
+    # and get_app_skill's fuzzy word-overlap matching).
+    if not verified:
+        candidate_game = _extract_game_name_from_task(task)
+        if candidate_game:
+            game_skill = get_app_skill("__game__", candidate_game)
+            if game_skill and game_skill.get("kind") == "bash" and game_skill.get("steps"):
+                say("I've done this exact game before — running it directly, no AI needed this time.")
+                print(f"V58 AUTONOMOUS: zero-cost game-name replay for {candidate_game!r}:", task)
+                if _v58_replay_bash_steps(game_skill["steps"]):
+                    say("Done.")
+                    return True
+                say("That shortcut didn't work this time, so I'll work it out properly.")
+
     # Tier 2 — also free: a task that needed real clicking last time gets
     # those exact named-control clicks replayed via free local Windows UI
     # Automation, then sanity-checked with the free local vision model.
@@ -8382,6 +8432,17 @@ def handle_v58_autonomous_commands(command, force=False):
                 if skill_app and skill_target:
                     save_app_skill(skill_app, skill_target, bash_steps, kind="bash")
                     print(f"APP SKILL: learned {skill_app!r} -> {skill_target!r} (bash)")
+
+                # Same idea, specifically for games: index under just the
+                # game's name (sentinel application "__game__") so "play X"
+                # said tomorrow finds the exact same routine learned today
+                # as "open steam and launch X" -- see
+                # _extract_game_name_from_task.
+                if _looks_like_game_launch(bash_steps):
+                    game_name = _extract_game_name_from_task(task)
+                    if game_name:
+                        save_app_skill("__game__", game_name, bash_steps, kind="bash")
+                        print(f"APP SKILL: learned game {game_name!r} (bash)")
             elif click_steps_new and not used_known_navigation:
                 save_learned_routine(
                     task,
