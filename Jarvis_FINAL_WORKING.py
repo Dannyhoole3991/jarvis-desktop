@@ -6395,7 +6395,15 @@ def _foreground_is_xbox():
                     handle, 0, buf, ctypes.byref(size)
                 ):
                     exe = buf.value.lower().replace('/', '\\')
-                    if exe.endswith('\\xboxpcapp.exe') or exe.endswith('\\xbox.exe'):
+                    exe_name = exe.rsplit('\\', 1)[-1]
+                    # Confirmed live: the real Xbox app on this machine runs
+                    # as BOTH XboxPcApp.exe and XboxPcAppFT.exe (a "fast
+                    # track"/loading variant that can briefly hold the
+                    # foreground first) -- the old exact-suffix check only
+                    # matched the former, so a launch that briefly showed
+                    # the FT window first failed this check for the whole
+                    # 30s wait even though Xbox genuinely was opening.
+                    if exe_name.startswith('xboxpcapp') or exe_name == 'xbox.exe':
                         return True
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
