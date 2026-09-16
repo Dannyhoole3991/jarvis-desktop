@@ -631,6 +631,40 @@ ELEVENLABS_SAMPLE_RATE = 24000
 ELEVENLABS_SPEED = float(os.environ.get("JARVIS_ELEVENLABS_SPEED", "1.15"))
 
 
+# ============================================================
+# PHONE RELAY — push everything Jarvis says to the cloud brain, so the
+# phone app hears the same "extra stuff in between" (self-repair
+# progress, reassurance check-ins, routine completions, startup
+# announcements) that only ever played on the PC before, not just
+# replies to messages the phone itself sent.
+# ============================================================
+
+JARVIS_PHONE_BACKEND_URL = os.environ.get("JARVIS_PHONE_BACKEND_URL", "").rstrip("/")
+JARVIS_PHONE_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
+
+
+def _relay_speech_to_phone(text):
+    """Best-effort, fire-and-forget push of something Jarvis just said to
+    the cloud phone backend. Never blocks or raises -- a network hiccup
+    or the phone backend being offline must never affect speech on the
+    PC itself."""
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+
+    def worker():
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/pc_said",
+                json={"text": text},
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _synthesize_with_elevenlabs(text):
     """
     Call ElevenLabs' text-to-speech API and return (samples, sample_rate)
@@ -1096,6 +1130,7 @@ def say(text):
     text = str(text)
     print("\nJarvis:", text)
     log_recent_action(text)
+    _relay_speech_to_phone(text)
 
     with active_remote_lock:
         if active_remote_reply is not None:
