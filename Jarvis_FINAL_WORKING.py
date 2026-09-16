@@ -765,6 +765,29 @@ def poll_interrupt_inputs():
     return False
 
 
+def _strip_leading_wake_word(text):
+    """
+    Strip a leading "Jay"/"Jarvis" from a message, whatever channel it
+    came in on. The microphone listener already strips the wake word
+    it just heard before queuing a voice command, but typed console
+    input and phone/remote commands never went through that -- so
+    saying "Jay, open the store" and later just "open the store"
+    produced two DIFFERENT task strings, and a routine learned under
+    one was never found under the other. Confirmed live. Only matches
+    at the very start (with a following separator or end of string),
+    so this never eats a genuine mid-sentence mention like "look up
+    jay z's new album".
+    """
+    stripped = text.strip()
+    lowered = stripped.lower()
+    for word in WAKE_WORDS:
+        if lowered.startswith(word):
+            rest = stripped[len(word):]
+            if not rest or rest[0] in " ,.!?:;-":
+                return rest.strip(" ,.!?:;-")
+    return stripped
+
+
 def get_user_input():
     """
     Accept typed commands at any time, while the background thread waits
@@ -11294,6 +11317,7 @@ while True:
             continue
 
         user_message = get_user_input()
+        user_message = _strip_leading_wake_word(user_message)
 
         if not user_message.strip():
             continue

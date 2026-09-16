@@ -404,6 +404,28 @@
       "state": "verified",
       "verified": true,
       "attempts": 0
+    },
+    "open edge and go to youtube": {
+      "task": "open edge and go to youtube",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "Start-Process \"msedge.exe\" -ArgumentList \"https://www.youtube.com\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
+    },
+    "open microsoft store and search for call of duty": {
+      "task": "open microsoft store and search for call of duty",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "Start-Process \"ms-windows-store://search/?query=call%20of%20duty\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
     }
   },
   "app_skills": {
