@@ -6579,10 +6579,41 @@ def _xbox_find_game_and_open(game_name):
     return False
 
 
+_XBOX_BLOCKED_NAMES = {
+    'steam', 'settings', 'view', 'install', 'search', 'chrome', 'edge',
+    'firefox', 'file explorer', 'explorer', 'notepad', 'calculator',
+    'discord', 'spotify', 'epic', 'epic games', 'xbox', 'youtube',
+    'google', 'gmail', 'chatgpt'
+}
+# v35 deliberately treats Spider-Man as an Xbox game because the user
+# confirmed it is in the Xbox library. Future games can use the same path.
+_KNOWN_XBOX_GAMES = {'spider-man', 'spiderman', 'marvel spider-man'}
+
+
 def handle_xbox_game_command(command):
     """Launch an installed Xbox/PC Game Pass game without requiring manual clicks."""
     c = command.strip()
     lower = c.lower().replace('’', "'")
+
+    # Composite phrasing, e.g. "open xbox and play spider-man" -- the
+    # plain prefix-stripping below only ever handled a SINGLE verb
+    # ("play spider-man", "open spider-man", "xbox spider-man"), so this
+    # exact real phrasing left `game` as the whole tail ("xbox and play
+    # spider-man"), which never matched a known game and silently fell
+    # through to the slow/expensive v58 pipeline instead of this free,
+    # already-correct handler. Pull the real game name from after the
+    # LAST play/launch/start verb, and treat "xbox" appearing anywhere
+    # earlier in the sentence as explicit.
+    composite = re.search(r'\band\s+(?:play|launch|start)\s+(.+)$', lower)
+    if composite:
+        game = c[composite.start(1):].strip()
+        xbox_explicit = 'xbox' in lower[:composite.start()]
+        if not game or game.lower() in _XBOX_BLOCKED_NAMES:
+            return False
+        if not xbox_explicit and game.lower() not in _KNOWN_XBOX_GAMES:
+            return False
+        return _run_xbox_game_routine(game, xbox_explicit)
+
     prefixes = (
         'i\'m ready to play ', 'im ready to play ', 'i am ready to play ',
         'ready to play ', 'let\'s play ', 'lets play ',
@@ -6604,21 +6635,19 @@ def handle_xbox_game_command(command):
     elif lower.startswith('xbox '):
         game = c[5:].strip()
 
-    blocked = {
-        'steam', 'settings', 'view', 'install', 'search', 'chrome', 'edge',
-        'firefox', 'file explorer', 'explorer', 'notepad', 'calculator',
-        'discord', 'spotify', 'epic', 'epic games', 'xbox', 'youtube',
-        'google', 'gmail', 'chatgpt'
-    }
-    if not game or game.lower() in blocked:
+    if not game or game.lower() in _XBOX_BLOCKED_NAMES:
         return False
 
-    # v35 deliberately treats Spider-Man as an Xbox game because the user
-    # confirmed it is in the Xbox library. Future games can use the same path.
-    known_xbox_games = {'spider-man', 'spiderman', 'marvel spider-man'}
-    if not xbox_explicit and game.lower() not in known_xbox_games:
+    if not xbox_explicit and game.lower() not in _KNOWN_XBOX_GAMES:
         return False
 
+    return _run_xbox_game_routine(game, xbox_explicit)
+
+
+def _run_xbox_game_routine(game, xbox_explicit):
+    """The actual Xbox launch routine, shared by both phrasings
+    handle_xbox_game_command recognizes ("play X" / "xbox X" and the
+    composite "open xbox and play X")."""
     say(f"Opening Xbox, then I'll launch {game}.")
     print(f"XBOX ROUTINE: requested game {game!r}.")
 
