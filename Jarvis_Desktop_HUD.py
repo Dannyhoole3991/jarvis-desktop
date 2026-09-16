@@ -60,7 +60,7 @@ WINDOW_MIN_SIZE = (320, 300)
 # Back to the original design: a small, see-through floating orb rather
 # than a full dashboard window -- it should sit on top of whatever else
 # is on screen, like a companion widget, not a normal app window.
-ALWAYS_ON_TOP = True
+ALWAYS_ON_TOP = False
 
 # Danny's request: he wants Jarvis to genuinely feel like part of his
 # desktop. DESKTOP_MODE controls the safe part: setting the wallpaper.
@@ -329,12 +329,37 @@ def attach_window_to_desktop(hwnd):
         return False
 
 
+class MARGINS(ctypes.Structure):
+    _fields_ = [
+        ("cxLeftWidth", ctypes.c_int),
+        ("cxRightWidth", ctypes.c_int),
+        ("cyTopHeight", ctypes.c_int),
+        ("cyBottomHeight", ctypes.c_int),
+    ]
+
+
+def enable_true_transparency(hwnd):
+    """
+    pywebview's own transparency support (setting the WebView2 control's
+    background to Color.Transparent -- see its winforms.py, which even
+    calls this "a hack... no idea why this works") isn't enough on its
+    own here -- confirmed live, it renders solid white instead of
+    see-through. DwmExtendFrameIntoClientArea is the actual documented
+    Windows API for telling the compositor to treat a window's whole
+    client area as real glass, composited with true per-pixel alpha
+    against whatever is behind it, which is what's missing.
+    """
+    try:
+        margins = MARGINS(-1, -1, -1, -1)
+        result = ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+        _desktop_log(f"DwmExtendFrameIntoClientArea returned {result} (0 = success).")
+    except Exception as error:
+        _desktop_log(f"couldn't extend the DWM frame for transparency: {error}")
+
+
 def enable_desktop_mode():
     """Runs once the webview window actually exists. See DESKTOP_MODE above."""
     set_desktop_wallpaper(WALLPAPER_IMAGE)
-
-    if not ATTEMPT_DESKTOP_ATTACH:
-        return
 
     hwnd = None
     for _ in range(20):
@@ -350,7 +375,10 @@ def enable_desktop_mode():
         _desktop_log("window handle never became available; staying as a floating orb.")
         return
 
-    attach_window_to_desktop(hwnd)
+    enable_true_transparency(hwnd)
+
+    if ATTEMPT_DESKTOP_ATTACH:
+        attach_window_to_desktop(hwnd)
 
 
 # ------------------------------------------------------------------
