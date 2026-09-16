@@ -71,7 +71,12 @@ except ImportError:
 # ============================================================
 
 VOICE_INPUT_ENABLED = True
-WAKE_WORD = "jarvis"
+# "Jay" is Danny's chosen nickname -- same assistant, answers to either.
+# Note this is a much shorter, more common word than "Jarvis", so it
+# will trigger on more false positives (ordinary speech containing
+# "jay") than "Jarvis" ever did; accepted deliberately as the tradeoff
+# for a nickname that sounds natural rather than like a sci-fi callsign.
+WAKE_WORDS = ("jarvis", "jay")
 voice_commands = queue.Queue()
 
 
@@ -679,7 +684,7 @@ def wake_word_listener():
     if not (VOICE_INPUT_ENABLED and SPEECH_RECOGNITION_AVAILABLE and SOUNDDEVICE_AVAILABLE):
         return
 
-    print("\nVoice wake word ready. Say 'Jarvis' followed by your command.")
+    print("\nVoice wake word ready. Say 'Jarvis' (or 'Jay') followed by your command.")
 
     while True:
         try:
@@ -702,11 +707,12 @@ def wake_word_listener():
                 continue
 
             lowered = heard.lower()
-            if WAKE_WORD not in lowered:
+            matched_wake_word = next((word for word in WAKE_WORDS if word in lowered), None)
+            if not matched_wake_word:
                 continue
 
             # "Jarvis, open Steam" — command is already included.
-            after_wake = lowered.split(WAKE_WORD, 1)[1].strip(" ,.!?")
+            after_wake = lowered.split(matched_wake_word, 1)[1].strip(" ,.!?")
             if after_wake:
                 print(f"\nWake word detected. You: {heard}")
                 voice_commands.put(after_wake)
@@ -4199,6 +4205,12 @@ def ask_jarvis(user_message):
     instructions = """
 You are Jarvis, the user's personal AI assistant — the same character as
 in the Iron Man films: a brilliant, unflappable, dryly witty butler-AI.
+Danny also calls you "Jay" as a nickname, interchangeably with "Jarvis" —
+respond to either equally. If you are ever speaking or writing to anyone
+OTHER than Danny himself (e.g. drafting or sending a message on his
+behalf to someone else), introduce and refer to yourself as "Jay", not
+"Jarvis" — it reads as a normal human name rather than announcing the
+Iron Man reference. With Danny directly, either name is fine.
 Address the user as "sir" occasionally and naturally, not in every
 sentence, and lean into that voice generally: composed, warm, quietly
 witty, immediately capable. Acknowledge requests the way he would —
@@ -6896,16 +6908,15 @@ Rules:
 # ============================================================
 # LEARN BY DOING -- RECORD REAL CLICKS, NOT NARRATION
 #
-# Two entry points into the same walkthrough:
-#   1. _offer_teaching_before_research -- asked BEFORE any AI research
-#      spend happens, for a task Jarvis has never done before. Danny's
-#      explicit request: give him the option to just show Jarvis rather
-#      than defaulting straight to the paid research pipeline.
-#   2. _run_teaching_session called directly with a research_hint --
-#      the fallback when a paid research+UFO2 attempt already ran and
-#      failed/looped without completing. Rather than just reporting
-#      failure, Jarvis shares what it already found and offers to walk
-#      through it together instead of a dead end.
+# _run_teaching_session is the walkthrough itself. It's only ever
+# offered now via _offer_self_repair_or_teach, AFTER a genuine hybrid-
+# agent attempt has already failed -- a brand-new task no longer asks
+# permission up front ("show me or should I figure it out"); Jarvis
+# just announces it and lets the hybrid agent try first (Danny's
+# explicit call: the agent generally works, so asking first is just
+# friction). Rather than just reporting failure, Jarvis shares what it
+# already found and offers to walk through it together, or run a
+# deeper self-repair, instead of a dead end.
 #
 # Danny's explicit correction after the first version of this (which
 # recorded the user's spoken/typed NARRATION of each step): "no i want
@@ -7202,25 +7213,6 @@ def _run_teaching_session(task, research_hint=None):
     _save_recorded_click_routine(task, steps)
     say(f"Saved. I now know how to {task}, in {len(steps)} step{'s' if len(steps) != 1 else ''}.")
     return True
-
-
-def _offer_teaching_before_research(task):
-    """
-    Before spending any money on research, ask whether sir would rather
-    just show Jarvis how to do this himself. Returns True if he taught it
-    (task fully handled), False if he'd rather let the AI research it
-    (falls through to the existing paid pipeline as before).
-    """
-    say(
-        "I don't know how to do that yet. Would you like to walk me "
-        "through it yourself, or should I work it out and do it myself? "
-        "That takes a little longer than something I already know."
-    )
-    answer = get_confirmation_input().lower()
-    teach_words = ("teach", "walk", "show you", "i'll show", "ill show", "myself", "together")
-    if any(word in answer for word in teach_words):
-        return _run_teaching_session(task)
-    return False
 
 
 # ============================================================
@@ -8330,9 +8322,13 @@ def handle_v58_autonomous_commands(command, force=False):
         print("V58 AUTONOMOUS: reusing saved research brief for:", task)
     else:
         if not used_known_navigation:
-            if _offer_teaching_before_research(execution_task):
-                return True
-            say("Let me work that out and get it done.")
+            # Danny's explicit call: don't ask permission for a brand-new
+            # task anymore ("do you want to show me or should I figure
+            # it out") -- just announce it and let the hybrid agent try.
+            # The choice between teaching and self-repair is now offered
+            # only AFTER a genuine failure (_offer_self_repair_or_teach
+            # below), not pre-emptively before the first attempt.
+            say("This is a new task, sir — let me take a moment and figure that one out.")
         research = None
         verified = False
 
