@@ -2,10 +2,11 @@
 Jarvis Desktop HUD
 ==================
 
-A system-tray app that gives Jarvis a full mission-control style dashboard
-window instead of a plain console: real CPU/GPU/RAM/disk/network stats, a
-clickable folder/app shortcut graph, and a live step-by-step feed of
-whatever Jarvis is currently doing.
+A system-tray app that gives Jarvis a small, see-through floating orb on
+screen instead of a plain console: a circle that glows and moves gently
+while idle, pulses faster while thinking, and animates more while
+speaking, plus a simple text box for typed commands as a fallback to
+voice.
 
 Design:
   - Jarvis_FINAL_WORKING.py (the actual engine -- wake word, brain, TTS,
@@ -51,14 +52,14 @@ HUD_HTML = os.path.join(HERE, "jarvis_hud.html")
 STATUS_URL = "http://localhost:8765/status"
 STOP_URL = "http://localhost:8765/stop"
 
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 860
-WINDOW_MIN_SIZE = (1000, 680)
+WINDOW_WIDTH = 320
+WINDOW_HEIGHT = 300
+WINDOW_MIN_SIZE = (320, 300)
 
-# The dashboard is a full opaque window (not a see-through floating orb
-# like the earlier design), so it doesn't need to float above everything
-# else by default.
-ALWAYS_ON_TOP = False
+# Back to the original design: a small, see-through floating orb rather
+# than a full dashboard window -- it should sit on top of whatever else
+# is on screen, like a companion widget, not a normal app window.
+ALWAYS_ON_TOP = True
 
 jarvis_process = None          # Popen handle, only set if WE started the engine
 window = None                  # webview.Window
@@ -282,10 +283,10 @@ def main():
         width=WINDOW_WIDTH,
         height=WINDOW_HEIGHT,
         min_size=WINDOW_MIN_SIZE,
-        resizable=True,
+        resizable=False,
         frameless=True,
         easy_drag=False,   # only .pywebview-drag-region elements drag the window
-        transparent=False,
+        transparent=True,
         on_top=ALWAYS_ON_TOP,
         js_api=HudApi(),
     )
