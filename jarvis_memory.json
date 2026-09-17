@@ -435,6 +435,17 @@
       "state": "verified",
       "verified": true,
       "attempts": 0
+    },
+    "press start button": {
+      "task": "press start button",
+      "method": "Completed through Jarvis v58; the whole task turned out to be these shell commands, so they are replayed directly next time with no AI cost.",
+      "steps": [
+        "powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^{ESC}')\""
+      ],
+      "source": "jarvis-v58-ufo2-replay",
+      "state": "verified",
+      "verified": true,
+      "attempts": 0
     }
   },
   "app_skills": {

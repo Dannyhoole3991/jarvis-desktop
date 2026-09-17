@@ -907,8 +907,19 @@ def get_confirmation_input(prompt_text="\nYou: "):
     while True:
         try:
             message, reply_queue = remote_commands.get_nowait()
-            with active_remote_lock:
-                active_remote_reply = reply_queue
+            # Acknowledge immediately rather than leaving the phone's
+            # HTTP request waiting on whatever say() happens to come
+            # next -- for a confirmation that precedes something
+            # long-running (e.g. mid self-repair), that could be
+            # minutes away, and the phone's own request would time out
+            # long before then. Any real follow-up already reaches the
+            # phone anyway via the separate pc_events push channel (see
+            # _relay_speech_to_phone), so a fast plain ack here is
+            # enough for this specific request.
+            try:
+                reply_queue.put_nowait("Got it, sir.")
+            except queue.Full:
+                pass
             typed_buffer = ""
             typed_prompt_shown = False
             print("\nPhone:", message)
@@ -1256,7 +1267,24 @@ def _pick_startup_greeting():
 
 print("Jarvis is starting...")
 
-say(_pick_startup_greeting())
+# If self-repair applied a fix last run (see _run_self_repair_agent),
+# say so specifically instead of a random greeting -- Danny's explicit
+# request: coming back up after a repair should sound like a real
+# "we're back" moment, not just business as usual.
+_repair_marker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pending_repair_restart.json")
+if os.path.exists(_repair_marker_path):
+    try:
+        with open(_repair_marker_path, "r", encoding="utf-8") as _handle:
+            _repair_info = json.load(_handle)
+    except Exception:
+        _repair_info = {}
+    try:
+        os.remove(_repair_marker_path)
+    except Exception:
+        pass
+    say("All systems rebooted, sir. We're back to full capacity.")
+else:
+    say(_pick_startup_greeting())
 
 print("Type 'exit' to quit.")
 
@@ -7347,6 +7375,9 @@ def _git(*args, cwd=None):
         return False, str(error)
 
 
+_PENDING_REPAIR_RESTART_MARKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pending_repair_restart.json")
+
+
 def _run_self_repair_agent(task, context=None):
     """
     Run a real coding agent against Jarvis's own source code to
@@ -7500,6 +7531,11 @@ setting changes unrelated to this task).
         _git("commit", "-m", f"Self-repair: {task}\n\n{summary[:2000]}", cwd=jarvis_dir)
         say(f"Done, sir. {summary[:500]} I've saved the fix -- restart me when convenient to actually use it.")
         log_recent_action(f"Self-repair applied for: {task}")
+        try:
+            with open(_PENDING_REPAIR_RESTART_MARKER, "w", encoding="utf-8") as handle:
+                json.dump({"task": task}, handle)
+        except Exception as error:
+            print("SELF-REPAIR: could not write restart marker:", error)
 
     threading.Thread(target=worker, daemon=True).start()
     return True
@@ -11326,6 +11362,7 @@ class _JarvisCodeSession:
             sentence = sentence.strip()
             if sentence:
                 _speak_chunk_blocking(sentence)
+                _relay_speech_to_phone(sentence)
 
     def _read_loop(self):
         spoken_buffer = ""
@@ -11358,6 +11395,7 @@ class _JarvisCodeSession:
                     leftover = spoken_buffer.strip()
                     if leftover:
                         _speak_chunk_blocking(leftover)
+                        _relay_speech_to_phone(leftover)
                     spoken_buffer = ""
                     self._append_transcript("\n")
         except Exception as error:
