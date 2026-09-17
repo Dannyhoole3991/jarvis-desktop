@@ -687,6 +687,53 @@ def _relay_speech_to_phone(text):
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _relay_code_text_to_phone(text):
+    """
+    Push a chunk of the active Jarvis Code session's transcript to the
+    phone as TEXT, not speech -- a separate feed from _relay_speech_to_phone
+    on purpose. Code sessions involve diffs, tool output, and reasoning
+    that's awkward to have read aloud; the phone's "code mode" screen
+    (see static/index.html in the Jarvis Phone repo) just displays this
+    as a scrolling chat log instead.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+
+    def worker():
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/code_said",
+                json={"type": "text", "text": text},
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _relay_code_mode_signal(mode):
+    """Tell the phone a code session just started or ended, so its UI can
+    switch to (or back out of) the landscape text-chat screen on its own,
+    even if the session was started by voice at the PC, not from the phone."""
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+
+    def worker():
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/code_said",
+                json={"type": "mode", "mode": mode},
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _handle_polled_command(item):
     """
     Run a task the phone's cloud backend queued for us (see
@@ -11325,7 +11372,10 @@ def _ask_user_mcp_config_arg():
 # talks -- proven live to genuinely remember context turn to turn.
 # ============================================================
 
-_CODE_MODE_TRIGGERS = ("do this in code", "do that in code", "lets do this in code", "let's do this in code")
+_CODE_MODE_TRIGGERS = (
+    "do this in code", "do that in code", "lets do this in code", "let's do this in code",
+    "switch to code", "lets switch to code", "let's switch to code",
+)
 _CODE_MODE_EXIT_PHRASES = (
     "stop coding", "exit code mode", "leave code mode", "done coding",
     "finished coding", "close code", "that's it", "thats it", "close jarvis code",
@@ -11436,6 +11486,11 @@ class _JarvisCodeSession:
             say("Sir, the code session isn't running anymore.")
             return False
         self._append_transcript(f"\n> {text}\n\n")
+        # Relayed regardless of whether this turn came from the phone or
+        # from voice at the PC, so the phone's chat log is always the
+        # complete conversation, not just its own half of it -- the
+        # phone never locally-echoes what it sends for this reason.
+        _relay_code_text_to_phone(f"> {text}")
         message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
         try:
             self.proc.stdin.write(json.dumps(message) + "\n")
@@ -11461,6 +11516,7 @@ class _JarvisCodeSession:
             if sentence:
                 _speak_chunk_blocking(sentence)
                 _relay_speech_to_phone(sentence)
+                _relay_code_text_to_phone(sentence)
 
     def _read_loop(self):
         spoken_buffer = ""
@@ -11481,7 +11537,14 @@ class _JarvisCodeSession:
                     if inner_type == "content_block_start":
                         block = inner.get("content_block") or {}
                         if block.get("type") == "tool_use":
-                            self._append_transcript(f"\n[working: {block.get('name', 'tool')}]\n")
+                            marker = f"[working: {block.get('name', 'tool')}]"
+                            self._append_transcript(f"\n{marker}\n")
+                            # Unlike the speech relay (which deliberately
+                            # skips these -- hearing "[working: bash]"
+                            # read aloud is noise), a text chat log
+                            # genuinely benefits from seeing what it's
+                            # doing between replies.
+                            _relay_code_text_to_phone(marker)
                     elif inner_type == "content_block_delta":
                         delta = inner.get("delta") or {}
                         if delta.get("type") == "text_delta":
@@ -11494,6 +11557,7 @@ class _JarvisCodeSession:
                     if leftover:
                         _speak_chunk_blocking(leftover)
                         _relay_speech_to_phone(leftover)
+                        _relay_code_text_to_phone(leftover)
                     spoken_buffer = ""
                     self._append_transcript("\n")
         except Exception as error:
@@ -11528,6 +11592,7 @@ def _start_jarvis_code_session(user_message, command):
         say("I couldn't start that — I'll stay on voice for now.")
         return
     _jarvis_code_session = session
+    _relay_code_mode_signal("start")
     if initial_task:
         session.send(initial_task)
     else:
@@ -11539,6 +11604,7 @@ def _close_jarvis_code_session():
     if _jarvis_code_session:
         _jarvis_code_session.close()
     _jarvis_code_session = None
+    _relay_code_mode_signal("end")
     say("Stepping out of code mode, sir.")
 
 
