@@ -687,6 +687,59 @@ def _relay_speech_to_phone(text):
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _handle_polled_command(item):
+    """
+    Run a task the phone's cloud backend queued for us (see
+    _phone_poll_loop) through the exact same path a direct /command
+    HTTP call uses, then post the result back. Runs in its own thread
+    so a slow task never blocks the next poll.
+    """
+    def worker():
+        reply_queue = queue.Queue(maxsize=1)
+        remote_commands.put((item.get("command", ""), reply_queue))
+        try:
+            reply = reply_queue.get(timeout=REMOTE_COMMAND_TIMEOUT)
+        except queue.Empty:
+            reply = "Jarvis took too long to reply."
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/pc_command_result",
+                json={"id": item.get("id", ""), "reply": reply},
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _phone_poll_loop():
+    """
+    Danny's PC lives on a private Tailscale address that Render (or
+    anywhere off the tailnet) simply cannot route to -- there is no
+    public tunnel in front of it. So instead of the phone's cloud
+    backend calling the PC, the PC calls out to IT, the same "poll and
+    push" shape already used for pc_events: check in every few seconds,
+    run anything that's waiting, hand back the result.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+    while True:
+        try:
+            response = requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/pc_poll",
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                for item in response.json().get("pending_commands", []):
+                    _handle_polled_command(item)
+        except Exception:
+            pass
+        time.sleep(3)
+
+
 def _synthesize_with_elevenlabs(text):
     """
     Call ElevenLabs' text-to-speech API and return (samples, sample_rate)
@@ -1307,6 +1360,8 @@ if os.path.exists(_repair_marker_path):
     say("All systems rebooted, sir. We're back to full capacity.")
 else:
     say(_pick_startup_greeting())
+
+threading.Thread(target=_phone_poll_loop, daemon=True).start()
 
 print("Type 'exit' to quit.")
 

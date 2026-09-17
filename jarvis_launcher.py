@@ -15,6 +15,7 @@ a visible console window) -- the desktop HUD version will be added later.
 import json
 import os
 import subprocess
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,6 +23,9 @@ import requests
 
 LAUNCHER_PORT = int(os.environ.get("JARVIS_LAUNCHER_PORT", "8766"))
 SHARED_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
+# Only needed for the poll loop below -- reaching the phone's cloud
+# backend from off the tailnet, since it can't reach back in here.
+JARVIS_PHONE_BACKEND_URL = os.environ.get("JARVIS_PHONE_BACKEND_URL", "").rstrip("/")
 JARVIS_DIR = os.path.dirname(os.path.abspath(__file__))
 JARVIS_BAT = os.path.join(JARVIS_DIR, "START_JARVIS_FINAL_WORKING.bat")
 JARVIS_STATUS_URL = "http://127.0.0.1:8765/status"
@@ -33,6 +37,51 @@ def _jarvis_already_running():
         return response.status_code == 200
     except requests.exceptions.RequestException:
         return False
+
+
+def _start_jarvis_if_needed():
+    if _jarvis_already_running():
+        return "already_running"
+    try:
+        # A new, visible console window -- deliberately the terminal
+        # version, not the desktop HUD, per Danny's instruction (the
+        # HUD needs its own separate remote-start handling later).
+        # CREATE_NEW_CONSOLE already gives the .bat its own window, so
+        # there's no need to go through cmd's "start" (which has a
+        # sharp edge: an unquoted first argument like a title gets
+        # misread as the command to run instead, silently failing).
+        subprocess.Popen(
+            [JARVIS_BAT],
+            cwd=JARVIS_DIR,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        return "starting"
+    except Exception as error:
+        print("Launcher: failed to start Jarvis:", error)
+        return "error"
+
+
+def _poll_backend_loop():
+    """
+    Same reasoning as Jarvis's own _phone_poll_loop: Render can't reach
+    this PC's private Tailscale address, so rather than waiting for an
+    inbound /start call that will never arrive once the phone backend
+    is deployed off-PC, this checks in with it instead.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not SHARED_SECRET:
+        return
+    while True:
+        try:
+            response = requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/launcher_poll",
+                headers={"Authorization": f"Bearer {SHARED_SECRET}"},
+                timeout=10,
+            )
+            if response.status_code == 200 and response.json().get("start_requested"):
+                _start_jarvis_if_needed()
+        except Exception:
+            pass
+        time.sleep(5)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,29 +116,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(401, {"error": "unauthorized"})
             return
 
-        if _jarvis_already_running():
-            self._send_json(200, {"status": "already_running"})
-            return
-
-        try:
-            # A new, visible console window -- deliberately the terminal
-            # version, not the desktop HUD, per Danny's instruction (the
-            # HUD needs its own separate remote-start handling later).
-            # CREATE_NEW_CONSOLE already gives the .bat its own window,
-            # so there's no need to go through cmd's "start" (which has
-            # a sharp edge: an unquoted first argument like a title gets
-            # misread as the command to run instead, silently failing).
-            subprocess.Popen(
-                [JARVIS_BAT],
-                cwd=JARVIS_DIR,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-            )
-            self._send_json(200, {"status": "starting"})
-        except Exception as error:
-            self._send_json(500, {"error": str(error)})
+        status = _start_jarvis_if_needed()
+        code = 500 if status == "error" else 200
+        self._send_json(code, {"status": status})
 
 
 if __name__ == "__main__":
+    threading.Thread(target=_poll_backend_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", LAUNCHER_PORT), Handler)
     print(f"Jarvis launcher listening on port {LAUNCHER_PORT}")
     server.serve_forever()
