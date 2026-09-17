@@ -498,6 +498,24 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _action_authorized(self):
+        # Gates every endpoint that can actually DO something (run a
+        # command, unload the AI, stop speech) -- this used to rely
+        # entirely on Tailscale IPs being unreachable from the open
+        # internet, which was fine while nothing outside the tailnet
+        # ever talked to it. Now that the phone's cloud backend can
+        # reach this PC over a public tunnel (see JARVIS_PHONE_SECRET),
+        # that's no longer good enough on its own; anyone who found the
+        # URL could otherwise make Jarvis do anything, including
+        # self-repair. Deliberately fails open with no secret configured
+        # so purely-local testing keeps working unchanged.
+        if not JARVIS_PHONE_SECRET:
+            return True
+        token = self.headers.get("Authorization", "")
+        if token.startswith("Bearer "):
+            token = token[len("Bearer "):]
+        return token.strip() == JARVIS_PHONE_SECRET
+
     def do_GET(self):
         if self.path == "/status":
             self._send_json({
@@ -531,6 +549,10 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if self.path in ("/unload_ai", "/stop", "/command") and not self._action_authorized():
+            self._send_json({"error": "unauthorized"}, status=401)
+            return
+
         if self.path == "/unload_ai":
             # Lets the execution agent (_run_agentic_pc_task) free the
             # local AI's memory at the exact moment IT knows a game is
