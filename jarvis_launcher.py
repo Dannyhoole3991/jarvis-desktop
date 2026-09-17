@@ -24,7 +24,7 @@ LAUNCHER_PORT = int(os.environ.get("JARVIS_LAUNCHER_PORT", "8766"))
 SHARED_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
 JARVIS_DIR = os.path.dirname(os.path.abspath(__file__))
 JARVIS_BAT = os.path.join(JARVIS_DIR, "START_JARVIS_FINAL_WORKING.bat")
-JARVIS_STATUS_URL = "http://localhost:8765/status"
+JARVIS_STATUS_URL = "http://127.0.0.1:8765/status"
 
 
 def _jarvis_already_running():
