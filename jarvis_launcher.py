@@ -39,6 +39,33 @@ def _jarvis_already_running():
         return False
 
 
+def _notify_phone(text):
+    """
+    Best-effort, fire-and-forget push straight to the phone backend's
+    pc_events feed -- reusing the same endpoint Jarvis itself posts to
+    (see _relay_speech_to_phone in Jarvis_FINAL_WORKING.py). Fired here,
+    from the launcher, because Jarvis's OWN startup greeting can be
+    10-30s away (model/voice init) -- confirmed live that waiting on it
+    made the "it started" acknowledgment arrive late or get missed
+    entirely. This fires the instant the process is actually spawned.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not SHARED_SECRET:
+        return
+
+    def worker():
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/pc_said",
+                json={"text": text},
+                headers={"Authorization": f"Bearer {SHARED_SECRET}"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _start_jarvis_if_needed():
     if _jarvis_already_running():
         return "already_running"
@@ -55,6 +82,7 @@ def _start_jarvis_if_needed():
             cwd=JARVIS_DIR,
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
+        _notify_phone("Starting Jarvis up now, sir.")
         return "starting"
     except Exception as error:
         print("Launcher: failed to start Jarvis:", error)

@@ -897,6 +897,27 @@ def _strip_leading_wake_word(text):
     return stripped
 
 
+# Curated phrasing rather than a loose "close" + "jarvis" substring
+# match -- a broad match would also fire on ordinary app-closing
+# commands where "jarvis" happens to appear mid-sentence (e.g. a
+# phone-typed "please jarvis close chrome"), and would collide with
+# "close jarvis code" (which should only end the coding session, see
+# _JARVIS_CODE_EXIT_PHRASES). Excluding "code" here is a second guard
+# against that collision.
+_CLOSE_JARVIS_PHRASES = (
+    "close jarvis", "close pc jarvis", "close the jarvis",
+    "shut down jarvis", "shut down pc jarvis", "shutdown jarvis",
+    "turn off jarvis", "turn off pc jarvis",
+    "quit jarvis", "exit jarvis",
+)
+
+
+def _is_close_jarvis_command(command):
+    if "code" in command:
+        return False
+    return any(phrase in command for phrase in _CLOSE_JARVIS_PHRASES)
+
+
 def get_user_input():
     """
     Accept typed commands at any time, while the background thread waits
@@ -11563,9 +11584,24 @@ while True:
 
         command = clean_natural_command(user_message.lower().strip())
 
-        # Exit is always local and immediate.
-        if command in ["exit", "quit", "goodbye", "bye"]:
-            say("Goodbye.")
+        # Exit works the same whether typed locally or sent remotely
+        # (phone/HTTP) -- both arrive through this same loop via
+        # get_user_input(). "close jarvis"/"shut down jarvis" etc. were
+        # previously silently ignored since only the bare words "exit",
+        # "quit", "goodbye", "bye" matched; confirmed live that a real
+        # phone request ("close pc jarvis") fell through to nothing.
+        if command in ["exit", "quit", "goodbye", "bye"] or _is_close_jarvis_command(command):
+            say("Goodbye, sir. Shutting down now.")
+            # say() hands the reply off to a background daemon thread
+            # (either the /command HTTP handler or _handle_polled_command's
+            # worker) that still has to actually complete an HTTP POST
+            # relaying it -- but daemon threads are killed instantly when
+            # the process exits, with no chance to finish. Confirmed live:
+            # closing Jarvis remotely worked, but the phone never heard
+            # the goodbye because the process died mid-POST. A short pause
+            # here gives that outbound request (to an already-warm,
+            # actively-waiting backend) time to actually land first.
+            time.sleep(3)
             break
 
         if is_stop_command(user_message):
