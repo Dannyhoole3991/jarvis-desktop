@@ -687,53 +687,6 @@ def _relay_speech_to_phone(text):
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _relay_code_text_to_phone(text):
-    """
-    Push a chunk of the active Jarvis Code session's transcript to the
-    phone as TEXT, not speech -- a separate feed from _relay_speech_to_phone
-    on purpose. Code sessions involve diffs, tool output, and reasoning
-    that's awkward to have read aloud; the phone's "code mode" screen
-    (see static/index.html in the Jarvis Phone repo) just displays this
-    as a scrolling chat log instead.
-    """
-    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
-        return
-
-    def worker():
-        try:
-            requests.post(
-                f"{JARVIS_PHONE_BACKEND_URL}/api/code_said",
-                json={"type": "text", "text": text},
-                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
-                timeout=5,
-            )
-        except Exception:
-            pass
-
-    threading.Thread(target=worker, daemon=True).start()
-
-
-def _relay_code_mode_signal(mode):
-    """Tell the phone a code session just started or ended, so its UI can
-    switch to (or back out of) the landscape text-chat screen on its own,
-    even if the session was started by voice at the PC, not from the phone."""
-    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
-        return
-
-    def worker():
-        try:
-            requests.post(
-                f"{JARVIS_PHONE_BACKEND_URL}/api/code_said",
-                json={"type": "mode", "mode": mode},
-                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
-                timeout=5,
-            )
-        except Exception:
-            pass
-
-    threading.Thread(target=worker, daemon=True).start()
-
-
 def _handle_polled_command(item):
     """
     Run a task the phone's cloud backend queued for us (see
@@ -11416,6 +11369,13 @@ class _JarvisCodeSession:
     transcript file a separate, visible "Jarvis Code" window tails live,
     and (b) the same sentence-chunked, streamed speech used everywhere
     else in Jarvis, so replies get spoken as they're generated.
+
+    Deliberately always a fresh, independent session -- Danny's own
+    tool for building/creating things himself, in his own new window,
+    not tied to any other conversation's history. The separate "mirror
+    this actual dev chat" fallback for repairing Jarvis remotely lives
+    in jarvis_launcher.py instead, precisely because it needs to work
+    even when this engine is the thing that's broken.
     """
 
     def __init__(self):
@@ -11426,19 +11386,7 @@ class _JarvisCodeSession:
         self.window_proc = None
         self.ready = False
 
-    def _active_dev_session_id(self):
-        # Set by Danny (via me, Claude) whenever a conversation with me
-        # should be the one Jarvis reaches for repairs/building -- not
-        # auto-detected, since he'd rather point at it explicitly than
-        # risk Jarvis grabbing the wrong one if several are open.
-        path = os.path.join(self.jarvis_dir, "_active_dev_session.json")
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                return (json.load(handle) or {}).get("session_id") or None
-        except Exception:
-            return None
-
-    def start(self, open_window=True):
+    def start(self):
         if not self.claude_exe:
             return False
         try:
@@ -11448,32 +11396,18 @@ class _JarvisCodeSession:
             print("JARVIS CODE: couldn't create transcript:", error)
             return False
 
-        args = [
-            self.claude_exe, "-p",
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            "--add-dir", self.jarvis_dir,
-            "--dangerously-skip-permissions",
-            "--allow-dangerously-skip-permissions",
-        ]
-        dev_session_id = self._active_dev_session_id()
-        if dev_session_id:
-            # --fork-session branches off a full, independent copy of
-            # that conversation's history instead of writing into it --
-            # verified live that Claude Code refuses a plain --resume on
-            # a session that's currently active elsewhere for exactly
-            # this reason, and that forking a busy session left it
-            # completely undisturbed. This is what makes "let's switch
-            # to code" actually useful for repairs: the session that
-            # picks up the phone already knows everything Danny and I
-            # have already worked out together, instead of starting cold.
-            args += ["--resume", dev_session_id, "--fork-session"]
-
         try:
             self.proc = subprocess.Popen(
-                args,
+                [
+                    self.claude_exe, "-p",
+                    "--input-format", "stream-json",
+                    "--output-format", "stream-json",
+                    "--include-partial-messages",
+                    "--verbose",
+                    "--add-dir", self.jarvis_dir,
+                    "--dangerously-skip-permissions",
+                    "--allow-dangerously-skip-permissions",
+                ],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, bufsize=1, cwd=self.jarvis_dir,
             )
@@ -11482,13 +11416,7 @@ class _JarvisCodeSession:
             return False
 
         threading.Thread(target=self._read_loop, daemon=True).start()
-        # A visible terminal only makes sense when Danny's actually at
-        # the PC to look at it -- for a session started remotely (from
-        # the phone, while he isn't there), popping up a window on his
-        # screen is just noise nobody's around to see, so this is
-        # skipped entirely for those.
-        if open_window:
-            self._open_window()
+        self._open_window()
         self.ready = True
         return True
 
@@ -11518,11 +11446,6 @@ class _JarvisCodeSession:
             say("Sir, the code session isn't running anymore.")
             return False
         self._append_transcript(f"\n> {text}\n\n")
-        # Relayed regardless of whether this turn came from the phone or
-        # from voice at the PC, so the phone's chat log is always the
-        # complete conversation, not just its own half of it -- the
-        # phone never locally-echoes what it sends for this reason.
-        _relay_code_text_to_phone(f"> {text}")
         message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
         try:
             self.proc.stdin.write(json.dumps(message) + "\n")
@@ -11548,7 +11471,6 @@ class _JarvisCodeSession:
             if sentence:
                 _speak_chunk_blocking(sentence)
                 _relay_speech_to_phone(sentence)
-                _relay_code_text_to_phone(sentence)
 
     def _read_loop(self):
         spoken_buffer = ""
@@ -11569,14 +11491,7 @@ class _JarvisCodeSession:
                     if inner_type == "content_block_start":
                         block = inner.get("content_block") or {}
                         if block.get("type") == "tool_use":
-                            marker = f"[working: {block.get('name', 'tool')}]"
-                            self._append_transcript(f"\n{marker}\n")
-                            # Unlike the speech relay (which deliberately
-                            # skips these -- hearing "[working: bash]"
-                            # read aloud is noise), a text chat log
-                            # genuinely benefits from seeing what it's
-                            # doing between replies.
-                            _relay_code_text_to_phone(marker)
+                            self._append_transcript(f"\n[working: {block.get('name', 'tool')}]\n")
                     elif inner_type == "content_block_delta":
                         delta = inner.get("delta") or {}
                         if delta.get("type") == "text_delta":
@@ -11589,7 +11504,6 @@ class _JarvisCodeSession:
                     if leftover:
                         _speak_chunk_blocking(leftover)
                         _relay_speech_to_phone(leftover)
-                        _relay_code_text_to_phone(leftover)
                     spoken_buffer = ""
                     self._append_transcript("\n")
         except Exception as error:
@@ -11617,19 +11531,13 @@ _jarvis_code_session = None
 
 def _start_jarvis_code_session(user_message, command):
     global _jarvis_code_session
-    # Captured before say() below, which clears active_remote_reply the
-    # moment it hands the reply off -- this is the only point where
-    # "did this turn come in remotely" is still known.
-    with active_remote_lock:
-        is_remote = active_remote_reply is not None
     initial_task = _extract_code_mode_task(user_message, command)
     say("Alright, let's do this in code, sir.")
     session = _JarvisCodeSession()
-    if not session.start(open_window=not is_remote):
+    if not session.start():
         say("I couldn't start that — I'll stay on voice for now.")
         return
     _jarvis_code_session = session
-    _relay_code_mode_signal("start")
     if initial_task:
         session.send(initial_task)
     else:
@@ -11641,7 +11549,6 @@ def _close_jarvis_code_session():
     if _jarvis_code_session:
         _jarvis_code_session.close()
     _jarvis_code_session = None
-    _relay_code_mode_signal("end")
     say("Stepping out of code mode, sir.")
 
 

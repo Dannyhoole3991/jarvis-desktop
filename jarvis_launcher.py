@@ -1,8 +1,16 @@
 """
-Tiny always-on listener, separate from Jarvis itself, whose only job is
-to start the real Jarvis process on request. It has to be a separate
-process: if Jarvis is the thing that's not running, nothing inside
-Jarvis can answer a "start me" request.
+Tiny always-on listener, separate from Jarvis itself, with two jobs:
+
+1. Start the real Jarvis process on request. Has to be a separate
+   process: if Jarvis is the thing that's not running, nothing inside
+   Jarvis can answer a "start me" request.
+
+2. Run the phone's "mirror" of the actual live dev conversation with
+   Claude (see _run_mirror_message below) -- the fallback for fixing
+   Jarvis remotely. This ALSO has to live here, not inside Jarvis
+   itself: fixing Jarvis means Jarvis will likely be crashing/getting
+   restarted a lot during that exact conversation, so the mirror can't
+   depend on Jarvis's own engine being healthy.
 
 Meant to be registered as a Windows Task Scheduler task that runs at
 logon (pythonw, no console window) so it's always reachable whenever
@@ -12,8 +20,10 @@ open or closed.
 For now this only launches the terminal version (START_JARVIS_FINAL_WORKING.bat,
 a visible console window) -- the desktop HUD version will be added later.
 """
+import glob
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -23,12 +33,197 @@ import requests
 
 LAUNCHER_PORT = int(os.environ.get("JARVIS_LAUNCHER_PORT", "8766"))
 SHARED_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
-# Only needed for the poll loop below -- reaching the phone's cloud
+# Only needed for the poll loops below -- reaching the phone's cloud
 # backend from off the tailnet, since it can't reach back in here.
 JARVIS_PHONE_BACKEND_URL = os.environ.get("JARVIS_PHONE_BACKEND_URL", "").rstrip("/")
 JARVIS_DIR = os.path.dirname(os.path.abspath(__file__))
 JARVIS_BAT = os.path.join(JARVIS_DIR, "START_JARVIS_FINAL_WORKING.bat")
 JARVIS_STATUS_URL = "http://127.0.0.1:8765/status"
+# Which real dev conversation counts as "the one" to mirror -- set by
+# Danny (via me, Claude) whenever a new conversation should become that
+# one; not auto-detected, since guessing wrong among several open
+# conversations would be worse than asking.
+ACTIVE_DEV_SESSION_PATH = os.path.join(JARVIS_DIR, "_active_dev_session.json")
+# Tracks the chain's current tip: each mirror message resumes+forks
+# from whatever this points at, then overwrites it with the NEW fork's
+# own session id -- confirmed live that chaining forks this way (each
+# one resuming the previous fork's id, never the same one twice)
+# preserves full conversation continuity without ever touching the
+# real live session.
+MIRROR_STATE_PATH = os.path.join(JARVIS_DIR, "_mirror_session_state.json")
+
+
+def _find_claude_cli():
+    """Same logic as _find_claude_cli() in Jarvis_FINAL_WORKING.py -- kept as
+    its own copy here since this has to run independently of that file."""
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    patterns = [
+        os.path.join(local_appdata, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code", "*", "claude.exe"),
+        os.path.join(local_appdata, "Programs", "claude", "claude.exe"),
+    ]
+    candidates = []
+    for pattern in patterns:
+        candidates.extend(glob.glob(pattern))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"[.\\/]", p)])
+    return candidates[-1]
+
+
+def _active_dev_session_id():
+    try:
+        with open(ACTIVE_DEV_SESSION_PATH, "r", encoding="utf-8") as handle:
+            return (json.load(handle) or {}).get("session_id") or None
+    except Exception:
+        return None
+
+
+def _load_mirror_chain_tip():
+    try:
+        with open(MIRROR_STATE_PATH, "r", encoding="utf-8") as handle:
+            return (json.load(handle) or {}).get("current_id") or None
+    except Exception:
+        return None
+
+
+def _save_mirror_chain_tip(session_id):
+    try:
+        with open(MIRROR_STATE_PATH, "w", encoding="utf-8") as handle:
+            json.dump({"current_id": session_id}, handle)
+    except Exception:
+        pass
+
+
+def _reset_mirror_chain():
+    try:
+        os.remove(MIRROR_STATE_PATH)
+    except Exception:
+        pass
+
+
+def _notify_mirror(text):
+    if not JARVIS_PHONE_BACKEND_URL or not SHARED_SECRET:
+        return
+    try:
+        requests.post(
+            f"{JARVIS_PHONE_BACKEND_URL}/api/mirror_said",
+            json={"text": text},
+            headers={"Authorization": f"Bearer {SHARED_SECRET}"},
+            timeout=8,
+        )
+    except Exception:
+        pass
+
+
+def _run_mirror_message(text):
+    """
+    Send one message into the mirror chain and relay the reply back.
+    Runs synchronously in the poll loop's own thread on purpose --
+    these have to happen strictly in order, since each one depends on
+    the previous one's resulting session id.
+    """
+    claude_exe = _find_claude_cli()
+    if not claude_exe:
+        _notify_mirror("(Couldn't find Claude Code installed on this PC.)")
+        return
+
+    # First message ever (or first since a reset): base it on the
+    # designated live dev session. Every message after that continues
+    # from wherever the PREVIOUS mirror message's own fork left off --
+    # NOT the original session again, which would drop everything said
+    # in between. If neither exists, this starts a brand new session
+    # with no history at all, covering "open you if you're not open".
+    resume_id = _load_mirror_chain_tip() or _active_dev_session_id()
+
+    args = [
+        claude_exe, "-p",
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--add-dir", JARVIS_DIR,
+        "--dangerously-skip-permissions",
+        "--allow-dangerously-skip-permissions",
+    ]
+    if resume_id:
+        args += ["--resume", resume_id, "--fork-session"]
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1, cwd=JARVIS_DIR,
+        )
+    except Exception as error:
+        _notify_mirror(f"(Couldn't start a session: {error})")
+        return
+
+    message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+    try:
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+        proc.stdin.close()
+    except Exception as error:
+        _notify_mirror(f"(Couldn't send that message: {error})")
+        return
+
+    reply_buffer = ""
+    new_session_id = None
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            event_type = event.get("type")
+            if event_type == "stream_event":
+                inner = event.get("event") or {}
+                inner_type = inner.get("type")
+                if inner_type == "content_block_start":
+                    block = inner.get("content_block") or {}
+                    if block.get("type") == "tool_use":
+                        _notify_mirror(f"[working: {block.get('name', 'tool')}]")
+                elif inner_type == "content_block_delta":
+                    delta = inner.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        reply_buffer += delta.get("text", "")
+            elif event_type == "result":
+                new_session_id = event.get("session_id")
+    except Exception as error:
+        _notify_mirror(f"(Something went wrong reading the reply: {error})")
+
+    if reply_buffer.strip():
+        _notify_mirror(reply_buffer.strip())
+    if new_session_id:
+        _save_mirror_chain_tip(new_session_id)
+    else:
+        _notify_mirror("(No reply came back that time -- try sending it again?)")
+
+
+def _mirror_poll_loop():
+    """Same reasoning as _poll_backend_loop -- checks in with the phone
+    backend instead of waiting for an inbound call it could never receive."""
+    if not JARVIS_PHONE_BACKEND_URL or not SHARED_SECRET:
+        return
+    while True:
+        try:
+            response = requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/mirror_poll",
+                headers={"Authorization": f"Bearer {SHARED_SECRET}"},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("reset"):
+                    _reset_mirror_chain()
+                for message in data.get("messages", []):
+                    _run_mirror_message(message)
+        except Exception:
+            pass
+        time.sleep(3)
 
 
 def _jarvis_already_running():
@@ -151,6 +346,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     threading.Thread(target=_poll_backend_loop, daemon=True).start()
+    threading.Thread(target=_mirror_poll_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", LAUNCHER_PORT), Handler)
     print(f"Jarvis launcher listening on port {LAUNCHER_PORT}")
     server.serve_forever()
