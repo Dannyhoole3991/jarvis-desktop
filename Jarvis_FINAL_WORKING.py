@@ -11438,7 +11438,7 @@ class _JarvisCodeSession:
         except Exception:
             return None
 
-    def start(self):
+    def start(self, open_window=True):
         if not self.claude_exe:
             return False
         try:
@@ -11482,7 +11482,13 @@ class _JarvisCodeSession:
             return False
 
         threading.Thread(target=self._read_loop, daemon=True).start()
-        self._open_window()
+        # A visible terminal only makes sense when Danny's actually at
+        # the PC to look at it -- for a session started remotely (from
+        # the phone, while he isn't there), popping up a window on his
+        # screen is just noise nobody's around to see, so this is
+        # skipped entirely for those.
+        if open_window:
+            self._open_window()
         self.ready = True
         return True
 
@@ -11611,10 +11617,15 @@ _jarvis_code_session = None
 
 def _start_jarvis_code_session(user_message, command):
     global _jarvis_code_session
+    # Captured before say() below, which clears active_remote_reply the
+    # moment it hands the reply off -- this is the only point where
+    # "did this turn come in remotely" is still known.
+    with active_remote_lock:
+        is_remote = active_remote_reply is not None
     initial_task = _extract_code_mode_task(user_message, command)
     say("Alright, let's do this in code, sir.")
     session = _JarvisCodeSession()
-    if not session.start():
+    if not session.start(open_window=not is_remote):
         say("I couldn't start that — I'll stay on voice for now.")
         return
     _jarvis_code_session = session
