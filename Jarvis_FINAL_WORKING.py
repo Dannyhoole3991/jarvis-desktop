@@ -11426,6 +11426,18 @@ class _JarvisCodeSession:
         self.window_proc = None
         self.ready = False
 
+    def _active_dev_session_id(self):
+        # Set by Danny (via me, Claude) whenever a conversation with me
+        # should be the one Jarvis reaches for repairs/building -- not
+        # auto-detected, since he'd rather point at it explicitly than
+        # risk Jarvis grabbing the wrong one if several are open.
+        path = os.path.join(self.jarvis_dir, "_active_dev_session.json")
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return (json.load(handle) or {}).get("session_id") or None
+        except Exception:
+            return None
+
     def start(self):
         if not self.claude_exe:
             return False
@@ -11436,18 +11448,32 @@ class _JarvisCodeSession:
             print("JARVIS CODE: couldn't create transcript:", error)
             return False
 
+        args = [
+            self.claude_exe, "-p",
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--add-dir", self.jarvis_dir,
+            "--dangerously-skip-permissions",
+            "--allow-dangerously-skip-permissions",
+        ]
+        dev_session_id = self._active_dev_session_id()
+        if dev_session_id:
+            # --fork-session branches off a full, independent copy of
+            # that conversation's history instead of writing into it --
+            # verified live that Claude Code refuses a plain --resume on
+            # a session that's currently active elsewhere for exactly
+            # this reason, and that forking a busy session left it
+            # completely undisturbed. This is what makes "let's switch
+            # to code" actually useful for repairs: the session that
+            # picks up the phone already knows everything Danny and I
+            # have already worked out together, instead of starting cold.
+            args += ["--resume", dev_session_id, "--fork-session"]
+
         try:
             self.proc = subprocess.Popen(
-                [
-                    self.claude_exe, "-p",
-                    "--input-format", "stream-json",
-                    "--output-format", "stream-json",
-                    "--include-partial-messages",
-                    "--verbose",
-                    "--add-dir", self.jarvis_dir,
-                    "--dangerously-skip-permissions",
-                    "--allow-dangerously-skip-permissions",
-                ],
+                args,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, bufsize=1, cwd=self.jarvis_dir,
             )
