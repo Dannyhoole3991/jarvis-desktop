@@ -740,6 +740,185 @@ def _phone_poll_loop():
         time.sleep(3)
 
 
+# ============================================================
+# PC CRASH DETECTION — Jarvis obviously can't detect a full system
+# crash (BSOD/black screen) WHILE it's happening, since that takes
+# Jarvis down too. Instead it records "I was alive at this time" every
+# so often, and on the NEXT startup checks Windows' own event log for
+# an unclean-shutdown record newer than that heartbeat -- if one
+# exists, something took the whole PC down, not just Jarvis.
+# ============================================================
+_LAST_ALIVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_jarvis_last_alive.json")
+_ALIVE_HEARTBEAT_SECONDS = 120
+
+
+def _record_alive_heartbeat():
+    try:
+        with open(_LAST_ALIVE_PATH, "w", encoding="utf-8") as handle:
+            json.dump({"timestamp": datetime.datetime.now().isoformat()}, handle)
+    except Exception:
+        pass
+
+
+def _alive_heartbeat_loop():
+    while True:
+        _record_alive_heartbeat()
+        time.sleep(_ALIVE_HEARTBEAT_SECONDS)
+
+
+def _check_for_pc_crash():
+    """
+    Compares the last recorded heartbeat against Windows' System event
+    log for signs of an unclean shutdown since then: Event 41 (Kernel-
+    Power, fires after any unclean shutdown including a BSOD), 6008
+    (the older "unexpected shutdown" event), or 1001 (WER's own
+    BugCheck report, which usually carries the actual STOP code).
+    Returns a plain-language summary if something's found, else None
+    (including on first-ever run, when there's no prior heartbeat to
+    compare against at all).
+    """
+    try:
+        with open(_LAST_ALIVE_PATH, "r", encoding="utf-8") as handle:
+            last_alive = json.load(handle).get("timestamp")
+    except Exception:
+        last_alive = None
+    if not last_alive:
+        return None
+
+    ps_script = (
+        f"$since = Get-Date '{last_alive}'; "
+        "Get-WinEvent -FilterHashtable @{LogName='System'; Id=41,1001,6008; StartTime=$since} "
+        "-ErrorAction SilentlyContinue | "
+        "ForEach-Object { [PSCustomObject]@{ Id=$_.Id; TimeCreated=$_.TimeCreated.ToString('g'); Message=$_.Message } } | "
+        "ConvertTo-Json -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True, text=True, timeout=15,
+        )
+        raw = result.stdout.strip()
+        if not raw:
+            return None
+        events = json.loads(raw)
+        if isinstance(events, dict):
+            events = [events]
+    except Exception as error:
+        print("Crash check failed:", error)
+        return None
+
+    if not events:
+        return None
+
+    crash_time = events[0].get("TimeCreated", "recently")
+    bugcheck_code = None
+    for event in events:
+        match = re.search(r"[Bb]ugcheck(?: was| code)?:?\s*(0x[0-9a-fA-F]+)", event.get("Message", ""))
+        if match:
+            bugcheck_code = match.group(1)
+            break
+
+    summary = f"the PC had an unexpected restart around {crash_time} (found in Windows' event log)"
+    if bugcheck_code:
+        summary += f", bug check code {bugcheck_code}"
+    return summary
+
+
+def _run_crash_diagnosis_agent(crash_summary):
+    """
+    One-shot, non-persistent Claude Code investigation into a real PC
+    crash. Deliberately NOT _run_self_repair_agent's path: a BSOD is a
+    Windows/driver/hardware issue, not a bug in Jarvis's own code, so
+    this never touches Jarvis_FINAL_WORKING.py -- it just investigates
+    using the terminal (driver dates, recent updates, minidump files if
+    any) and reports back in plain language, same as a person
+    troubleshooting a BSOD would, rather than guessing from the bug
+    check code alone.
+    """
+    claude_exe = _find_claude_cli()
+    if not claude_exe:
+        return None
+
+    briefing = f"""A Windows 11 PC just had a full crash (blue screen / black screen) and
+unexpected restart. Here is what's known so far from the Windows event log:
+
+{crash_summary}
+
+Investigate the REAL cause using the terminal (PowerShell) rather than
+guessing from the bug check code alone -- check things like driver
+dates/versions for anything the bug check code implicates, recent
+Windows updates around the crash time, and recent minidump files under
+C:\\Windows\\Minidump if any exist.
+
+Give a short (3-5 sentence), spoken-style, plain-language summary of
+your best-supported explanation and ONE concrete recommended fix (e.g.
+update a specific driver, run Windows Memory Diagnostic). If the
+evidence doesn't clearly point to one cause, say so honestly rather
+than guessing confidently. Investigate and report only -- do not change
+anything on the system.
+"""
+    try:
+        proc = subprocess.Popen(
+            [
+                claude_exe, "-p",
+                "--output-format", "json",
+                "--dangerously-skip-permissions",
+                "--allow-dangerously-skip-permissions",
+                briefing,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+    except Exception as error:
+        print("Crash diagnosis agent failed to start:", error)
+        return None
+
+    # subprocess.run's own timeout=N doesn't actually bound this
+    # reliably -- confirmed live that a real run sat for 34+ minutes
+    # past its 240s timeout. Popen.kill() (which run()'s timeout path
+    # uses internally) only kills the immediate claude.exe process; if
+    # it had spawned a grandchild (e.g. a PowerShell command it was
+    # running as part of the investigation) still holding the stdout
+    # pipe open, reading never reaches EOF even after that kill. A
+    # reader thread with a real join timeout, plus taskkill /T for the
+    # whole process tree on timeout, actually bounds it.
+    result_holder = {"stdout": None}
+
+    def reader():
+        try:
+            result_holder["stdout"] = proc.stdout.read()
+        except Exception:
+            pass
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    reader_thread.join(timeout=240)
+
+    if reader_thread.is_alive():
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        except Exception:
+            pass
+        print("Crash diagnosis agent timed out after 240s -- killed.")
+        return None
+
+    try:
+        data = json.loads((result_holder["stdout"] or "").strip())
+        return data.get("result")
+    except Exception as error:
+        print("Crash diagnosis agent failed:", error)
+        return None
+
+
+def _investigate_pc_crash(crash_summary):
+    say(f"Sir, before we continue -- {crash_summary}. That looks like a full crash, not a normal shutdown. Let me look into why.")
+    diagnosis = _run_crash_diagnosis_agent(crash_summary)
+    if diagnosis:
+        say(diagnosis)
+    else:
+        say("I wasn't able to complete that investigation, sir -- you may want to check Windows' Reliability History yourself.")
+
+
 def _synthesize_with_elevenlabs(text):
     """
     Call ElevenLabs' text-to-speech API and return (samples, sample_rate)
@@ -1381,7 +1560,14 @@ if os.path.exists(_repair_marker_path):
     say("All systems rebooted, sir. We're back to full capacity.")
 else:
     say(_pick_startup_greeting())
+    _crash_summary = _check_for_pc_crash()
+    if _crash_summary:
+        # Runs in the background so a real investigation (up to a few
+        # minutes) never delays normal startup -- the finding gets
+        # announced (and relayed to the phone) whenever it's ready.
+        threading.Thread(target=_investigate_pc_crash, args=(_crash_summary,), daemon=True).start()
 
+threading.Thread(target=_alive_heartbeat_loop, daemon=True).start()
 threading.Thread(target=_phone_poll_loop, daemon=True).start()
 
 print("Type 'exit' to quit.")
