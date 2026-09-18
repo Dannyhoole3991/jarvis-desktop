@@ -104,15 +104,23 @@ def _reset_mirror_chain():
 def _notify_mirror(text):
     if not JARVIS_PHONE_BACKEND_URL or not SHARED_SECRET:
         return
-    try:
-        requests.post(
-            f"{JARVIS_PHONE_BACKEND_URL}/api/mirror_said",
-            json={"text": text},
-            headers={"Authorization": f"Bearer {SHARED_SECRET}"},
-            timeout=8,
-        )
-    except Exception:
-        pass
+    # A dropped reply here is worse than for most other relays in this
+    # project: there's no separate fallback channel showing it happened
+    # (unlike, say, the visible PC status indicator), so a single failed
+    # POST just looks like Jarvis silently ignored the message. Retried
+    # once before giving up.
+    for attempt in range(2):
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/mirror_said",
+                json={"text": text},
+                headers={"Authorization": f"Bearer {SHARED_SECRET}"},
+                timeout=8,
+            )
+            return
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
 
 
 def _run_mirror_message(text):
