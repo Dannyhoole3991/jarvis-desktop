@@ -123,6 +123,15 @@ def _notify_mirror(text):
                 time.sleep(1)
 
 
+# A hang here isn't hypothetical -- confirmed live that a real usage
+# limit hit made the underlying CLI call sit blocked indefinitely
+# rather than failing fast, and with no bound on the wait, the phone
+# never heard anything at all, and since the poll loop runs messages
+# strictly in order, every message after it would have queued up
+# uselessly behind that one stuck call forever.
+MIRROR_TIMEOUT_SECONDS = 300
+
+
 def _run_mirror_message(text):
     """
     Send one message into the mirror chain and relay the reply back.
@@ -159,7 +168,7 @@ def _run_mirror_message(text):
     try:
         proc = subprocess.Popen(
             args,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, cwd=JARVIS_DIR,
         )
     except Exception as error:
@@ -175,40 +184,71 @@ def _run_mirror_message(text):
         _notify_mirror(f"(Couldn't send that message: {error})")
         return
 
-    reply_buffer = ""
-    new_session_id = None
-    try:
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            event_type = event.get("type")
-            if event_type == "stream_event":
-                inner = event.get("event") or {}
-                inner_type = inner.get("type")
-                if inner_type == "content_block_start":
-                    block = inner.get("content_block") or {}
-                    if block.get("type") == "tool_use":
-                        _notify_mirror(f"[working: {block.get('name', 'tool')}]")
-                elif inner_type == "content_block_delta":
-                    delta = inner.get("delta") or {}
-                    if delta.get("type") == "text_delta":
-                        reply_buffer += delta.get("text", "")
-            elif event_type == "result":
-                new_session_id = event.get("session_id")
-    except Exception as error:
-        _notify_mirror(f"(Something went wrong reading the reply: {error})")
+    result = {"reply": "", "session_id": None, "error": None}
 
+    def reader():
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                event_type = event.get("type")
+                if event_type == "stream_event":
+                    inner = event.get("event") or {}
+                    inner_type = inner.get("type")
+                    if inner_type == "content_block_start":
+                        block = inner.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            _notify_mirror(f"[working: {block.get('name', 'tool')}]")
+                    elif inner_type == "content_block_delta":
+                        delta = inner.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            result["reply"] += delta.get("text", "")
+                elif event_type == "result":
+                    result["session_id"] = event.get("session_id")
+        except Exception as error:
+            result["error"] = str(error)
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    reader_thread.join(timeout=MIRROR_TIMEOUT_SECONDS)
+
+    def _stderr_tail():
+        try:
+            return (proc.stderr.read() or "").strip()[-300:]
+        except Exception:
+            return ""
+
+    if reader_thread.is_alive():
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        detail = _stderr_tail()
+        suffix = f" Details: {detail}" if detail else ""
+        _notify_mirror(
+            f"(That one got stuck and never finished after {MIRROR_TIMEOUT_SECONDS}s, sir -- "
+            f"possibly a usage limit.{suffix} Try again shortly.)"
+        )
+        return
+
+    if result["error"]:
+        _notify_mirror(f"(Something went wrong reading the reply: {result['error']})")
+
+    reply_buffer = result["reply"]
+    new_session_id = result["session_id"]
     if reply_buffer.strip():
         _notify_mirror(reply_buffer.strip())
     if new_session_id:
         _save_mirror_chain_tip(new_session_id)
     else:
-        _notify_mirror("(No reply came back that time -- try sending it again?)")
+        detail = _stderr_tail()
+        suffix = f" Details: {detail}" if detail else ""
+        _notify_mirror(f"(No reply came back that time, sir -- try sending it again?{suffix})")
 
 
 def _mirror_poll_loop():
