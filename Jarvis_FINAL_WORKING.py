@@ -1546,6 +1546,7 @@ print("Jarvis is starting...")
 # say so specifically instead of a random greeting -- Danny's explicit
 # request: coming back up after a repair should sound like a real
 # "we're back" moment, not just business as usual.
+_pending_crash_summary = None
 _repair_marker_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pending_repair_restart.json")
 if os.path.exists(_repair_marker_path):
     try:
@@ -1560,12 +1561,16 @@ if os.path.exists(_repair_marker_path):
     say("All systems rebooted, sir. We're back to full capacity.")
 else:
     say(_pick_startup_greeting())
-    _crash_summary = _check_for_pc_crash()
-    if _crash_summary:
-        # Runs in the background so a real investigation (up to a few
-        # minutes) never delays normal startup -- the finding gets
-        # announced (and relayed to the phone) whenever it's ready.
-        threading.Thread(target=_investigate_pc_crash, args=(_crash_summary,), daemon=True).start()
+    # NOT started here: confirmed live this is a genuine race against
+    # the rest of this (huge) file still being sequentially loaded --
+    # _find_claude_cli isn't defined until much later, and a thread
+    # started this early can reach that call before the module has
+    # finished executing far enough to define it. Sometimes wins the
+    # race, sometimes doesn't -- inconsistent, so instead this just
+    # records the finding and the main loop (which provably only
+    # starts once the whole file has loaded) kicks off the actual
+    # investigation on its very first iteration.
+    _pending_crash_summary = _check_for_pc_crash()
 
 threading.Thread(target=_alive_heartbeat_loop, daemon=True).start()
 threading.Thread(target=_phone_poll_loop, daemon=True).start()
@@ -11748,6 +11753,14 @@ if not UI_AUTOMATION_AVAILABLE:
     print("UI Automation helper is not installed. Vision fallback is still available.")
     print("To enable Windows UI Automation: python -m pip install pywinauto")
 print("If an unexpected error occurs, this window will stay open so you can read it.")
+
+# Deferred from startup on purpose (see the comment where
+# _pending_crash_summary is set): this point in the file only ever
+# executes once the ENTIRE module has finished loading top-to-bottom,
+# so _find_claude_cli and everything else _investigate_pc_crash needs
+# is guaranteed to exist by now -- no race.
+if _pending_crash_summary:
+    threading.Thread(target=_investigate_pc_crash, args=(_pending_crash_summary,), daemon=True).start()
 
 while True:
     try:
