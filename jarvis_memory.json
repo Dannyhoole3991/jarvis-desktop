@@ -609,6 +609,470 @@
         "Get-Content 'H:\\SteamLibrary\\steamapps\\appmanifest_271590.acf'",
         "Start-Process \"steam://rungameid/271590\""
       ]
+    },
+    "__exe__::7-zip": {
+      "application": "__exe__",
+      "control": "7-Zip",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\7-Zip\\7zG.exe\""
+      ]
+    },
+    "__exe__::7zg": {
+      "application": "__exe__",
+      "control": "7zG",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\7-Zip\\7zG.exe\""
+      ]
+    },
+    "__exe__::amd": {
+      "application": "__exe__",
+      "control": "AMD",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\AMD\\CIM\\Bin64\\AMDSplashScreen.exe\""
+      ]
+    },
+    "__exe__::amdsplashscreen": {
+      "application": "__exe__",
+      "control": "AMDSplashScreen",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\AMD\\CIM\\Bin64\\AMDSplashScreen.exe\""
+      ]
+    },
+    "__exe__::apollo": {
+      "application": "__exe__",
+      "control": "Apollo",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Apollo\\sunshine.exe\""
+      ]
+    },
+    "__exe__::sunshine": {
+      "application": "__exe__",
+      "control": "sunshine",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Apollo\\sunshine.exe\""
+      ]
+    },
+    "__exe__::filezilla ftp client": {
+      "application": "__exe__",
+      "control": "FileZilla FTP Client",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\FileZilla FTP Client\\filezilla.exe\""
+      ]
+    },
+    "__exe__::filezilla": {
+      "application": "__exe__",
+      "control": "filezilla",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\FileZilla FTP Client\\filezilla.exe\""
+      ]
+    },
+    "__exe__::gimx": {
+      "application": "__exe__",
+      "control": "GIMX",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\GIMX\\gimx.exe\""
+      ]
+    },
+    "__exe__::git": {
+      "application": "__exe__",
+      "control": "Git",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Git\\bin\\git.exe\""
+      ]
+    },
+    "__exe__::jellyfin": {
+      "application": "__exe__",
+      "control": "Jellyfin",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Jellyfin\\Server\\jellyfin.exe\""
+      ]
+    },
+    "__exe__::logidownloadassistant": {
+      "application": "__exe__",
+      "control": "LogiDownloadAssistant",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\LogiDownloadAssistant\\bin\\logi_download_assistant.exe\""
+      ]
+    },
+    "__exe__::logi_download_assistant": {
+      "application": "__exe__",
+      "control": "logi_download_assistant",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\LogiDownloadAssistant\\bin\\logi_download_assistant.exe\""
+      ]
+    },
+    "__exe__::nefarius software solutions": {
+      "application": "__exe__",
+      "control": "Nefarius Software Solutions",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Nefarius Software Solutions\\ViGEm Bus Driver\\nefconw.exe\""
+      ]
+    },
+    "__exe__::nefconw": {
+      "application": "__exe__",
+      "control": "nefconw",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Nefarius Software Solutions\\ViGEm Bus Driver\\nefconw.exe\""
+      ]
+    },
+    "__exe__::nodejs": {
+      "application": "__exe__",
+      "control": "nodejs",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\nodejs\\node.exe\""
+      ]
+    },
+    "__exe__::node": {
+      "application": "__exe__",
+      "control": "node",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\nodejs\\node.exe\""
+      ]
+    },
+    "__exe__::obs-studio": {
+      "application": "__exe__",
+      "control": "obs-studio",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe\""
+      ]
+    },
+    "__exe__::obs64": {
+      "application": "__exe__",
+      "control": "obs64",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe\""
+      ]
+    },
+    "__exe__::pawnio": {
+      "application": "__exe__",
+      "control": "PawnIO",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\PawnIO\\PawnIOUtil.exe\""
+      ]
+    },
+    "__exe__::pawnioutil": {
+      "application": "__exe__",
+      "control": "PawnIOUtil",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\PawnIO\\PawnIOUtil.exe\""
+      ]
+    },
+    "__exe__::plex": {
+      "application": "__exe__",
+      "control": "Plex",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Plex\\Plex Media Server\\Plex Media Server.exe\""
+      ]
+    },
+    "__exe__::plex media server": {
+      "application": "__exe__",
+      "control": "Plex Media Server",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Plex\\Plex Media Server\\Plex Media Server.exe\""
+      ]
+    },
+    "__exe__::rewasd": {
+      "application": "__exe__",
+      "control": "reWASD",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\reWASD\\StartDXOverlay64.exe\""
+      ]
+    },
+    "__exe__::startdxoverlay64": {
+      "application": "__exe__",
+      "control": "StartDXOverlay64",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\reWASD\\StartDXOverlay64.exe\""
+      ]
+    },
+    "__exe__::rockstar games": {
+      "application": "__exe__",
+      "control": "Rockstar Games",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Rockstar Games\\Launcher\\Launcher.exe\""
+      ]
+    },
+    "__exe__::launcher": {
+      "application": "__exe__",
+      "control": "Launcher",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Rockstar Games\\Launcher\\Launcher.exe\""
+      ]
+    },
+    "__exe__::tailscale": {
+      "application": "__exe__",
+      "control": "Tailscale",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Tailscale\\tailscale.exe\""
+      ]
+    },
+    "__exe__::usbdk runtime library": {
+      "application": "__exe__",
+      "control": "UsbDk Runtime Library",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\UsbDk Runtime Library\\UsbDkController.exe\""
+      ]
+    },
+    "__exe__::usbdkcontroller": {
+      "application": "__exe__",
+      "control": "UsbDkController",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\UsbDk Runtime Library\\UsbDkController.exe\""
+      ]
+    },
+    "__exe__::videolan": {
+      "application": "__exe__",
+      "control": "VideoLAN",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\""
+      ]
+    },
+    "__exe__::vlc": {
+      "application": "__exe__",
+      "control": "vlc",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\""
+      ]
+    },
+    "__exe__::windows mail": {
+      "application": "__exe__",
+      "control": "Windows Mail",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Mail\\wab.exe\""
+      ]
+    },
+    "__exe__::wab": {
+      "application": "__exe__",
+      "control": "wab",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Mail\\wab.exe\""
+      ]
+    },
+    "__exe__::windows media player": {
+      "application": "__exe__",
+      "control": "Windows Media Player",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Media Player\\wmplayer.exe\""
+      ]
+    },
+    "__exe__::wmplayer": {
+      "application": "__exe__",
+      "control": "wmplayer",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Media Player\\wmplayer.exe\""
+      ]
+    },
+    "__exe__::windows photo viewer": {
+      "application": "__exe__",
+      "control": "Windows Photo Viewer",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Photo Viewer\\ImagingDevices.exe\""
+      ]
+    },
+    "__exe__::imagingdevices": {
+      "application": "__exe__",
+      "control": "ImagingDevices",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Windows Photo Viewer\\ImagingDevices.exe\""
+      ]
+    },
+    "__exe__::wolow companion": {
+      "application": "__exe__",
+      "control": "Wolow Companion",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files\\Wolow Companion\\Wolow Companion.exe\""
+      ]
+    },
+    "__exe__::amd_chipset_drivers": {
+      "application": "__exe__",
+      "control": "AMD_Chipset_Drivers",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\AMD\\Chipset_Software\\AMD_Chipset_Drivers.exe\""
+      ]
+    },
+    "__exe__::battle.net": {
+      "application": "__exe__",
+      "control": "Battle.net",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Battle.net\\Battle.net.exe\""
+      ]
+    },
+    "__exe__::call of duty": {
+      "application": "__exe__",
+      "control": "Call of Duty",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Call of Duty\\_retail_\\cod.exe\""
+      ]
+    },
+    "__exe__::cod": {
+      "application": "__exe__",
+      "control": "cod",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Call of Duty\\_retail_\\cod.exe\""
+      ]
+    },
+    "__exe__::microsoft": {
+      "application": "__exe__",
+      "control": "Microsoft",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Microsoft\\EdgeCore\\153.0.4234.48\\msedge.exe\""
+      ]
+    },
+    "__exe__::msedge": {
+      "application": "__exe__",
+      "control": "msedge",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Microsoft\\EdgeCore\\153.0.4234.48\\msedge.exe\""
+      ]
+    },
+    "__exe__::sony": {
+      "application": "__exe__",
+      "control": "Sony",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Sony\\Remote Play with PlayStation 3\\VRP.exe\""
+      ]
+    },
+    "__exe__::vrp": {
+      "application": "__exe__",
+      "control": "VRP",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Sony\\Remote Play with PlayStation 3\\VRP.exe\""
+      ]
+    },
+    "__exe__::steam": {
+      "application": "__exe__",
+      "control": "Steam",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Steam\\steam.exe\""
+      ]
+    },
+    "__exe__::ubisoft": {
+      "application": "__exe__",
+      "control": "Ubisoft",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher\\upc.exe\""
+      ]
+    },
+    "__exe__::upc": {
+      "application": "__exe__",
+      "control": "upc",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher\\upc.exe\""
+      ]
+    },
+    "__exe__::womic": {
+      "application": "__exe__",
+      "control": "WOMic",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\WOMic\\adb.exe\""
+      ]
+    },
+    "__exe__::adb": {
+      "application": "__exe__",
+      "control": "adb",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Program Files (x86)\\WOMic\\adb.exe\""
+      ]
+    },
+    "__exe__::microsoft vs code": {
+      "application": "__exe__",
+      "control": "Microsoft VS Code",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\""
+      ]
+    },
+    "__exe__::code": {
+      "application": "__exe__",
+      "control": "Code",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\""
+      ]
+    },
+    "__exe__::ollama": {
+      "application": "__exe__",
+      "control": "Ollama",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\AppData\\Local\\Programs\\Ollama\\ollama.exe\""
+      ]
+    },
+    "__exe__::python": {
+      "application": "__exe__",
+      "control": "Python",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\AppData\\Local\\Programs\\Python\\Python310\\python.exe\""
+      ]
+    },
+    "__exe__::winscp": {
+      "application": "__exe__",
+      "control": "WinSCP",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\AppData\\Local\\Programs\\WinSCP\\WinSCP.exe\""
+      ]
+    },
+    "__exe__::playnite": {
+      "application": "__exe__",
+      "control": "Playnite",
+      "kind": "bash",
+      "steps": [
+        "Start-Process \"C:\\Users\\danny\\Documents\\Playnite\\Playnite.FullscreenApp.exe\""
+      ]
     }
   }
 }

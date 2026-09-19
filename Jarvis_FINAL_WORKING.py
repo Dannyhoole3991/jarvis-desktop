@@ -1941,6 +1941,13 @@ def find_and_open_app(app_name):
 
                     pass
 
+    # ========================================================
+    # FOURTH: KNOWN EXE (scan_installed_apps) — zero AI cost, tried
+    # before ever falling through to the paid hybrid-learning pipeline.
+    # ========================================================
+    skill = get_app_skill("__exe__", app_name)
+    if skill and skill.get("steps") and _v58_replay_bash_steps(skill["steps"]):
+        return skill.get("control") or app_name
 
     return None
 
@@ -5047,6 +5054,218 @@ def save_app_skill(application, control, steps, kind="click"):
         "steps": list(steps),
     }
     return save_jarvis_memory()
+
+
+# ============================================================
+# INSTALLED-APP EXE SCAN — Danny's ask: index real .exe files already
+# on disk as zero-AI-cost "__exe__" app_skills (same schema already used
+# for learned Steam games), so "open X" for something find_and_open_app
+# can't see via the Start Menu doesn't have to fall through to the paid
+# hybrid-learning pipeline just because it was never taught before.
+# ============================================================
+
+_EXE_SCAN_ROOTS = [
+    os.environ.get("ProgramFiles", r"C:\Program Files"),
+    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+]
+
+# Steam's own library gets its own dedicated, better launch path already
+# (steam:// protocol with the real app ID) -- indexing raw exes from
+# inside it would just add a worse, conflicting way to open the same
+# games. Everything else here is generic installer/updater/helper noise
+# that is never itself "the app" a person means by its name.
+_EXE_SKIP_PATH_MARKERS = (
+    "\\steamapps\\", "\\redist\\", "\\vcredist", "\\$recycle.bin\\",
+    "\\node_modules\\", "\\__pycache__\\", "\\windows\\",
+    "\\windows kits\\", "\\mingw64\\", "\\usr\\bin\\", "\\usr\\lib\\",
+    "\\msbuild\\", "\\dotnet\\", "\\windowsapps\\", "\\common files\\",
+    "\\app certification kit\\", "\\reference assemblies\\",
+)
+_EXE_SKIP_NAME_MARKERS = (
+    "unins", "uninstall", "setup", "installer", "vcredist", "vc_redist",
+    "dotnetfx", "dxsetup", "dxwebsetup", "crashreporter", "crashpad_handler",
+    "updater", "update", "elevation_service", "notification_helper",
+    "crashhandler", "crashuploader", "crashlogsgenerator", "createdump",
+    "broker", "bootstrapper", "feedback", "configsecuritypolicy",
+    "dlpuseragent", "extexport", "tunnel", "replay", "proxy",
+    "secureattestation", "devcon", "helper", "agent", "diagnostic",
+    "telemetry", "watchdog", "service", "daemon", "cleanuputility",
+)
+_EXE_SKIP_FOLDER_NAMES = {
+    "windows kits", "common files", "windowsapps", "internet explorer",
+    "windows defender", "app certification kit", "reference assemblies",
+    "microsoft visual studio", "dotnet", "msbuild", "windows nt",
+}
+
+try:
+    import win32api as _win32api
+    _WIN32API_AVAILABLE = True
+except ImportError:
+    _WIN32API_AVAILABLE = False
+
+
+def _exe_scan_normalize(text):
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
+
+
+def _exe_file_description(path):
+    """PE FileDescription metadata, when readable -- e.g. distinguishes
+    the real filezilla.exe ("FileZilla") from its own bigger fzstorj.exe
+    helper (confirmed live: pure file-size comparison picked the helper,
+    since it happened to be the larger file)."""
+    if not _WIN32API_AVAILABLE:
+        return ""
+    try:
+        lang, codepage = _win32api.GetFileVersionInfo(path, "\\VarFileInfo\\Translation")[0]
+        key = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription"
+        return str(_win32api.GetFileVersionInfo(path, key) or "").strip()
+    except Exception:
+        return ""
+
+
+def _looks_like_real_app_exe(full_path, name_lower):
+    lowered_path = full_path.lower()
+    if any(marker in lowered_path for marker in _EXE_SKIP_PATH_MARKERS):
+        return False
+    if any(marker in name_lower for marker in _EXE_SKIP_NAME_MARKERS):
+        return False
+    return True
+
+
+def _best_exe_for_app_folder(folder_path, folder_name, max_depth=2):
+    """
+    Pick the single exe inside folder_path that most likely IS the real
+    app named folder_name, rather than a helper/updater/crash-handler
+    shipped alongside it. Tried in order: (1) an exe whose own filename
+    matches the folder name exactly, normalized -- must be exact, not a
+    substring, or e.g. "git-lfs" outranks "git" for folder "Git" just by
+    being the bigger file; (2) the exe whose PE FileDescription reads
+    closest to the folder name; (3) shallowest-then-largest as a last
+    resort when no exe has useful version info at all.
+
+    Returns (exe_path, exe_name_without_ext) or None if the folder has
+    no candidate exe at all.
+    """
+    folder_norm = _exe_scan_normalize(folder_name)
+    candidates = []  # (path, depth, size, name_without_ext)
+    base_depth = folder_path.rstrip("\\/").count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(folder_path):
+        depth = dirpath.count(os.sep) - base_depth
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+        for filename in filenames:
+            if not filename.lower().endswith(".exe"):
+                continue
+            name_no_ext = filename[:-4]
+            name_lower = name_no_ext.lower()
+            full_path = os.path.join(dirpath, filename)
+            if not _looks_like_real_app_exe(full_path, name_lower):
+                continue
+            try:
+                size = os.path.getsize(full_path)
+            except OSError:
+                size = 0
+            candidates.append((full_path, depth, size, name_no_ext))
+
+    if not candidates:
+        return None
+
+    name_matches = [c for c in candidates if _exe_scan_normalize(c[3]) == folder_norm]
+    if name_matches:
+        name_matches.sort(key=lambda c: (c[1], -c[2]))
+        best = name_matches[0]
+        return best[0], best[3]
+
+    scored = []
+    for c in candidates:
+        description = _exe_file_description(c[0])
+        similarity = (
+            difflib.SequenceMatcher(None, _exe_scan_normalize(description), folder_norm).ratio()
+            if description else 0.0
+        )
+        scored.append((similarity, c))
+    scored.sort(key=lambda s: (-s[0], s[1][1], -s[1][2]))
+    best = scored[0][1]
+    return best[0], best[3]
+
+
+def scan_installed_apps():
+    """
+    Look at each top-level folder under the common install directories
+    and record one zero-AI-cost "__exe__" app_skill per folder (under
+    both the folder's own name and, if different, the chosen exe's own
+    name) -- same schema already used for learned Steam games -- so
+    find_and_open_app can open it directly next time instead of falling
+    through to the paid hybrid-learning pipeline just because it was
+    never taught before.
+
+    Best-effort, not perfect: a folder containing several plausible exes
+    with no strong signal either way can still pick a helper instead of
+    the main app. Only ever ADDS/refreshes entries, never removes
+    anything, so a skill taught by hand some other way is never
+    clobbered by a worse guess found here.
+    """
+    results = {}  # name (lower) -> (display_name, exe_path)
+    for root in _EXE_SCAN_ROOTS:
+        if not root or not os.path.isdir(root):
+            continue
+        try:
+            entries = os.listdir(root)
+        except OSError:
+            continue
+        for entry in entries:
+            folder_path = os.path.join(root, entry)
+            if not os.path.isdir(folder_path) or entry.lower() in _EXE_SKIP_FOLDER_NAMES:
+                continue
+            best = _best_exe_for_app_folder(folder_path, entry)
+            if not best:
+                continue
+            exe_path, exe_name = best
+            results.setdefault(entry.lower(), (entry, exe_path))
+            if exe_name.lower() != entry.lower():
+                results.setdefault(exe_name.lower(), (exe_name, exe_path))
+
+    learned = 0
+    for name_lower, (display_name, exe_path) in results.items():
+        steps = [f'Start-Process "{exe_path}"']
+        existing = jarvis_memory.setdefault("app_skills", {}).get(_app_skill_key("__exe__", name_lower))
+        if existing and existing.get("steps") == steps:
+            continue
+        if save_app_skill("__exe__", display_name, steps, kind="bash"):
+            learned += 1
+
+    return len(results), learned
+
+
+def handle_scan_installed_apps_command(command):
+    c = command.strip().lower()
+    triggers = (
+        "scan for installed apps", "scan my pc for apps", "scan my computer for apps",
+        "index my apps", "index my installed apps", "index my programs",
+        "find all my apps", "find all my programs", "scan for my apps",
+        "scan installed apps", "learn my installed apps", "learn all my apps",
+    )
+    if c not in triggers:
+        return False
+
+    say("Scanning for installed applications — this may take a moment.")
+    try:
+        found_count, learned_count = scan_installed_apps()
+    except Exception as error:
+        print("APP SCAN error:", error)
+        say("Something went wrong scanning for apps, sir.")
+        return True
+
+    if learned_count:
+        say(
+            f"Found {found_count} applications and learned {learned_count} new ones. "
+            "I can open any of them directly from now on, no extra thinking needed."
+        )
+    else:
+        say(f"Found {found_count} applications — I already knew all of them.")
+    return True
 
 
 _MS_SETTINGS_URI_RE = re.compile(r"ms-settings:([a-zA-Z0-9\-]+)")
@@ -9794,6 +10013,8 @@ def run_local_command_flow(command, user_message):
     if handle_power_commands(command):
         return True
     if handle_special_apps(command):
+        return True
+    if handle_scan_installed_apps_command(command):
         return True
     if handle_natural_app_command(command):
         return True
