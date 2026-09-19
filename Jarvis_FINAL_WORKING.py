@@ -8645,6 +8645,205 @@ with nothing after it:
     return success, explanation, commands, []
 
 
+_CLAUDE_CREDIT_EXHAUSTED_MARKERS = (
+    "usage limit",
+    "limit reached",
+    "resets at",
+    "reset at",
+    "rate limit",
+    "quota",
+    "try again later",
+)
+
+
+def _looks_like_claude_credit_exhausted(text):
+    """
+    Best-effort detection of Claude's own usage-limit message in
+    _run_agentic_pc_task's output, so Jarvis can offer the OpenAI
+    fallback specifically for THIS failure and not for an unrelated
+    bug. Not verified against the exact live wording yet -- the raw
+    output is always printed (see the call site) so the marker list
+    here can be tightened once we see a real occurrence that doesn't
+    match.
+    """
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in _CLAUDE_CREDIT_EXHAUSTED_MARKERS)
+
+
+def _run_agentic_pc_task_openai(task, context=None):
+    """
+    OpenAI-powered equivalent of _run_agentic_pc_task -- same job (figure
+    out and actually carry out a live PC task via real terminal
+    commands), same return contract (ok, detail, bash_steps,
+    click_steps), so it plugs into the exact same save_learned_routine /
+    zero-cost-replay logic with no changes needed there.
+
+    Offered ONLY as a fallback when the claude CLI itself is out of
+    usage (see _looks_like_claude_credit_exhausted) -- Danny's explicit
+    ask, confirmed with him first each time rather than switching
+    silently. This is a genuinely separate implementation, not just a
+    different API key for the same code: the claude CLI is a whole agent
+    harness (built-in terminal tool, file access, permission handling),
+    while OpenAI's API is just a model, so the terminal tool-use loop
+    below is hand-rolled to match.
+    """
+    if not online_available():
+        return False, "OpenAI isn't configured either, so I can't try the fallback.", [], []
+
+    briefing = f"""You are controlling a real Windows 11 PC on behalf of its owner, live,
+right now -- not writing code for later. The task:
+
+{task}
+
+{"ADDITIONAL CONTEXT: " + str(context)[:1000] if context else ""}
+
+Actually accomplish this task for real using the run_shell_command tool
+(PowerShell), the same way a person doing it for you would. Prefer the
+most direct, repeatable mechanism -- an official URL protocol or CLI flag
+(e.g. Steam's steam:// protocol with the game's real app ID looked up
+from its own local library manifest files, rather than clicking through
+the Steam GUI), a documented command-line switch, or a short PowerShell
+command -- over simulating mouse clicks, since an exact command can be
+replayed next time at zero cost.
+
+Install nothing and change no system-wide settings unless the task
+explicitly requires it. Do not touch personal files unrelated to this
+task. If it would be destructive, irreversible, or looks unsafe, stop
+and report that instead of doing it.
+
+You have an ask_user tool. Use it ONLY if you hit a genuine decision you
+can't reasonably make yourself -- not for routine steps. It speaks your
+question aloud to Danny and returns his real answer as text. Use it
+sparingly.
+
+If (and only if) this task is actually going to launch a game, run
+`curl -X POST http://localhost:8765/unload_ai` via run_shell_command
+immediately before the real launch command (not before -- e.g. not
+while still searching for or confirming the game), so the local AI's
+memory is freed right when the game is actually about to start loading.
+
+When finished, reply with EXACTLY one fenced block like this, with
+nothing after it:
+
+```RESULT_JSON
+{{"success": true or false, "commands": ["ONLY the final, necessary command(s) that actually accomplish this every time it's repeated -- NOT any command you ran just to look around, inspect a file, or figure things out along the way. Empty list if it failed or no shell command was needed."], "explanation": "one or two plain-English sentences, no markdown, describing what actually happened -- this gets read aloud to the user"}}
+```
+"""
+
+    tools = [
+        {
+            "type": "function",
+            "name": "run_shell_command",
+            "description": "Run one PowerShell command on the real Windows PC and get back its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The exact PowerShell command to run."}
+                },
+                "required": ["command"],
+            },
+            "strict": False,
+        },
+        {
+            "type": "function",
+            "name": "ask_user",
+            "description": (
+                "Ask Danny a question out loud and wait for his real answer. "
+                "Use sparingly, only for a genuine decision you can't make yourself."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"question": {"type": "string"}},
+                "required": ["question"],
+            },
+            "strict": False,
+        },
+    ]
+
+    def _execute_tool(name, arguments):
+        try:
+            args = json.loads(arguments or "{}")
+        except Exception:
+            args = {}
+        if name == "run_shell_command":
+            command = str(args.get("command", "")).strip()
+            if not command:
+                return "No command given."
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", command],
+                    capture_output=True, text=True, timeout=120,
+                )
+                output = ((result.stdout or "") + (result.stderr or "")).strip()
+                return output[-4000:] or "(command produced no output)"
+            except subprocess.TimeoutExpired:
+                return "Command timed out after 120 seconds."
+            except Exception as error:
+                return f"Command failed to run: {error}"
+        if name == "ask_user":
+            question = str(args.get("question", "")).strip() or "I need your input to continue."
+            say(question)
+            return get_confirmation_input()
+        return f"Unknown tool: {name}"
+
+    threading.Thread(target=_auto_dismiss_launch_dialogs, kwargs={"timeout": 60}, daemon=True).start()
+
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(briefing),
+            input=openai_safe_text(task),
+            tools=tools,
+        )
+    except Exception as error:
+        return False, f"Couldn't run the OpenAI execution agent: {error}", [], []
+
+    deadline = time.time() + 600
+    for _ in range(40):
+        function_calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
+        if not function_calls:
+            break
+        if time.time() > deadline:
+            return False, "The OpenAI execution agent took too long and timed out.", [], []
+
+        outputs = []
+        for call in function_calls:
+            result_text = _execute_tool(call.name, call.arguments)
+            outputs.append({
+                "type": "function_call_output",
+                "call_id": call.call_id,
+                "output": str(result_text),
+            })
+
+        try:
+            response = openai_client.responses.create(
+                model=OPENAI_MODEL,
+                previous_response_id=response.id,
+                input=outputs,
+                tools=tools,
+            )
+        except Exception as error:
+            return False, f"OpenAI execution agent lost connection mid-task: {error}", [], []
+    else:
+        return False, "The OpenAI execution agent used too many steps without finishing.", [], []
+
+    output_text = str(response.output_text or "").strip()
+    match = re.search(r"```RESULT_JSON\s*(\{.*?\})\s*```", output_text, re.DOTALL)
+    if not match:
+        return False, output_text[-1500:] or "No result reported.", [], []
+
+    try:
+        parsed = json.loads(match.group(1))
+    except Exception:
+        return False, output_text[-1500:], [], []
+
+    success = bool(parsed.get("success"))
+    commands = [c for c in (parsed.get("commands") or []) if isinstance(c, str) and c.strip()]
+    explanation = str(parsed.get("explanation", "")).strip() or output_text[-500:]
+
+    return success, explanation, commands, []
+
+
 def _v58_run_ufo(task, research):
     """
     Run UFO² as a separate process so the stable Jarvis process and v53
@@ -8936,6 +9135,22 @@ def handle_v58_autonomous_commands(command, force=False):
         verified = False
 
     ok, detail, bash_steps, click_steps_new = _run_agentic_pc_task(execution_task, research)
+
+    if not ok and _looks_like_claude_credit_exhausted(detail):
+        print("V58 AUTONOMOUS: Claude usage limit detected:", detail[-300:])
+        say(
+            "Sir, it looks like I'm out of Claude credit for this one. "
+            "Would you like me to try it with OpenAI instead?"
+        )
+        answer = get_confirmation_input().lower()
+        if any(word in answer for word in (
+            "yes", "yeah", "yep", "sure", "please", "go for it", "try it", "do it", "openai"
+        )):
+            say("Alright, switching to OpenAI for this one.")
+            ok, detail, bash_steps, click_steps_new = _run_agentic_pc_task_openai(execution_task, research)
+        else:
+            say("Understood, sir.")
+
     if ok:
         # Record the task as an autonomous experience candidate. UFO's own
         # experience-learning layer remains the authoritative executor memory.
