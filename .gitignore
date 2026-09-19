@@ -13,6 +13,7 @@
 !jarvis_hud.html
 !jarvis_memory.json
 !START_JARVIS_FINAL_WORKING.bat
+!START_JARVIS_DESKTOP_HUD.bat
 !eva_prompter.py
 !host_agent_processor.py
 !jarvis_ask_user_mcp.py

@@ -538,6 +538,11 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, status=500)
             return
 
+        if self.path == "/last_image":
+            with _last_generated_image_lock:
+                self._send_json(dict(_last_generated_image))
+            return
+
         if self.path != "/":
             self.send_error(404)
             return
@@ -549,8 +554,27 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
+            return
+
+        if self.path == "/attach_image":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                image_data_url = str(payload.get("image", "")).strip()
+                question = str(payload.get("question", "")).strip()
+                if not image_data_url:
+                    raise ValueError("No image supplied")
+
+                answer = analyze_attached_image(image_data_url, question)
+                if answer:
+                    say(answer)
+                    self._send_json({"reply": answer})
+                else:
+                    self._send_json({"error": "Could not analyze that image."}, status=502)
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
             return
 
         if self.path == "/unload_ai":
@@ -3757,12 +3781,39 @@ def handle_extra_natural_commands(command):
                 return True
 
     for prefix in ["search for ", "can you search for ", "could you search for ",
-                   "find me ", "look up ", "search the internet for "]:
+                   "find me ", "look up ", "can you look up ", "could you look up ",
+                   "search the internet for ", "search online for ", "search the web for ",
+                   "research ", "can you research ", "could you research ", "please research ",
+                   "look into ", "can you look into ", "could you look into ",
+                   "give me ideas for ", "give me some ideas for ", "give me some ideas about ",
+                   "what are some ideas for ", "what ideas do you have for "]:
         if command.startswith(prefix):
-            search = command[len(prefix):].strip()
-            if search:
-                say("Searching Google for " + search + ".")
-                open_url("https://www.google.com/search?q=" + search.replace(" ", "+"))
+            topic = command[len(prefix):].strip()
+            if topic:
+                if not online_available():
+                    say("I'd need my online brain connected to research that, sir.")
+                    return True
+                say("Let me look into that.")
+                answer = research_topic_online(topic)
+                if answer:
+                    say(answer)
+                else:
+                    say("I couldn't find anything useful on that just now, sir.")
+                return True
+
+    for prefix in ["generate an image of ", "generate a picture of ", "generate an image ",
+                   "generate a picture ", "create an image of ", "create a picture of ",
+                   "make an image of ", "make a picture of ", "draw me ", "draw an image of ",
+                   "draw a picture of "]:
+        if command.startswith(prefix):
+            prompt = command[len(prefix):].strip()
+            if prompt:
+                if not online_available():
+                    say("I'd need my online brain connected to generate an image, sir.")
+                    return True
+                say("Working on it.")
+                confirmation = generate_image_from_prompt(prompt)
+                say(confirmation or "I couldn't generate that image just now, sir.")
                 return True
 
     for prefix in ["find on youtube ", "search youtube for ", "search youtube ", "look for on youtube "]:
@@ -3948,10 +3999,83 @@ def load_jarvis_memory():
     return {"facts": {}, "reminders": [], "routines": {}}
 
 
+def _push_shared_memory_to_phone():
+    """
+    Fire-and-forget push of the current facts/reminders to the phone's
+    cloud backend, so they're reachable (read AND recalled in
+    conversation) even when this PC is off -- called every time
+    save_jarvis_memory() runs. This PC's file stays the durable
+    long-term archive (Render's disk is not reliably persistent across
+    redeploys); the phone backend is just the always-reachable mailbox/
+    cache re-seeded from here. Never blocks the caller and never raises.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+
+    def worker():
+        try:
+            requests.post(
+                f"{JARVIS_PHONE_BACKEND_URL}/api/memory_push",
+                json={
+                    "facts": jarvis_memory.get("facts", {}),
+                    "reminders": jarvis_memory.get("reminders", []),
+                },
+                headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+                timeout=8,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _pull_shared_memory_from_phone():
+    """
+    One-time startup merge: pull any facts/reminders added via the phone
+    while this PC was off, and merge them in. This PC's own value wins on
+    a key both sides already have (it's the long-term archive); the
+    phone's value only fills in keys the PC doesn't have yet. Bounded to
+    a few seconds and never raises -- a network hiccup here must not
+    delay or block startup.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+    try:
+        response = requests.get(
+            f"{JARVIS_PHONE_BACKEND_URL}/api/memory",
+            headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+            timeout=4,
+        )
+        if response.status_code != 200:
+            return
+        shared = response.json()
+        changed = False
+
+        facts = jarvis_memory.setdefault("facts", {})
+        for key, value in (shared.get("facts") or {}).items():
+            if key not in facts:
+                facts[key] = value
+                changed = True
+
+        reminders = jarvis_memory.setdefault("reminders", [])
+        existing = {json.dumps(item, sort_keys=True) for item in reminders}
+        for reminder in (shared.get("reminders") or []):
+            if json.dumps(reminder, sort_keys=True) not in existing:
+                reminders.append(reminder)
+                changed = True
+
+        if changed:
+            save_jarvis_memory()
+            print("Shared memory: merged facts/reminders added via phone while offline.")
+    except Exception as error:
+        print("Shared memory pull error:", error)
+
+
 def save_jarvis_memory():
     try:
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump(jarvis_memory, f, indent=2, ensure_ascii=False)
+        _push_shared_memory_to_phone()
         return True
     except Exception as error:
         print("Memory save error:", error)
@@ -3970,6 +4094,7 @@ if "hogwarts legacy" not in jarvis_memory["routines"]:
         "steps": ["open_or_focus_steam", "search_steam_for_game", "open_matching_game_result", "find_and_click_play"]
     }
     save_jarvis_memory()
+_pull_shared_memory_from_phone()
 pending_memory_key = None
 
 
@@ -4305,6 +4430,37 @@ def persistent_memory_context():
 
 def online_available():
     return openai_client is not None
+
+
+def research_topic_online(question):
+    """
+    Real internet research via OpenAI's hosted web_search tool -- the same
+    mechanism _v58_research_task already uses for task planning, but for
+    conversational research/ideas requests. ask_jarvis's own brain (the
+    local Ollama model) has no internet access at all and no knowledge of
+    anything past its training data, so this is the only path that can
+    actually look something current up rather than guess.
+    """
+    if not online_available():
+        return None
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(
+                "You are Jarvis, researching something for Danny using live "
+                "web search. Give a clear, conversational, spoken-style answer "
+                "-- not a report, no markdown, no headings or bullet lists. Get "
+                "to the actual answer or ideas quickly, mention anything "
+                "genuinely current or uncertain, and keep it under 200 words "
+                "unless the question clearly calls for more."
+            ),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(question),
+        )
+        return str(response.output_text or "").strip() or None
+    except Exception as error:
+        print("Web research error:", error)
+        return None
 
 
 def openai_safe_text(value):
@@ -9640,6 +9796,81 @@ or changed anything. If text is too small or unclear, say so.
         return answer or None
     except Exception as error:
         print("Screen vision error:", error)
+        return None
+
+
+def analyze_attached_image(image_data_url, question=None):
+    """
+    Same vision mechanism as ask_vision_about_screen, but for a picture the
+    user attached (desktop HUD file/picture picker) instead of a live
+    screen capture. Used by the /attach_image endpoint.
+    """
+    if not online_available():
+        return None
+    question = (question or "").strip() or "What is in this picture? Describe it."
+    try:
+        response = openai_client.responses.create(
+            model=VISION_MODEL,
+            instructions=openai_safe_text(
+                "You are Jarvis. The user has shared a picture with you directly "
+                "(not a screenshot of their own screen). Answer their question about "
+                "it naturally and conversationally, as you would speaking out loud. "
+                "Do not invent anything not actually visible in the image."
+            ),
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": openai_safe_text(question)},
+                        {"type": "input_image", "image_url": image_data_url, "detail": "high"},
+                    ],
+                }
+            ],
+        )
+        answer = str(response.output_text or "").strip()
+        return answer or None
+    except Exception as error:
+        print("Attached image vision error:", error)
+        return None
+
+
+# Guards _last_generated_image -- read by the HUD's polling GET /last_image
+# and written by generate_image_from_prompt, potentially from different
+# request-handling threads.
+_last_generated_image_lock = threading.Lock()
+_last_generated_image = {"id": 0, "data_url": None, "prompt": None, "timestamp": 0}
+
+
+def generate_image_from_prompt(prompt):
+    """
+    Real image generation via OpenAI, triggered by "generate/create/draw/
+    make a picture of X". The image itself isn't spoken -- it's handed to
+    the desktop HUD via GET /last_image (polled while in window mode), so
+    this returns only the short spoken confirmation text.
+    """
+    global _last_generated_image
+    if not online_available():
+        return None
+    try:
+        result = openai_client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024",
+            n=1,
+        )
+        b64_data = result.data[0].b64_json
+        if not b64_data:
+            return None
+        with _last_generated_image_lock:
+            _last_generated_image = {
+                "id": _last_generated_image["id"] + 1,
+                "data_url": "data:image/png;base64," + b64_data,
+                "prompt": prompt,
+                "timestamp": time.time(),
+            }
+        return "Here you go, sir."
+    except Exception as error:
+        print("Image generation error:", error)
         return None
 
 

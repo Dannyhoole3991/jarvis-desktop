@@ -32,6 +32,7 @@ experience, e.g.:
 """
 
 import ctypes
+import ctypes.wintypes
 import os
 import subprocess
 import sys
@@ -65,7 +66,29 @@ window = None                  # webview.Window
 tray_icon = None               # pystray.Icon
 _shutdown_lock = threading.Lock()
 _shutting_down = False
-_is_maximized = False
+_is_maximized = True
+
+
+def _get_work_area():
+    """
+    (left, top, width, height) of the primary monitor's work area, i.e. the
+    full screen MINUS the taskbar. Confirmed live that pywebview's
+    maximized=True / window.maximize() do not reliably fill this for a
+    frameless window on this machine's backend (window opened at its
+    default size, unmoved) -- so the HUD sizes itself explicitly instead of
+    trusting either of those.
+    """
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
+    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+
+
+def _fill_work_area():
+    if window is None:
+        return
+    left, top, width, height = _get_work_area()
+    window.resize(width, height)
+    window.move(left, top)
 
 
 # ------------------------------------------------------------------
@@ -223,6 +246,16 @@ def run_tray():
 # ------------------------------------------------------------------
 
 class HudApi:
+    def get_shared_secret(self):
+        # The engine's local HTTP server requires this on /command, /stop,
+        # and /attach_image (added so the phone's public tunnel couldn't be
+        # used to control the PC by anyone who found the URL) -- confirmed
+        # live that the HUD's own calls were never sending it and would
+        # get rejected with 401 whenever this is set. window.pywebview.api
+        # is the only way to hand the HTML page an environment variable
+        # from this process without writing it into the HTML file itself.
+        return os.environ.get("JARVIS_PHONE_SECRET", "")
+
     def hide_to_tray(self):
         hide_window()
 
@@ -232,9 +265,11 @@ class HudApi:
             return
         try:
             if _is_maximized:
-                window.restore()
+                window.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+                left, top, work_w, work_h = _get_work_area()
+                window.move(left + (work_w - WINDOW_WIDTH) // 2, top + (work_h - WINDOW_HEIGHT) // 2)
             else:
-                window.maximize()
+                _fill_work_area()
             _is_maximized = not _is_maximized
         except Exception as error:
             print(f"Could not toggle maximize: {error}")
@@ -269,6 +304,14 @@ def quit_app():
 # Entry point
 # ------------------------------------------------------------------
 
+def _maximize_on_startup():
+    time.sleep(0.3)
+    try:
+        _fill_work_area()
+    except Exception as error:
+        print(f"Could not size HUD to the work area on startup: {error}")
+
+
 def main():
     global window
 
@@ -290,7 +333,7 @@ def main():
         js_api=HudApi(),
     )
 
-    webview.start()
+    webview.start(func=_maximize_on_startup)
 
     # webview.start() returns once the window is closed/destroyed.
     quit_app()
