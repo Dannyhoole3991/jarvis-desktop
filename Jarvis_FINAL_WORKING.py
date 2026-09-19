@@ -482,10 +482,16 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         # CORS preflight -- the desktop HUD is a file:// page posting JSON
         # cross-origin to this server, which browsers preflight with OPTIONS.
+        # Authorization must be explicitly allowed here too, not just
+        # Content-Type -- confirmed live that adding the auth header to the
+        # HUD's requests without adding it here makes the browser silently
+        # block the preflight, so the actual POST never goes out at all
+        # (no error surfaces anywhere either: fetch() just throws before a
+        # response ever exists).
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
