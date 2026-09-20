@@ -305,11 +305,21 @@ def quit_app():
 # ------------------------------------------------------------------
 
 def _maximize_on_startup():
-    time.sleep(0.3)
-    try:
-        _fill_work_area()
-    except Exception as error:
-        print(f"Could not size HUD to the work area on startup: {error}")
+    # Confirmed live: a single fill 0.3s after window creation isn't
+    # enough right after a fresh PC boot -- this HUD auto-starts from the
+    # Windows Startup folder, and the display/work-area (monitor
+    # detection, DPI, taskbar) hadn't fully settled yet 46s after boot,
+    # so the one-shot fill locked in a wrong size (window ended up
+    # partly off-screen above the top edge). Retrying over the first
+    # ~20s means even if an early attempt reads a stale/wrong work area,
+    # a later one corrects it once things have actually settled.
+    gaps_between_attempts = (0.3, 0.7, 1, 2, 3, 4, 5, 4)  # cumulative: 0.3, 1, 2, 4, 7, 11, 16, 20
+    for gap in gaps_between_attempts:
+        time.sleep(gap)
+        try:
+            _fill_work_area()
+        except Exception as error:
+            print(f"Could not size HUD to the work area on startup: {error}")
 
 
 def main():

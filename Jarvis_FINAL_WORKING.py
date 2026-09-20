@@ -3511,6 +3511,21 @@ def try_launch_with_llm_cleanup(raw_target, original_command):
                     return True
                 print(f"APP SKILL: stored skill for {target!r} -> {sub_target!r} no longer works; relearning.")
 
+        # Even when there's more to do than just launching, the launch
+        # itself can still be free if a known exe already covers it (see
+        # scan_installed_apps) — no reason to make the paid agent
+        # rediscover how to open something Jarvis already knows, just
+        # because it also has to do something further once it's open.
+        exe_skill = get_app_skill("__exe__", target)
+        if exe_skill and exe_skill.get("steps") and _v58_replay_bash_steps(exe_skill["steps"]):
+            say(f"Opening {target} — let me handle the rest.")
+            print(f"APP SKILL: launched {target!r} via known exe; handing the remainder to the AI pipeline.")
+            amended_task = (
+                f"{target} is already open (just launched it for you). "
+                f"Now, starting from exactly this screen: {original_command}"
+            )
+            return handle_v58_autonomous_commands(amended_task, force=True)
+
         # No matching skill (or it just failed) — send the ORIGINAL command
         # to the full pipeline so the "go to display" part actually gets
         # done too, researched and learned properly this time.
