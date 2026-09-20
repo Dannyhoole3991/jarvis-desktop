@@ -3829,6 +3829,26 @@ def handle_extra_natural_commands(command):
                     say("I couldn't find anything useful on that just now, sir.")
                 return True
 
+    batch_image_match = re.match(
+        r"^(?:generate|create|make)\s+(?:a batch of\s+)?(\d+)\s+(?:images|pictures)\s+of\s+(.+)$",
+        command,
+    )
+    if batch_image_match:
+        count = min(int(batch_image_match.group(1)), 20)  # cap so one request can't run away
+        prompt = batch_image_match.group(2).strip()
+        if prompt:
+            if not online_available():
+                say("I'd need my online brain connected to generate images, sir.")
+                return True
+            say(f"Working on {count} images — this will take a few minutes, sir.")
+            succeeded, failed = generate_image_batch(prompt, count)
+            if succeeded:
+                extra = f", {failed} failed" if failed else ""
+                say(f"Done. {succeeded} images saved to the archive{extra}.")
+            else:
+                say("I couldn't generate any of those images, sir.")
+            return True
+
     for prefix in ["generate an image of ", "generate a picture of ", "generate an image ",
                    "generate a picture ", "create an image of ", "create a picture of ",
                    "make an image of ", "make a picture of ", "draw me ", "draw an image of ",
@@ -3842,6 +3862,22 @@ def handle_extra_natural_commands(command):
                 say("Working on it.")
                 confirmation = generate_image_from_prompt(prompt)
                 say(confirmation or "I couldn't generate that image just now, sir.")
+                return True
+
+    for prefix in ["write an article about ", "write a blog post about ", "write me an article about ",
+                   "write me a blog post about ", "write an article on ", "write a blog post on "]:
+        if command.startswith(prefix):
+            topic = command[len(prefix):].strip()
+            if topic:
+                if not online_available():
+                    say("I'd need my online brain connected to write that, sir.")
+                    return True
+                say("Writing that now — this will take a moment, sir.")
+                saved_path = write_article_online(topic)
+                if saved_path:
+                    say(f"Done. Saved as {os.path.basename(saved_path)}.")
+                else:
+                    say("I couldn't write that article just now, sir.")
                 return True
 
     for prefix in ["find on youtube ", "search youtube for ", "search youtube ", "look for on youtube "]:
@@ -10297,13 +10333,80 @@ def analyze_attached_image(image_data_url, question=None):
 _last_generated_image_lock = threading.Lock()
 _last_generated_image = {"id": 0, "data_url": None, "prompt": None, "timestamp": 0}
 
+# ============================================================
+# CONTENT PRODUCTION ARCHIVE — Danny's "put Jarvis to work" ask: every
+# generated image or article needs to survive past the single in-memory
+# "last one" the HUD polls, since real output (print-on-demand art, a
+# batch of blog posts) means dozens/hundreds of pieces, not one.
+# Everything lands on disk with a small JSON index alongside it so nothing
+# generated is ever silently lost to the next generation overwriting it.
+# ============================================================
+_GENERATED_ART_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_art")
+_GENERATED_ARTICLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_articles")
+
+
+def _slugify(text, max_len=60):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+    return (slug[:max_len].rstrip("-")) or "untitled"
+
+
+_PRINT_UPSCALE_FACTOR = 4  # 1024x1024 -> 4096x4096
+
+
+def _upscale_for_print(png_bytes, scale=_PRINT_UPSCALE_FACTOR):
+    """
+    Free resolution upscale via Lanczos resampling -- not true AI
+    super-resolution (adds no new detail, just resamples), but brings
+    gpt-image-1's 1024x1024 output up past Etsy's 2000px minimum and
+    close to the general 3840x3840 art-print recommendation. Well short
+    of Redbubble's ideal ~9000px for their full product range, but usable
+    for smaller/medium prints and digital downloads. Danny's explicit
+    choice to start with this free option before considering a paid AI
+    upscaler.
+    """
+    image = Image.open(io.BytesIO(png_bytes))
+    upscaled = image.resize((image.width * scale, image.height * scale), Image.LANCZOS)
+    buffer = io.BytesIO()
+    upscaled.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _save_generated_image_to_disk(b64_data, prompt):
+    """Persist one generated image as a real, print-upscaled PNG file
+    plus a metadata sidecar, so bulk art production has an actual archive
+    to work from instead of just the single most-recent in-memory
+    image."""
+    os.makedirs(_GENERATED_ART_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    slug = _slugify(prompt)
+    base_name = f"{timestamp}_{slug}"
+    image_path = os.path.join(_GENERATED_ART_DIR, base_name + ".png")
+    suffix = 1
+    while os.path.exists(image_path):
+        image_path = os.path.join(_GENERATED_ART_DIR, f"{base_name}_{suffix}.png")
+        suffix += 1
+
+    image_bytes = base64.b64decode(b64_data)
+    try:
+        image_bytes = _upscale_for_print(image_bytes)
+    except Exception as error:
+        print("IMAGE ARCHIVE: upscale failed, saving original resolution:", error)
+
+    with open(image_path, "wb") as f:
+        f.write(image_bytes)
+    meta_path = image_path[:-4] + ".json"
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({"prompt": prompt, "timestamp": timestamp, "file": os.path.basename(image_path)}, f, indent=2, ensure_ascii=False)
+    return image_path
+
 
 def generate_image_from_prompt(prompt):
     """
     Real image generation via OpenAI, triggered by "generate/create/draw/
     make a picture of X". The image itself isn't spoken -- it's handed to
-    the desktop HUD via GET /last_image (polled while in window mode), so
-    this returns only the short spoken confirmation text.
+    the desktop HUD via GET /last_image (polled while in window mode) AND
+    saved permanently to generated_art/, so this returns only the short
+    spoken confirmation text.
     """
     global _last_generated_image
     if not online_available():
@@ -10325,9 +10428,97 @@ def generate_image_from_prompt(prompt):
                 "prompt": prompt,
                 "timestamp": time.time(),
             }
+        try:
+            saved_path = _save_generated_image_to_disk(b64_data, prompt)
+            print("IMAGE ARCHIVE: saved", saved_path)
+        except Exception as error:
+            print("IMAGE ARCHIVE: could not save to disk:", error)
         return "Here you go, sir."
     except Exception as error:
         print("Image generation error:", error)
+        return None
+
+
+def generate_image_batch(prompt, count):
+    """
+    Bulk version of generate_image_from_prompt for actual production
+    volume (print-on-demand needs dozens/hundreds of pieces, not one at a
+    time) -- each call gets a natural variation nudge so a batch doesn't
+    come back as near-identical copies. Every image is saved to the same
+    archive. Returns (succeeded_count, failed_count).
+    """
+    if not online_available():
+        return 0, count
+    succeeded = 0
+    for i in range(count):
+        variation_prompt = prompt if i == 0 else f"{prompt} (a distinct variation, different composition/colors from the others)"
+        try:
+            result = openai_client.images.generate(
+                model="gpt-image-1",
+                prompt=variation_prompt,
+                size="1024x1024",
+                n=1,
+            )
+            b64_data = result.data[0].b64_json
+            if not b64_data:
+                continue
+            _save_generated_image_to_disk(b64_data, prompt)
+            succeeded += 1
+            with _last_generated_image_lock:
+                global _last_generated_image
+                _last_generated_image = {
+                    "id": _last_generated_image["id"] + 1,
+                    "data_url": "data:image/png;base64," + b64_data,
+                    "prompt": prompt,
+                    "timestamp": time.time(),
+                }
+        except Exception as error:
+            print(f"IMAGE BATCH: image {i + 1}/{count} failed:", error)
+    return succeeded, count - succeeded
+
+
+def write_article_online(topic):
+    """
+    Real long-form article generation via OpenAI's hosted web_search tool
+    -- unlike research_topic_online (deliberately short/spoken-style,
+    capped ~200 words for conversation), this is for actual publishable
+    content: full length, structured with headings, saved straight to
+    generated_articles/ rather than spoken. Returns the saved file path,
+    or None on failure.
+    """
+    if not online_available():
+        return None
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(
+                "You are writing a real, publishable long-form article for a blog "
+                "post, using live web search for anything factual or current. "
+                "Write in clean Markdown: a single # title, then proper ## section "
+                "headings, an engaging introduction, well-organized body sections, "
+                "and a short conclusion. Aim for 900-1500 words unless the topic "
+                "genuinely needs more. Write naturally for a human reader (SEO "
+                "structure via good headings and clarity, not keyword stuffing). "
+                "Do not include any meta-commentary about being an AI or about "
+                "the writing process itself -- just the article."
+            ),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(f"Write the article now. Topic: {topic}"),
+        )
+        article_text = str(response.output_text or "").strip()
+        if not article_text:
+            return None
+
+        os.makedirs(_GENERATED_ARTICLES_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = _slugify(topic)
+        article_path = os.path.join(_GENERATED_ARTICLES_DIR, f"{timestamp}_{slug}.md")
+        with open(article_path, "w", encoding="utf-8") as f:
+            f.write(article_text)
+        print("ARTICLE ARCHIVE: saved", article_path)
+        return article_path
+    except Exception as error:
+        print("Article generation error:", error)
         return None
 
 
