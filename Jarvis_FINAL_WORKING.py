@@ -30,6 +30,7 @@ for _stream in (sys.stdout, sys.stderr):
 import pyttsx3
 import threading
 import http.server
+import urllib.parse
 import socketserver
 import queue
 import time
@@ -549,6 +550,24 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(dict(_last_generated_image))
             return
 
+        if self.path.startswith("/conversation"):
+            # Confirmed live: the desktop HUD's chat log only ever showed
+            # messages IT sent through /command -- a voice conversation
+            # (or anything typed directly at the PC's own console) never
+            # reached it at all, since that happens entirely inside this
+            # process via add_to_memory, with no HTTP round trip for the
+            # HUD to observe. This lets it poll the same
+            # conversation_history everything else already uses.
+            query = urllib.parse.urlparse(self.path).query
+            since = urllib.parse.parse_qs(query).get("since", ["0"])[0]
+            try:
+                since_id = int(since)
+            except ValueError:
+                since_id = 0
+            new_messages = [item for item in conversation_history if item.get("id", 0) > since_id]
+            self._send_json({"messages": new_messages})
+            return
+
         if self.path != "/":
             self.send_error(404)
             return
@@ -744,6 +763,33 @@ def _handle_polled_command(item):
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _sync_phone_conversation():
+    """
+    Pull anything said to the phone's cloud brain since the last check
+    and merge it into Jarvis's own conversation memory -- so saying
+    "let's switch to the PC" on the phone doesn't lose the conversation
+    that led up to it. This used to only happen once, at Jarvis's own
+    startup (via /api/sync, meant for catching up on what was said while
+    the PC was off) -- confirmed there was actually no code anywhere
+    calling it at all, at startup or otherwise, so a same-session phone
+    conversation had nowhere to go, ever. Folded into the existing poll
+    loop below rather than a separate one: this doesn't need to be
+    faster than that already-running 3s cycle.
+    """
+    try:
+        response = requests.get(
+            f"{JARVIS_PHONE_BACKEND_URL}/api/sync",
+            headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            for item in response.json().get("pending", []):
+                add_to_memory("user", item.get("user_text", ""))
+                add_to_memory("jarvis", item.get("reply_text", ""))
+    except Exception:
+        pass
+
+
 def _phone_poll_loop():
     """
     Danny's PC lives on a private Tailscale address that Render (or
@@ -767,6 +813,7 @@ def _phone_poll_loop():
                     _handle_polled_command(item)
         except Exception:
             pass
+        _sync_phone_conversation()
         time.sleep(3)
 
 
@@ -4401,14 +4448,59 @@ def handle_memory_commands(command, original_message=None):
 
 conversation_history = []
 MAX_CONVERSATION_MESSAGES = 30
+# Never reused, even as old entries get trimmed off the front of
+# conversation_history -- lets the desktop HUD poll "give me everything
+# after id X" and reliably get only what's actually new.
+_conversation_message_counter = 0
 
 def add_to_memory(role, message):
+    global _conversation_message_counter
     message = str(message).strip()
     if not message:
         return
-    conversation_history.append({"role": role, "message": message})
+    _conversation_message_counter += 1
+    conversation_history.append({"role": role, "message": message, "id": _conversation_message_counter})
     while len(conversation_history) > MAX_CONVERSATION_MESSAGES:
         conversation_history.pop(0)
+
+
+def _pull_pending_conversation_from_phone():
+    """
+    One-time startup merge: the phone backend's /api/sync was designed
+    for exactly this (see its own docstring) but never actually called
+    from here until now. Confirmed live: a conversation held entirely on
+    the phone while this PC was off (so answered by the phone's own
+    cloud brain) left the PC's ask_jarvis with zero awareness of it once
+    started -- Danny had to re-explain everything. Fetch-and-clear, so
+    this PC becomes the one place that history ends up living long term,
+    matching the phone backend's own stated design. Only covers
+    offline-phone conversations -- anything said via the phone while this
+    PC was already running already reaches conversation_history directly
+    (see _run_on_pc's remote_commands path), so there's nothing to merge
+    for that case.
+    """
+    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+        return
+    try:
+        response = requests.get(
+            f"{JARVIS_PHONE_BACKEND_URL}/api/sync",
+            headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
+            timeout=6,
+        )
+        if response.status_code != 200:
+            return
+        pending = response.json().get("pending") or []
+        for entry in pending:
+            user_text = str(entry.get("user_text", "")).strip()
+            reply_text = str(entry.get("reply_text", "")).strip()
+            if user_text:
+                add_to_memory("user", user_text)
+            if reply_text:
+                add_to_memory("assistant", reply_text)
+        if pending:
+            print(f"PHONE SYNC: merged {len(pending)} conversation turn(s) said to the phone while offline.")
+    except Exception as error:
+        print("Phone conversation sync error:", error)
 
 def get_conversation_context():
     if not conversation_history:
@@ -8916,6 +9008,16 @@ with nothing after it:
 
 
 _CLAUDE_CREDIT_EXHAUSTED_MARKERS = (
+    # Confirmed live, verbatim, from a real hit: "You've hit your session
+    # limit · resets 9:50pm (Europe/London)" -- every marker below this
+    # point was a guess that turned out not to match ANY of that wording
+    # ("session limit" is not "usage limit"; "resets 9:50pm" has no "at").
+    # That's exactly why the OpenAI offer never fired the first time this
+    # actually happened. Keeping the old guesses too in case the exact
+    # phrasing varies by failure type (rate limit vs session limit).
+    "session limit",
+    "hit your session",
+    "resets ",
     "usage limit",
     "limit reached",
     "resets at",
@@ -8928,13 +9030,12 @@ _CLAUDE_CREDIT_EXHAUSTED_MARKERS = (
 
 def _looks_like_claude_credit_exhausted(text):
     """
-    Best-effort detection of Claude's own usage-limit message in
+    Detection of Claude's own usage-limit message in
     _run_agentic_pc_task's output, so Jarvis can offer the OpenAI
-    fallback specifically for THIS failure and not for an unrelated
-    bug. Not verified against the exact live wording yet -- the raw
-    output is always printed (see the call site) so the marker list
-    here can be tightened once we see a real occurrence that doesn't
-    match.
+    fallback specifically for THIS failure and not for an unrelated bug.
+    The raw output is always printed (see the call site) so the marker
+    list here can be tightened further if a future real occurrence still
+    doesn't match.
     """
     lowered = str(text or "").lower()
     return any(marker in lowered for marker in _CLAUDE_CREDIT_EXHAUSTED_MARKERS)
@@ -12640,6 +12741,8 @@ print("If an unexpected error occurs, this window will stay open so you can read
 # is guaranteed to exist by now -- no race.
 if _pending_crash_summary:
     threading.Thread(target=_investigate_pc_crash, args=(_pending_crash_summary,), daemon=True).start()
+
+_pull_pending_conversation_from_phone()
 
 while True:
     try:

@@ -17,8 +17,9 @@ logon (pythonw, no console window) so it's always reachable whenever
 Danny is logged into the PC, independent of whether Jarvis itself is
 open or closed.
 
-For now this only launches the terminal version (START_JARVIS_FINAL_WORKING.bat,
-a visible console window) -- the desktop HUD version will be added later.
+Launches the desktop HUD version (Jarvis_Desktop_HUD.py) on a remote
+start request, not the bare terminal -- cleaner if Danny then switches
+to using the PC directly.
 """
 import glob
 import json
@@ -37,7 +38,15 @@ SHARED_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
 # backend from off the tailnet, since it can't reach back in here.
 JARVIS_PHONE_BACKEND_URL = os.environ.get("JARVIS_PHONE_BACKEND_URL", "").rstrip("/")
 JARVIS_DIR = os.path.dirname(os.path.abspath(__file__))
-JARVIS_BAT = os.path.join(JARVIS_DIR, "START_JARVIS_FINAL_WORKING.bat")
+JARVIS_HUD_SCRIPT = os.path.join(JARVIS_DIR, "Jarvis_Desktop_HUD.py")
+# Hardcoded rather than bare "pythonw" -- this machine has several
+# pythonw.exe installs and Windows resolves the bare name inconsistently
+# (confirmed live elsewhere in this project), sometimes picking one
+# missing pystray/pywebview, which fails completely silently since
+# pythonw has no console to show an error on.
+_HUD_PYTHONW = r"C:\Users\danny\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe"
+if not os.path.exists(_HUD_PYTHONW):
+    _HUD_PYTHONW = "pythonw"
 JARVIS_STATUS_URL = "http://127.0.0.1:8765/status"
 # Which real dev conversation counts as "the one" to mirror -- set by
 # Danny (via me, Claude) whenever a new conversation should become that
@@ -170,6 +179,13 @@ def _run_mirror_message(text):
             args,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, cwd=JARVIS_DIR,
+            # This launcher runs via pythonw (no console of its own), and
+            # claude.exe is a console-subsystem program -- confirmed live
+            # that without this, Windows auto-allocates it a brand new
+            # VISIBLE console window despite all three stdio streams
+            # already being piped, popping an unwanted terminal open on
+            # the PC every time the phone sends a mirror message.
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except Exception as error:
         _notify_mirror(f"(Couldn't start a session: {error})")
@@ -313,17 +329,15 @@ def _start_jarvis_if_needed():
     if _jarvis_already_running():
         return "already_running"
     try:
-        # A new, visible console window -- deliberately the terminal
-        # version, not the desktop HUD, per Danny's instruction (the
-        # HUD needs its own separate remote-start handling later).
-        # CREATE_NEW_CONSOLE already gives the .bat its own window, so
-        # there's no need to go through cmd's "start" (which has a
-        # sharp edge: an unquoted first argument like a title gets
-        # misread as the command to run instead, silently failing).
+        # Danny's later instruction: a phone-triggered remote start
+        # should bring up the desktop HUD, not the bare terminal --
+        # nicer/cleaner if he then walks over and switches to using the
+        # PC directly. Jarvis_Desktop_HUD.py starts the real engine
+        # itself (hidden console) and shows the HUD window on top, so
+        # this one launch covers both.
         subprocess.Popen(
-            [JARVIS_BAT],
+            [_HUD_PYTHONW, JARVIS_HUD_SCRIPT],
             cwd=JARVIS_DIR,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
         _notify_phone("Starting Jarvis up now, sir.")
         return "starting"

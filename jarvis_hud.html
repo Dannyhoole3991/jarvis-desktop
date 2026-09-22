@@ -613,9 +613,35 @@ function appendChatMessage(role, text, imageDataUrl) {
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
 }
 
+// ============================================================
+// The actual conversation (both sides) is driven entirely by polling
+// /conversation, NOT by the direct /command response below -- confirmed
+// live that a voice conversation held directly at the PC (no HTTP
+// round trip at all) never reached the chat log any other way, since
+// add_to_memory() is the only thing every path (voice, HUD-typed,
+// phone-relayed) actually has in common. Deterministic command
+// acknowledgements ("Opening notepad.") don't go through add_to_memory
+// and so won't appear here -- they're still visible in the activity
+// panel and spoken aloud regardless.
+// ============================================================
+let lastSeenConversationId = null;
+async function pollConversation() {
+  try {
+    const res = await fetch(BASE + "/conversation?since=" + (lastSeenConversationId ?? 0), { signal: AbortSignal.timeout(3000) });
+    const data = await res.json();
+    for (const item of (data.messages || [])) {
+      appendChatMessage(item.role === "user" ? "user" : "jarvis", item.message);
+      lastSeenConversationId = item.id;
+    }
+  } catch (err) {
+    // Fine to just try again next tick.
+  }
+}
+pollConversation();
+setInterval(pollConversation, 2000);
+
 async function sendCommand(text) {
   if (!text.trim()) return;
-  appendChatMessage("user", text);
   setOrbState("thinking");
   try {
     const res = await fetch(BASE + "/command", {
@@ -624,8 +650,7 @@ async function sendCommand(text) {
       body: JSON.stringify({ command: text }),
     });
     const data = await res.json();
-    if (data.reply) appendChatMessage("jarvis", data.reply);
-    else if (data.error) appendChatMessage("jarvis", data.error);
+    if (data.error) appendChatMessage("jarvis", data.error);
   } catch (err) {
     pcStatusText.textContent = "Couldn't reach Jarvis";
   }
