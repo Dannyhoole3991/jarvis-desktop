@@ -148,10 +148,140 @@
     border:1px solid var(--panel-border);
   }
   .chat-user .chat-image { margin-left:auto; }
+
+  /* ============================================================
+     Sidebar -- an icon rail for switching between Chat (the orb,
+     untouched) and the newer utility panels. -webkit-app-region:drag
+     on the rail itself (minus the actual buttons) keeps the window
+     draggable from the left edge too, matching the top drag strip.
+     ============================================================ */
+  body { display:flex; }
+  .sidebar {
+    width:74px; height:100%; flex-shrink:0; box-sizing:border-box;
+    background: rgba(255,255,255,0.02); border-right:1px solid var(--panel-border);
+    display:flex; flex-direction:column; align-items:center;
+    padding:44px 0 14px 0; gap:6px;
+    -webkit-app-region: drag;
+  }
+  .nav-item {
+    -webkit-app-region: no-drag;
+    width:56px; padding:9px 0 7px 0; border-radius:12px; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    color: var(--text-dimmer); background:transparent; border:none;
+    font-family:inherit;
+  }
+  .nav-item .nav-icon { font-size:18px; line-height:1; }
+  .nav-item .nav-label { font-size:9.5px; letter-spacing:0.3px; }
+  .nav-item:hover { background: rgba(255,179,71,0.08); color: var(--text-dim); }
+  .nav-item.active { background: rgba(255,179,71,0.14); color: var(--gold); }
+  .sidebar-spacer { flex:1; }
+
+  .app-shell { position:relative; flex:1; min-width:0; height:100%; }
+
+  /* ============================================================
+     Utility tab panels (Files / Apps / System / Settings). Each is a
+     simple full-area panel with its own header/scroll region -- kept
+     visually consistent with the rest of the HUD (same gold/amber
+     palette, same panel-border) rather than looking bolted on.
+     ============================================================ */
+  .tab-panel {
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    padding: 56px 32px 24px 32px; box-sizing:border-box;
+    overflow-y:auto;
+  }
+  .tab-panel h2 {
+    margin:0 0 16px 0; font-size:16px; font-weight:600; color: var(--gold-bright);
+    letter-spacing:0.3px;
+  }
+  .panel-card {
+    background: rgba(255,255,255,0.03); border:1px solid var(--panel-border);
+    border-radius:14px; padding:16px 18px; margin-bottom:16px;
+  }
+  .panel-row {
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 14px;
+    padding:9px 0; border-bottom:1px solid rgba(255,179,71,0.08);
+    font-size:13px;
+  }
+  .panel-row:last-child { border-bottom:none; }
+  .panel-btn {
+    background: rgba(255,179,71,0.12); border:1px solid var(--panel-border);
+    color: var(--gold); border-radius:8px; padding:7px 14px; font-size:12.5px;
+    cursor:pointer; font-family:inherit;
+  }
+  .panel-btn:hover { background: rgba(255,179,71,0.22); }
+  .panel-btn.danger { background: rgba(255,106,106,0.12); border-color: rgba(255,106,106,0.3); color: var(--red); }
+  .panel-hint { font-size:11.5px; color: var(--text-dimmer); margin-top:4px; }
+
+  /* -- Files -- */
+  .files-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .files-path {
+    flex:1; min-width:200px; font-size:12px; color: var(--text-dim);
+    background: rgba(255,255,255,0.04); border:1px solid var(--panel-border);
+    border-radius:8px; padding:8px 12px; overflow-x:auto; white-space:nowrap;
+  }
+  .quick-folders { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+  .quick-folder {
+    font-size:12px; color: var(--text-dim); background: rgba(255,179,71,0.08);
+    border:1px solid var(--panel-border); border-radius:8px; padding:6px 12px; cursor:pointer;
+  }
+  .quick-folder:hover { background: rgba(255,179,71,0.16); color: var(--text); }
+  .file-row {
+    display:flex; align-items:center; gap:10px; padding:8px 6px; border-radius:8px;
+    font-size:13px; cursor:pointer;
+  }
+  .file-row:hover { background: rgba(255,179,71,0.08); }
+  .file-row .f-icon { font-size:15px; width:20px; text-align:center; flex-shrink:0; }
+  .file-row .f-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file-row .f-meta { font-size:11px; color: var(--text-dimmer); flex-shrink:0; }
+  .files-empty { color: var(--text-dimmer); font-size:12.5px; padding:20px 4px; }
+
+  /* -- Apps -- */
+  .apps-grid {
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px;
+  }
+  .app-tile {
+    background: rgba(255,255,255,0.03); border:1px solid var(--panel-border);
+    border-radius:10px; padding:14px 12px; font-size:12.5px; color: var(--text);
+    cursor:pointer; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .app-tile:hover { background: rgba(255,179,71,0.12); border-color: rgba(255,179,71,0.35); }
+
+  /* -- System -- */
+  .stat-bar-track {
+    width:100%; height:6px; border-radius:4px; background: rgba(255,255,255,0.08);
+    overflow:hidden; margin-top:6px;
+  }
+  .stat-bar-fill { height:100%; background: var(--gold); border-radius:4px; }
+  .stat-label { display:flex; justify-content:space-between; font-size:12.5px; color: var(--text-dim); }
+  .stat-block { margin-bottom:14px; }
+  .recent-action-line { font-size:12px; color: var(--text-dim); padding:5px 0; border-bottom:1px solid rgba(255,179,71,0.06); }
+  .recent-action-line .time { color: var(--text-dimmer); margin-right:8px; }
+
+  /* -- Settings -- */
+  .toggle-switch {
+    width:42px; height:24px; border-radius:12px; background: rgba(255,255,255,0.12);
+    position:relative; cursor:pointer; flex-shrink:0; border:1px solid var(--panel-border);
+  }
+  .toggle-switch .knob {
+    position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%;
+    background: var(--text-dimmer); transition: left 0.15s ease, background 0.15s ease;
+  }
+  .toggle-switch.on { background: rgba(255,179,71,0.3); }
+  .toggle-switch.on .knob { left:22px; background: var(--gold); }
 </style>
 </head>
 <body>
 
+<div class="sidebar" id="sidebar">
+  <button class="nav-item active" data-tab="chat" title="Chat"><span class="nav-icon">&#9679;</span><span class="nav-label">Chat</span></button>
+  <button class="nav-item" data-tab="files" title="Files"><span class="nav-icon">&#128193;</span><span class="nav-label">Files</span></button>
+  <button class="nav-item" data-tab="apps" title="Apps"><span class="nav-icon">&#9635;</span><span class="nav-label">Apps</span></button>
+  <button class="nav-item" data-tab="system" title="System"><span class="nav-icon">&#128202;</span><span class="nav-label">System</span></button>
+  <div class="sidebar-spacer"></div>
+  <button class="nav-item" data-tab="settings" title="Settings"><span class="nav-icon">&#9881;</span><span class="nav-label">Settings</span></button>
+</div>
+
+<div class="app-shell">
 <div class="drag-region"></div>
 <div class="titlebar-hover-zone">
   <div class="titlebar-btns">
@@ -164,7 +294,7 @@
 <div class="pc-status" id="pcStatus"><span class="dot"></span><span id="pcStatusText">Connecting...</span></div>
 <div class="activity-panel" id="activityPanel"></div>
 
-<div class="wrap">
+<div class="wrap" id="tabChat">
   <div class="orb-area" id="orbArea">
     <canvas id="orbCanvas" width="360" height="360"></canvas>
     <div class="status-text" id="statusText">Standing by</div>
@@ -182,9 +312,64 @@
     <div class="round-btn" id="modeToggleBtn" title="Switch to window view">&#9635;</div>
   </div>
 </div>
+
+<div class="tab-panel" id="tabFiles" style="display:none;">
+  <h2>Files</h2>
+  <div class="quick-folders" id="quickFolders"></div>
+  <div class="files-toolbar">
+    <button class="panel-btn" id="filesUpBtn">&#8592; Up</button>
+    <div class="files-path" id="filesPath"></div>
+  </div>
+  <div id="filesList"></div>
+</div>
+
+<div class="tab-panel" id="tabApps" style="display:none;">
+  <h2>Apps</h2>
+  <div class="panel-hint" style="margin-bottom:14px;">Anything Jarvis already knows how to open with no AI cost. Click to launch it.</div>
+  <div class="apps-grid" id="appsGrid"></div>
+  <div style="margin-top:18px;">
+    <button class="panel-btn" id="rescanAppsBtn">Rescan installed apps</button>
+  </div>
+</div>
+
+<div class="tab-panel" id="tabSystem" style="display:none;">
+  <h2>System</h2>
+  <div class="panel-card" id="systemCard"></div>
+  <h2>Recent activity</h2>
+  <div class="panel-card" id="recentActivityCard"></div>
+</div>
+
+<div class="tab-panel" id="tabSettings" style="display:none;">
+  <h2>Settings</h2>
+  <div class="panel-card">
+    <div class="panel-row">
+      <div>
+        <div>Start minimised to the taskbar</div>
+        <div class="panel-hint">Jarvis keeps running in the background either way -- this only decides whether the window shows itself on launch.</div>
+      </div>
+      <div class="toggle-switch" id="startMinimizedToggle"><div class="knob"></div></div>
+    </div>
+  </div>
+  <div class="panel-card">
+    <div class="panel-row">
+      <div>Restart the Jarvis engine</div>
+      <button class="panel-btn" id="restartEngineBtn">Restart</button>
+    </div>
+    <div class="panel-row">
+      <div>Hide to tray now</div>
+      <button class="panel-btn" id="settingsHideBtn">Hide</button>
+    </div>
+    <div class="panel-row">
+      <div>Quit Jarvis completely</div>
+      <button class="panel-btn danger" id="settingsQuitBtn">Quit</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="fileInput" accept="image/*" hidden />
 
 <div class="sys-strip" id="sysStrip"></div>
+</div>
 
 <script>
 // ============================================================
@@ -577,8 +762,9 @@ async function pollActivity() {
   try {
     const res = await fetch(BASE + "/activity", { signal: AbortSignal.timeout(3000) });
     const d = await res.json();
-    const current = d.current_action ? `<div class="current">${d.current_action}</div>` : "";
-    const recent = (d.recent || []).slice(-2).map(a => `<div>${a.text || a}</div>`).join("");
+    const currentText = d.current_action && (d.current_action.detail || d.current_action.title);
+    const current = currentText ? `<div class="current">${currentText}</div>` : "";
+    const recent = (d.recent || []).slice(-2).map(a => `<div>${(a && a.text) || (typeof a === "string" ? a : "")}</div>`).join("");
     activityPanel.innerHTML = current + recent;
   } catch (err) {
     // Same as above -- fine to just leave the last known content.
@@ -745,6 +931,253 @@ modeToggleBtn.addEventListener("click", () => {
   document.body.classList.toggle("window-mode", windowMode);
   modeToggleBtn.title = windowMode ? "Switch to orb view" : "Switch to window view";
   modeToggleBtn.innerHTML = windowMode ? "&#9679;" : "&#9635;";
+});
+
+// ============================================================
+// Sidebar tabs (Chat / Files / Apps / System / Settings). Chat is just
+// #tabChat -- the existing .wrap, completely untouched above -- the
+// others are new utility panels. A pure show/hide swap, same spirit as
+// the orb/window-mode toggle: nothing underneath is torn down.
+// ============================================================
+const TAB_IDS = ["chat", "files", "apps", "system", "settings"];
+let activeTab = "chat";
+function switchTab(tab) {
+  if (!TAB_IDS.includes(tab)) return;
+  activeTab = tab;
+  document.getElementById("tabChat").style.display = tab === "chat" ? "" : "none";
+  for (const other of ["files", "apps", "system", "settings"]) {
+    document.getElementById("tab" + other[0].toUpperCase() + other.slice(1)).style.display = tab === other ? "" : "none";
+  }
+  document.querySelectorAll(".nav-item").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  });
+  if (tab === "files") refreshFilesList(currentFilesPath);
+  if (tab === "apps") refreshAppsList();
+  if (tab === "system") refreshSystemDetail();
+  if (tab === "settings") refreshSettingsPanel();
+}
+document.querySelectorAll(".nav-item").forEach(btn => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+
+// ------------------------------------------------------------
+// Files
+// ------------------------------------------------------------
+let currentFilesPath = "";
+let currentFilesParent = null;
+function fmtSize(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return Math.round(bytes / (1024 * 1024)) + " MB";
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+}
+async function refreshFilesList(path) {
+  const listEl = document.getElementById("filesList");
+  try {
+    const res = await fetch(BASE + "/files/list?path=" + encodeURIComponent(path || ""), { headers: authHeaders() });
+    const data = await res.json();
+    if (data.error) { listEl.innerHTML = `<div class="files-empty">${data.error}</div>`; return; }
+    currentFilesPath = data.path;
+    currentFilesParent = data.parent;
+    document.getElementById("filesPath").textContent = data.path;
+    document.getElementById("filesUpBtn").style.opacity = data.parent ? "1" : "0.35";
+
+    const quickEl = document.getElementById("quickFolders");
+    quickEl.innerHTML = "";
+    for (const folder of (data.quick_folders || [])) {
+      const chip = document.createElement("div");
+      chip.className = "quick-folder";
+      chip.textContent = folder.name;
+      chip.addEventListener("click", () => refreshFilesList(folder.path));
+      quickEl.appendChild(chip);
+    }
+
+    if (!data.entries || !data.entries.length) {
+      listEl.innerHTML = `<div class="files-empty">Nothing here.</div>`;
+      return;
+    }
+    listEl.innerHTML = "";
+    for (const entry of data.entries) {
+      const row = document.createElement("div");
+      row.className = "file-row";
+      const icon = document.createElement("span");
+      icon.className = "f-icon";
+      icon.textContent = entry.is_dir ? "\u{1F4C1}" : "\u{1F4C4}";
+      const name = document.createElement("span");
+      name.className = "f-name";
+      name.textContent = entry.name;
+      const meta = document.createElement("span");
+      meta.className = "f-meta";
+      meta.textContent = entry.is_dir ? entry.modified : `${fmtSize(entry.size)} · ${entry.modified}`;
+      row.append(icon, name, meta);
+      const fullPath = data.path.replace(/[\\/]+$/, "") + "\\" + entry.name;
+      if (entry.is_dir) {
+        row.addEventListener("click", () => refreshFilesList(fullPath));
+      } else {
+        row.addEventListener("dblclick", () => openPcPath(fullPath));
+        row.title = "Double-click to open";
+      }
+      listEl.appendChild(row);
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+}
+async function openPcPath(path) {
+  try {
+    await fetch(BASE + "/files/open", {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ path }),
+    });
+  } catch (err) {}
+}
+document.getElementById("filesUpBtn").addEventListener("click", () => {
+  if (currentFilesParent) refreshFilesList(currentFilesParent);
+});
+
+// ------------------------------------------------------------
+// Apps
+// ------------------------------------------------------------
+async function refreshAppsList() {
+  const gridEl = document.getElementById("appsGrid");
+  try {
+    const res = await fetch(BASE + "/apps/list", { headers: authHeaders() });
+    const data = await res.json();
+    const apps = data.apps || [];
+    if (!apps.length) {
+      gridEl.innerHTML = `<div class="files-empty">No apps indexed yet -- try "Rescan installed apps" below.</div>`;
+      return;
+    }
+    gridEl.innerHTML = "";
+    for (const name of apps) {
+      const tile = document.createElement("div");
+      tile.className = "app-tile";
+      tile.textContent = name;
+      tile.title = "Open " + name;
+      tile.addEventListener("click", async () => {
+        tile.style.opacity = "0.5";
+        try {
+          const r = await fetch(BASE + "/apps/open", {
+            method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ name }),
+          });
+          const d = await r.json();
+          if (d.error) appendChatMessage("jarvis", d.error);
+        } catch (err) {}
+        setTimeout(() => { tile.style.opacity = "1"; }, 600);
+      });
+      gridEl.appendChild(tile);
+    }
+  } catch (err) {
+    gridEl.innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+}
+document.getElementById("rescanAppsBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("rescanAppsBtn");
+  btn.textContent = "Scanning...";
+  btn.disabled = true;
+  try {
+    await fetch(BASE + "/command", {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ command: "scan for installed apps" }),
+    });
+  } catch (err) {}
+  setTimeout(async () => {
+    await refreshAppsList();
+    btn.textContent = "Rescan installed apps";
+    btn.disabled = false;
+  }, 15000);
+});
+
+// ------------------------------------------------------------
+// System
+// ------------------------------------------------------------
+function statBar(label, percent, extra) {
+  const pct = percent == null ? 0 : Math.max(0, Math.min(100, percent));
+  return `<div class="stat-block">
+    <div class="stat-label"><span>${label}</span><span>${extra != null ? extra : (percent != null ? percent + "%" : "--")}</span></div>
+    <div class="stat-bar-track"><div class="stat-bar-fill" style="width:${pct}%"></div></div>
+  </div>`;
+}
+async function refreshSystemDetail() {
+  const card = document.getElementById("systemCard");
+  const actCard = document.getElementById("recentActivityCard");
+  try {
+    // Reading hardware temps can genuinely take several seconds (confirmed
+    // live) -- a short timeout here just flashes a false "offline" error
+    // over an engine that's actually fine, so this one gets more slack
+    // than the lightweight corner strip's poll.
+    const res = await fetch(BASE + "/stats", { signal: AbortSignal.timeout(10000) });
+    const d = await res.json();
+    let html = "";
+    html += `<div class="panel-row"><div>Machine</div><div>${d.hostname || "This PC"}</div></div>`;
+    html += `<div class="panel-row"><div>${d.cpu_name || "CPU"}</div><div>${d.cpu_temp_c != null ? d.cpu_temp_c + "°C" : ""}</div></div>`;
+    html += statBar("CPU load", d.cpu_percent);
+    if (d.gpu_name) {
+      html += `<div class="panel-row"><div>${d.gpu_name}</div><div>${d.gpu_temp_c != null ? d.gpu_temp_c + "°C" : ""}</div></div>`;
+    }
+    if (d.ram) html += statBar("RAM", d.ram.percent, `${d.ram.used_gb} / ${d.ram.total_gb} GB`);
+    for (const drive of (d.drives || [])) {
+      html += statBar("Drive " + drive.letter, drive.percent, `${drive.used_gb} / ${drive.total_gb} GB`);
+    }
+    html += `<div class="panel-row"><div>Network</div><div>&#8595; ${d.net_down_kbps ?? 0} KB/s &nbsp; &#8593; ${d.net_up_kbps ?? 0} KB/s</div></div>`;
+    card.innerHTML = html;
+  } catch (err) {
+    // Leave whatever was last shown rather than blanking it on one slow tick.
+    if (!card.innerHTML) card.innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+  try {
+    const res2 = await fetch(BASE + "/activity", { signal: AbortSignal.timeout(5000) });
+    const d2 = await res2.json();
+    const recent = d2.recent || [];
+    actCard.innerHTML = recent.length
+      ? recent.slice(-12).reverse().map(a => `<div class="recent-action-line"><span class="time">${a.time || ""}</span>${a.text || a}</div>`).join("")
+      : `<div class="files-empty">Nothing yet.</div>`;
+  } catch (err) {}
+}
+let systemPollTimer = null;
+let systemPollInFlight = false;
+function ensureSystemPolling() {
+  if (systemPollTimer) return;
+  systemPollTimer = setInterval(async () => {
+    if (activeTab !== "system" || systemPollInFlight) return;
+    systemPollInFlight = true;
+    try { await refreshSystemDetail(); } finally { systemPollInFlight = false; }
+  }, 3000);
+}
+ensureSystemPolling();
+
+// ------------------------------------------------------------
+// Settings
+// ------------------------------------------------------------
+async function refreshSettingsPanel() {
+  const toggle = document.getElementById("startMinimizedToggle");
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_hud_settings) {
+      const settings = await window.pywebview.api.get_hud_settings();
+      toggle.classList.toggle("on", !!settings.start_minimized);
+    }
+  } catch (err) {}
+}
+document.getElementById("startMinimizedToggle").addEventListener("click", async () => {
+  const toggle = document.getElementById("startMinimizedToggle");
+  const next = !toggle.classList.contains("on");
+  toggle.classList.toggle("on", next);
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_start_minimized) {
+      await window.pywebview.api.set_start_minimized(next);
+    }
+  } catch (err) {}
+});
+document.getElementById("restartEngineBtn").addEventListener("click", () => {
+  window.pywebview && window.pywebview.api.restart_engine && window.pywebview.api.restart_engine();
+});
+document.getElementById("settingsHideBtn").addEventListener("click", () => {
+  window.pywebview && window.pywebview.api.hide_to_tray();
+});
+document.getElementById("settingsQuitBtn").addEventListener("click", () => {
+  window.pywebview && window.pywebview.api.quit_app();
 });
 </script>
 </body>

@@ -476,6 +476,94 @@ function startVoice(){
 }
 </script></body></html>"""
 
+# ============================================================
+# Desktop HUD file browser / quick-launch apps -- read-only local
+# filesystem access plus one-click launch of anything already indexed as
+# an app_skill (see scan_installed_apps). Bounded to the user's own
+# profile folder (Desktop, Documents, Downloads, Pictures, etc.) rather
+# than the whole drive -- plenty for "useful access to my files" while
+# keeping a remote-reachable HTTP endpoint from being able to walk the
+# entire filesystem.
+# ============================================================
+
+FILES_ROOT = os.path.realpath(os.path.expanduser("~"))
+
+FILES_QUICK_FOLDERS = ("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")
+
+
+def _resolve_files_path(raw_path):
+    """
+    Resolve a client-supplied path to a real path under FILES_ROOT, or
+    raise ValueError. Blank/missing means FILES_ROOT itself.
+    """
+    raw_path = (raw_path or "").strip() or FILES_ROOT
+    candidate = os.path.realpath(raw_path)
+    if os.path.commonpath([candidate, FILES_ROOT]) != FILES_ROOT:
+        raise ValueError("Path is outside the allowed folder.")
+    return candidate
+
+
+def list_files_at(raw_path):
+    """Directory listing: name, is_dir, size (files only), modified time."""
+    target = _resolve_files_path(raw_path)
+    if not os.path.isdir(target):
+        raise ValueError("Not a folder.")
+    entries = []
+    with os.scandir(target) as it:
+        for entry in it:
+            try:
+                is_dir = entry.is_dir()
+                stat = entry.stat()
+                entries.append({
+                    "name": entry.name,
+                    "is_dir": is_dir,
+                    "size": None if is_dir else stat.st_size,
+                    "modified": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                })
+            except Exception:
+                continue
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    parent = os.path.dirname(target) if target != FILES_ROOT else None
+    if parent is not None and os.path.commonpath([parent, FILES_ROOT]) != FILES_ROOT:
+        parent = None
+    return {
+        "path": target,
+        "root": FILES_ROOT,
+        "parent": parent,
+        "quick_folders": [
+            {"name": name, "path": os.path.join(FILES_ROOT, name)}
+            for name in FILES_QUICK_FOLDERS
+            if os.path.isdir(os.path.join(FILES_ROOT, name))
+        ],
+        "entries": entries,
+    }
+
+
+def open_path_on_pc(raw_path):
+    """Open a file or folder with whatever Windows would normally use (Explorer/default app)."""
+    target = _resolve_files_path(raw_path)
+    if not os.path.exists(target):
+        raise ValueError("That no longer exists.")
+    os.startfile(target)  # noqa: S606 -- deliberate, this IS the feature
+
+
+def list_quick_apps():
+    """Every zero-AI-cost app_skill (scanned installed apps + manual entries like Playnite)."""
+    return sorted(
+        {skill.get("control", "") for skill in jarvis_memory.setdefault("app_skills", {}).values()
+         if str(skill.get("application", "")).strip().lower() == "__exe__" and skill.get("control")},
+        key=str.lower,
+    )
+
+
+def open_quick_app(name):
+    skill = get_app_skill("__exe__", name)
+    if not skill or not skill.get("steps"):
+        raise ValueError("Jarvis hasn't indexed an app by that name.")
+    if not _v58_replay_bash_steps(skill["steps"]):
+        raise ValueError("Could not launch it.")
+
+
 class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
@@ -550,6 +638,28 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(dict(_last_generated_image))
             return
 
+        if self.path.startswith("/files/list"):
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            query = urllib.parse.urlparse(self.path).query
+            raw_path = urllib.parse.parse_qs(query).get("path", [""])[0]
+            try:
+                self._send_json(list_files_at(raw_path))
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
+            return
+
+        if self.path == "/apps/list":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send_json({"apps": list_quick_apps()})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=500)
+            return
+
         if self.path.startswith("/conversation"):
             # Confirmed live: the desktop HUD's chat log only ever showed
             # messages IT sent through /command -- a voice conversation
@@ -579,8 +689,31 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
+            return
+
+        if self.path == "/files/open":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                open_path_on_pc(payload.get("path", ""))
+                self._send_json({"ok": True})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
+            return
+
+        if self.path == "/apps/open":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                name = str(payload.get("name", "")).strip()
+                if not name:
+                    raise ValueError("No app name supplied")
+                open_quick_app(name)
+                self._send_json({"ok": True})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
             return
 
         if self.path == "/attach_image":

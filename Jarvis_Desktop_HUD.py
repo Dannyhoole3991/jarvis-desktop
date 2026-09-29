@@ -33,6 +33,7 @@ experience, e.g.:
 
 import ctypes
 import ctypes.wintypes
+import json
 import os
 import subprocess
 import sys
@@ -48,6 +49,14 @@ from PIL import Image, ImageDraw
 HERE = os.path.dirname(os.path.abspath(__file__))
 JARVIS_SCRIPT = os.path.join(HERE, "Jarvis_FINAL_WORKING.py")
 HUD_HTML = os.path.join(HERE, "jarvis_hud.html")
+HUD_SETTINGS_FILE = os.path.join(HERE, "jarvis_hud_settings.json")
+
+# Danny's call: the HUD should now come up minimised to the taskbar by
+# default -- the engine (and the phone/mirror links into it) keep running
+# in the background regardless of whether this window is showing itself,
+# so nothing is lost by starting hidden. Overridable per-machine via the
+# Settings tab, persisted in HUD_SETTINGS_FILE.
+DEFAULT_HUD_SETTINGS = {"start_minimized": True}
 
 STATUS_URL = "http://localhost:8765/status"
 STOP_URL = "http://localhost:8765/stop"
@@ -89,6 +98,36 @@ def _fill_work_area():
     left, top, width, height = _get_work_area()
     window.resize(width, height)
     window.move(left, top)
+
+
+# ------------------------------------------------------------------
+# HUD's own settings (separate from the engine's jarvis_memory.json) --
+# just window-behaviour preferences for this launcher, e.g. whether to
+# start hidden in the tray.
+# ------------------------------------------------------------------
+
+def load_hud_settings():
+    settings = dict(DEFAULT_HUD_SETTINGS)
+    try:
+        if os.path.exists(HUD_SETTINGS_FILE):
+            with open(HUD_SETTINGS_FILE, "r", encoding="utf-8") as handle:
+                settings.update(json.load(handle))
+    except Exception as error:
+        print(f"Could not read HUD settings, using defaults: {error}")
+    return settings
+
+
+def save_hud_settings(settings):
+    try:
+        with open(HUD_SETTINGS_FILE, "w", encoding="utf-8") as handle:
+            json.dump(settings, handle, indent=2)
+        return True
+    except Exception as error:
+        print(f"Could not save HUD settings: {error}")
+        return False
+
+
+hud_settings = load_hud_settings()
 
 
 # ------------------------------------------------------------------
@@ -186,16 +225,18 @@ def stop_jarvis_engine_if_ours():
 # ------------------------------------------------------------------
 
 def build_tray_image():
-    """Small glowing-orb icon drawn with PIL (no external icon file needed)."""
+    """Small glowing-orb icon drawn with PIL (no external icon file needed).
+    Gold/amber to match the current HUD orb theme -- the original blue was
+    left over from before that redesign."""
     size = 64
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     center = size // 2
     for radius, color in [
-        (30, (28, 60, 90, 120)),
-        (22, (40, 130, 200, 200)),
-        (14, (100, 220, 255, 255)),
-        (7, (235, 250, 255, 255)),
+        (30, (90, 60, 20, 120)),
+        (22, (200, 130, 40, 200)),
+        (14, (255, 179, 71, 255)),
+        (7, (255, 224, 163, 255)),
     ]:
         draw.ellipse(
             (center - radius, center - radius, center + radius, center + radius),
@@ -277,6 +318,18 @@ class HudApi:
     def quit_app(self):
         quit_app()
 
+    def get_hud_settings(self):
+        return dict(hud_settings)
+
+    def set_start_minimized(self, value):
+        hud_settings["start_minimized"] = bool(value)
+        save_hud_settings(hud_settings)
+        return dict(hud_settings)
+
+    def restart_engine(self):
+        threading.Thread(target=restart_jarvis_engine, daemon=True).start()
+        return True
+
 
 def quit_app():
     global _shutting_down
@@ -340,6 +393,7 @@ def main():
         easy_drag=False,   # only .pywebview-drag-region elements drag the window
         transparent=False,
         on_top=ALWAYS_ON_TOP,
+        hidden=hud_settings.get("start_minimized", True),
         js_api=HudApi(),
     )
 
