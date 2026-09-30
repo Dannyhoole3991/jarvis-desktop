@@ -246,8 +246,20 @@ def build_tray_image():
 
 
 def show_window():
-    if window is not None:
-        window.show()
+    if window is None:
+        return
+    try:
+        # pywebview's WinForms resize()/move() both pass SWP_SHOWWINDOW to
+        # SetWindowPos unconditionally (confirmed by reading
+        # webview/platforms/winforms.py), so this also has the convenient
+        # side effect of un-hiding the window -- doing it here means a
+        # window that's been sitting hidden doesn't need to have been kept
+        # perfectly positioned the whole time; it's corrected fresh right
+        # when it's actually about to be seen.
+        _fill_work_area()
+    except Exception as error:
+        print(f"Could not re-size HUD before showing: {error}")
+    window.show()
 
 
 def hide_window():
@@ -357,16 +369,54 @@ def quit_app():
 # Entry point
 # ------------------------------------------------------------------
 
-def _maximize_on_startup():
-    # Confirmed live: a single fill 0.3s after window creation isn't
-    # enough right after a fresh PC boot -- this HUD auto-starts from the
-    # Windows Startup folder, and the display/work-area (monitor
-    # detection, DPI, taskbar) hadn't fully settled yet 46s after boot,
-    # so the one-shot fill locked in a wrong size (window ended up
-    # partly off-screen above the top edge). Retrying over the first
-    # ~20s means even if an early attempt reads a stale/wrong work area,
-    # a later one corrects it once things have actually settled.
-    gaps_between_attempts = (0.3, 0.7, 1, 2, 3, 4, 5, 4)  # cumulative: 0.3, 1, 2, 4, 7, 11, 16, 20
+def _startup_sequence():
+    # Deliberately hidden (when start_minimized) AFTER the page has
+    # genuinely loaded, not created hidden and not hidden on a blind
+    # timer. Confirmed live, in order, chasing this exact bug:
+    #  1. pywebview's own hidden=True creation path (a Show()/Hide() flash
+    #     at zero opacity, purely to force WebView2 to attach) races
+    #     WebView2's genuinely asynchronous init -- if it gets hidden again
+    #     before that finishes, WebView2 never completes a real paint, and
+    #     the window comes up permanently blank white whenever shown later.
+    #  2. Switching to "create visible, hide ourselves" on a fixed short
+    #     delay still raced: webview.start() spins up this function's
+    #     thread BEFORE calling guilib.create_window() on the main thread
+    #     (see webview/__init__.py), so an early hide() could run before
+    #     the native form's own creation-time Show() even happened, and
+    #     that later Show() would just override it.
+    #  3. Waiting on window.events.loaded (pywebview's real "page actually
+    #     finished loading" signal) fixed that race, but hide() then
+    #     appeared to silently not stick -- the window was visible again
+    #     moments later. Root cause: pywebview's WinForms resize()/move()
+    #     both pass SWP_SHOWWINDOW to SetWindowPos unconditionally
+    #     (confirmed by reading webview/platforms/winforms.py), so the
+    #     retry loop below, which keeps calling _fill_work_area() for
+    #     several seconds to handle a fresh-boot display-settling race,
+    #     was re-showing the window on every single retry.
+    # Fix: size the window ONCE after it has genuinely loaded, hide it
+    # immediately after that SAME call with nothing in between, and only
+    # keep re-fitting it on a timer for the rest of startup while it's
+    # actually still meant to be visible. A hidden window gets re-fit
+    # fresh in show_window() instead, right when it's about to be seen.
+    if window is None:
+        return
+    window.events.loaded.wait(15)
+    try:
+        _fill_work_area()
+    except Exception as error:
+        print(f"Could not size HUD to the work area on startup: {error}")
+
+    if hud_settings.get("start_minimized", True):
+        try:
+            hide_window()
+        except Exception as error:
+            print(f"Could not hide HUD on startup: {error}")
+        return
+
+    # Still visible -- keep correcting for the fresh-boot work-area
+    # settling race (confirmed live: display/taskbar detection can still
+    # be wrong up to ~46s after a real boot).
+    gaps_between_attempts = (0.7, 1, 2, 3, 4, 5, 4)  # cumulative from first fill: 1, 2, 4, 7, 11, 16, 20
     for gap in gaps_between_attempts:
         time.sleep(gap)
         try:
@@ -393,11 +443,22 @@ def main():
         easy_drag=False,   # only .pywebview-drag-region elements drag the window
         transparent=False,
         on_top=ALWAYS_ON_TOP,
-        hidden=hud_settings.get("start_minimized", True),
+        # NOT hidden=... here -- see _startup_sequence for why the window
+        # is always created visible and hidden afterward instead.
         js_api=HudApi(),
     )
 
-    webview.start(func=_maximize_on_startup)
+    # private_mode=False is deliberate, not a privacy tradeoff for this
+    # single-purpose app -- with the pywebview default (True), the WebView2
+    # backend on Windows points at a cache_dir from
+    # tempfile.TemporaryDirectory().name with no reference kept to the
+    # TemporaryDirectory object itself, so it can get garbage-collected
+    # (deleting that folder) while WebView2 is still initializing against
+    # it. Confirmed live: this produced exactly a blank white window that
+    # still responded to clicks/focus, with no error anywhere, and got
+    # worse the more the process was restarted. A real, persistent profile
+    # folder under %APPDATA%\pywebview avoids the race entirely.
+    webview.start(func=_startup_sequence, private_mode=False)
 
     # webview.start() returns once the window is closed/destroyed.
     quit_app()

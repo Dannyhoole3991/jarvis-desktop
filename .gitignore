@@ -19,6 +19,7 @@
 !jarvis_ask_user_mcp.py
 !jarvis_launcher.py
 !_active_dev_session.json
+!cloudflare_worker_failover.js
 
 # LibreHardwareMonitor: vendored third-party tool, not source code --
 # only track our own config for it, not its ~19MB of binaries/DLLs.

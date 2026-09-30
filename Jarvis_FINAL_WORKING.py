@@ -845,6 +845,12 @@ ELEVENLABS_SPEED = float(os.environ.get("JARVIS_ELEVENLABS_SPEED", "1.15"))
 
 JARVIS_PHONE_BACKEND_URL = os.environ.get("JARVIS_PHONE_BACKEND_URL", "").rstrip("/")
 JARVIS_PHONE_SECRET = os.environ.get("JARVIS_PHONE_SECRET", "")
+# Render is the fixed fallback the app.dj-ai.org failover Worker switches to
+# when the home server is down -- hardcoded (not read from
+# JARVIS_PHONE_BACKEND_URL) so it can still be reconciled directly even
+# when that env var now points at the Worker's own smart address instead
+# of either backend individually. See _pull_pending_conversation_from.
+RENDER_FALLBACK_URL = "https://jarvis-phone-sxs6.onrender.com"
 
 
 def _relay_speech_to_phone(text):
@@ -4597,26 +4603,21 @@ def add_to_memory(role, message):
         conversation_history.pop(0)
 
 
-def _pull_pending_conversation_from_phone():
+def _pull_pending_conversation_from(backend_url, label):
     """
-    One-time startup merge: the phone backend's /api/sync was designed
-    for exactly this (see its own docstring) but never actually called
-    from here until now. Confirmed live: a conversation held entirely on
-    the phone while this PC was off (so answered by the phone's own
-    cloud brain) left the PC's ask_jarvis with zero awareness of it once
-    started -- Danny had to re-explain everything. Fetch-and-clear, so
-    this PC becomes the one place that history ends up living long term,
-    matching the phone backend's own stated design. Only covers
-    offline-phone conversations -- anything said via the phone while this
-    PC was already running already reaches conversation_history directly
-    (see _run_on_pc's remote_commands path), so there's nothing to merge
-    for that case.
+    Fetch-and-clear merge of one backend's /api/sync mailbox into this
+    PC's own conversation_history, so this PC stays the one place
+    conversation history ends up living long term (see /api/sync's own
+    docstring on the Flask side). Used for both the normal backend
+    (JARVIS_PHONE_BACKEND_URL, now app.dj-ai.org's failover Worker) and,
+    separately, Render directly -- see _reconcile_phone_conversations for
+    why both are needed.
     """
-    if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
+    if not backend_url or not JARVIS_PHONE_SECRET:
         return
     try:
         response = requests.get(
-            f"{JARVIS_PHONE_BACKEND_URL}/api/sync",
+            f"{backend_url}/api/sync",
             headers={"Authorization": f"Bearer {JARVIS_PHONE_SECRET}"},
             timeout=6,
         )
@@ -4631,9 +4632,39 @@ def _pull_pending_conversation_from_phone():
             if reply_text:
                 add_to_memory("assistant", reply_text)
         if pending:
-            print(f"PHONE SYNC: merged {len(pending)} conversation turn(s) said to the phone while offline.")
+            print(f"PHONE SYNC ({label}): merged {len(pending)} conversation turn(s) said while offline.")
     except Exception as error:
-        print("Phone conversation sync error:", error)
+        print(f"Phone conversation sync error ({label}):", error)
+
+
+def _reconcile_phone_conversations():
+    """
+    JARVIS_PHONE_BACKEND_URL itself (the app.dj-ai.org failover Worker) is
+    already reconciled continuously elsewhere -- see _sync_phone_conversation,
+    called every ~3s from _phone_poll_loop. What that misses: the Worker
+    only proxies traffic, it doesn't share state between the home server
+    and Render, so anything said to the phone while the server was down
+    and Render was standing in gets queued in Render's OWN pending_sync,
+    not the server's. Left unchecked, that backlog would sit on Render
+    forever once the server recovers and the Worker starts routing there
+    again. Checking Render directly here, on its own schedule, is what
+    actually catches that. Safe to call repeatedly -- /api/sync fetches
+    AND clears, so there's nothing left to double-count next time.
+    """
+    _pull_pending_conversation_from(JARVIS_PHONE_BACKEND_URL, "primary")
+    if JARVIS_PHONE_BACKEND_URL.rstrip("/") != RENDER_FALLBACK_URL:
+        _pull_pending_conversation_from(RENDER_FALLBACK_URL, "render")
+
+
+def _reconcile_phone_conversations_loop():
+    while True:
+        time.sleep(600)  # every 10 minutes -- frequent enough that a
+        # recovered server doesn't leave a backlog stranded on Render for
+        # long, without hammering either backend.
+        try:
+            _reconcile_phone_conversations()
+        except Exception as error:
+            print("Phone conversation reconcile loop error:", error)
 
 def get_conversation_context():
     if not conversation_history:
@@ -12875,7 +12906,8 @@ print("If an unexpected error occurs, this window will stay open so you can read
 if _pending_crash_summary:
     threading.Thread(target=_investigate_pc_crash, args=(_pending_crash_summary,), daemon=True).start()
 
-_pull_pending_conversation_from_phone()
+_reconcile_phone_conversations()
+threading.Thread(target=_reconcile_phone_conversations_loop, daemon=True).start()
 
 while True:
     try:
