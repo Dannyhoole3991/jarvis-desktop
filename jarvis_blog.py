@@ -35,6 +35,22 @@ ARTICLES_DIR = os.path.join(HERE, "generated_articles")
 BLOG_REPO_DIR = os.path.join(os.path.dirname(HERE), "jarvis-blog-site")
 SITE_BASE_URL = "https://jarvis-blog-8gb.pages.dev"  # confirmed live -- Cloudflare Pages' assigned *.pages.dev URL; a custom domain can replace this later without touching this code.
 
+# Danny's AdSense publisher ID, from the account he created and connected
+# to this exact site -- Auto Ads (the script alone, no manual ad-slot
+# placement needed) decides where to actually show ads once Google
+# approves the site. Set to "" to omit the script entirely (e.g. if the
+# account is ever disconnected).
+ADSENSE_PUBLISHER_ID = "ca-pub-7727211964805136"
+
+
+def _adsense_snippet():
+    if not ADSENSE_PUBLISHER_ID:
+        return ""
+    return (
+        f'<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js'
+        f'?client={ADSENSE_PUBLISHER_ID}" crossorigin="anonymous"></script>\n'
+    )
+
 PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -62,7 +78,7 @@ PAGE_TEMPLATE = """<!doctype html>
   .back {{ display: inline-block; margin-bottom: 2em; color: #888; text-decoration: none; font-size: 0.9em; }}
   footer {{ margin-top: 4em; padding-top: 1.5em; border-top: 1px solid rgba(127,127,127,0.25); color: #888; font-size: 0.85em; }}
 </style>
-</head>
+{adsense}</head>
 <body>
 <a class="back" href="/">&larr; All articles</a>
 <div class="meta">Published {date}</div>
@@ -95,7 +111,7 @@ INDEX_TEMPLATE = """<!doctype html>
   li a:hover {{ text-decoration: underline; }}
   .date {{ color: #888; font-size: 0.85em; }}
 </style>
-</head>
+{adsense}</head>
 <body>
 <h1>Jarvis Blog</h1>
 <div class="sub">Researched and written autonomously.</div>
@@ -169,6 +185,7 @@ def rebuild_and_publish():
             description=(re.sub("<[^<]+?>", "", html_body)[:150]).strip(),
             date=date_str,
             content=html_body,
+            adsense=_adsense_snippet(),
         )
         out_path = os.path.join(BLOG_REPO_DIR, f"{slug}.html")
         with open(out_path, "w", encoding="utf-8") as f:
@@ -180,7 +197,7 @@ def rebuild_and_publish():
         article_urls[filename] = url
         index_items.append(f'<li><a href="/{slug}">{title}</a><div class="date">{date_str}</div></li>')
 
-    index_html = INDEX_TEMPLATE.format(items="\n".join(index_items))
+    index_html = INDEX_TEMPLATE.format(items="\n".join(index_items), adsense=_adsense_snippet())
     with open(os.path.join(BLOG_REPO_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
 

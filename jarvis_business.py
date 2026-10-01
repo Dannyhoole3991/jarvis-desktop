@@ -269,6 +269,21 @@ def queue_human_action(action_type, description, opportunity_id=None, experiment
             conn.close()
 
 
+def resolve_human_actions_like(description_substring, status="done"):
+    """Marks every human_action_queue entry containing this text as resolved -- used once Danny's actually done the thing it was asking for."""
+    with _db_lock:
+        conn = _connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE human_action_queue SET status = ? WHERE description LIKE ? AND status = 'pending'",
+                (status, f"%{description_substring}%"),
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
+
+
 def has_human_action_like(description_substring):
     """
     True if ANY human_action_queue entry ever (pending, done, or

@@ -10847,7 +10847,7 @@ def write_article_online(topic):
 # real is the whole point, not generating a plausible-looking plan for
 # something nobody can execute yet. Grows over time as more runners get
 # built; see run_business_cycle().
-BUSINESS_RUNNABLE_TYPES = {"content_article"}
+BUSINESS_RUNNABLE_TYPES = {"content_article", "print_on_demand"}
 
 
 def _parse_json_loose(text):
@@ -10888,16 +10888,28 @@ Hard rules, no exceptions:
   and generate images, and that's it for now. A later step of an idea CAN
   need a human to create an account or publish somewhere; that's fine and
   expected -- just the very first test must not.
-- Right now, only propose ideas with business_model_type exactly
-  "content_article" (a researched, written long-form article/blog post on a
-  specific topic, monetizable later via ads/affiliate/etc once published) --
-  that is the only experiment type Jarvis can actually execute end-to-end
-  today. Still genuinely compare and pick SPECIFIC topics/angles based on
-  real evidence of demand, not generic ones.
+- Right now, only propose ideas with business_model_type exactly one of these
+  two -- the only experiment types Jarvis can actually execute end-to-end
+  today:
+  - "content_article": a researched, written long-form article/blog post on
+    a specific topic, published to Jarvis's own blog automatically, later
+    monetizable via ads/affiliate once that's connected.
+  - "print_on_demand": a single AI-generated image/design (e.g. a poster,
+    pattern, or illustration) suitable for print products (t-shirts, mugs,
+    wall art, etc.) -- Jarvis generates and print-upscales the artwork
+    automatically; actually listing/selling it still needs a human to set
+    up a print-on-demand shop account (Redbubble/Etsy/etc.), same as
+    content_article needing ads connected later.
+  Still genuinely compare and pick SPECIFIC ideas based on real evidence of
+  demand, not generic ones.
 
-Return ONLY a JSON array (no other text), each item:
+Return ONLY a JSON array (no other text), each item EITHER:
 {"name": "short specific name", "business_model_type": "content_article",
  "description": "2-3 sentences on the specific angle and why", "topic": "the exact article topic/title to write"}
+OR:
+{"name": "short specific name", "business_model_type": "print_on_demand",
+ "description": "2-3 sentences on why this design/style and audience",
+ "image_prompt": "a detailed visual description for an AI image generator -- style, subject, composition, color palette"}
 """
 
 
@@ -10908,6 +10920,7 @@ Return ONLY a JSON array (no other text), each item:
 _BUSINESS_COST_DISCOVER = 0.03
 _BUSINESS_COST_EVIDENCE = 0.03
 _BUSINESS_COST_ARTICLE = 0.06
+_BUSINESS_COST_IMAGE = 0.06  # gpt-image-1 at 1024x1024
 
 
 def business_discover_opportunities(count=3):
@@ -10924,9 +10937,10 @@ def business_discover_opportunities(count=3):
             instructions=openai_safe_text(_BUSINESS_DISCOVERY_INSTRUCTIONS),
             tools=[{"type": "web_search"}],
             input=openai_safe_text(
-                f"Research and propose {count} specific, currently-relevant content_article "
-                "opportunities (real topics with evidence of real search/reader demand right now, "
-                "not generic evergreen guesses). Return the JSON array now."
+                f"Research and propose {count} specific, currently-relevant opportunities (real topics/designs "
+                "with evidence of real demand right now, not generic evergreen guesses). Use a genuine MIX of "
+                "both allowed business_model_types across the {count} -- not all the same one -- so they can "
+                "be honestly compared against each other. Return the JSON array now."
             ),
         )
         ideas = _parse_json_loose(response.output_text)
@@ -11100,6 +11114,94 @@ def run_content_article_experiment(experiment_id, opportunity):
     return True
 
 
+_PRINT_ON_DEMAND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_print_on_demand")
+
+
+def run_print_on_demand_experiment(experiment_id, opportunity):
+    """
+    Second fully-implemented runner: generates a real AI image (OpenAI
+    gpt-image-1), print-upscales it (reusing _upscale_for_print -- the
+    same free Lanczos upscale already built and chosen for the earlier
+    art/print-on-demand research), and saves a genuine print-ready file.
+
+    Unlike content_article, there's no automated "launch" here: every
+    print-on-demand marketplace (Redbubble, Etsy, Printful, ...) requires
+    a real human-created seller account, often with identity/payment
+    verification -- something Jarvis is never allowed to do for anyone.
+    So this runner's honest scope stops at "produced a real, ready-to-list
+    file", with a one-time (not per-design) request for that account.
+    """
+    if not jbiz.can_spend(_BUSINESS_COST_IMAGE):
+        jbiz.update_experiment(experiment_id, status="review", notes="Blocked by the daily budget cap before generating started.")
+        jbiz.log_decision("budget_block", f"Could not run '{opportunity['name']}' -- would exceed the daily budget cap.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        print(f"BUSINESS BUILD: blocked by budget cap for '{opportunity['name']}'.")
+        return False
+
+    evidence = {}
+    try:
+        evidence = json.loads(opportunity.get("evidence_json") or "{}")
+    except Exception:
+        pass
+    image_prompt = evidence.get("image_prompt") or opportunity["name"]
+
+    if not online_available():
+        jbiz.update_experiment(experiment_id, status="review", notes="OpenAI unavailable.")
+        jbiz.log_decision("build_failed", "OpenAI client unavailable.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    try:
+        result = openai_client.images.generate(model="gpt-image-1", prompt=image_prompt, size="1024x1024", n=1)
+        b64_data = result.data[0].b64_json
+        if not b64_data:
+            raise ValueError("no image data returned")
+    except Exception as error:
+        jbiz.update_experiment(experiment_id, status="review", notes=f"Image generation failed: {error}")
+        jbiz.log_lesson("failure", f"Image generation failed for '{opportunity['name']}': {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.log_decision("build_failed", f"Image generation error: {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    jbiz.record_spend(_BUSINESS_COST_IMAGE, experiment_id=experiment_id)
+
+    try:
+        os.makedirs(_PRINT_ON_DEMAND_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = _slugify(opportunity["name"])
+        image_bytes = base64.b64decode(b64_data)
+        try:
+            image_bytes = _upscale_for_print(image_bytes)
+        except Exception as error:
+            print("PRINT-ON-DEMAND: upscale failed, saving original resolution:", error)
+        file_path = os.path.join(_PRINT_ON_DEMAND_DIR, f"{timestamp}_{slug}.png")
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
+        meta_path = file_path[:-4] + ".json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({"name": opportunity["name"], "prompt": image_prompt, "timestamp": timestamp}, f, indent=2, ensure_ascii=False)
+    except Exception as error:
+        jbiz.update_experiment(experiment_id, status="review", notes=f"Image generated but saving failed: {error}")
+        jbiz.log_decision("build_failed", f"Could not save generated image: {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    jbiz.update_experiment(
+        experiment_id, status="review",
+        artifact_paths=[file_path],
+        notes=f"Print-ready design saved at {file_path}.",
+    )
+    jbiz.log_decision("build", f"Generated print-ready design at {file_path}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+    jbiz.log_lesson(
+        "insight", f"'{opportunity['name']}' is ready to list, but not listed anywhere yet -- real demand/sales still unmeasured.",
+        opportunity_id=opportunity["id"], experiment_id=experiment_id,
+    )
+    if not jbiz.has_human_action_like("print-on-demand shop account"):
+        jbiz.queue_human_action(
+            "create_account",
+            "Jarvis has designs ready to sell but no print-on-demand shop account (e.g. Redbubble, Etsy, Printful) to actually list them on -- "
+            "set one up and tell me which, and I'll start preparing listings for it.",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+    return True
+
+
 def run_business_cycle():
     """
     Thin, always-safe wrapper around _run_business_cycle_once -- this is
@@ -11159,6 +11261,9 @@ def _run_business_cycle_once():
         if candidate["business_model_type"] == "content_article":
             ok = run_content_article_experiment(exp_id, candidate)
             msg = f"Started and ran a content_article experiment on '{candidate['name']}' ({'succeeded' if ok else 'failed'})."
+        elif candidate["business_model_type"] == "print_on_demand":
+            ok = run_print_on_demand_experiment(exp_id, candidate)
+            msg = f"Started and ran a print_on_demand experiment on '{candidate['name']}' ({'succeeded' if ok else 'failed'})."
         else:
             msg = f"Selected '{candidate['name']}' but no runner is implemented for '{candidate['business_model_type']}' yet."
         print("BUSINESS CYCLE:", msg)
