@@ -20,6 +20,14 @@
 !jarvis_launcher.py
 !_active_dev_session.json
 !cloudflare_worker_failover.js
+!jarvis_business.py
+!jarvis_blog.py
+
+# jarvis_business.db (the real business brain -- opportunities, experiments,
+# money) and generated_articles/ (its content output) are deliberately left
+# ignored by the blanket "*" above -- this is Danny's live, growing business
+# data, not source code, so it stays untracked the same way Jarvis Phone's
+# data/ folder does elsewhere in this project.
 
 # LibreHardwareMonitor: vendored third-party tool, not source code --
 # only track our own config for it, not its ~19MB of binaries/DLLs.

@@ -1,5 +1,7 @@
 # Jarvis v53 - Windows 11 Executable Learning Plans (built directly from v52)
 from openai import OpenAI
+import jarvis_business as jbiz
+import jarvis_blog
 import re
 import requests
 import subprocess
@@ -660,6 +662,26 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, status=500)
             return
 
+        if self.path == "/business/summary":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send_json(jbiz.summary())
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=500)
+            return
+
+        if self.path == "/business/opportunities":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send_json({"opportunities": jbiz.list_opportunities(limit=50)})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=500)
+            return
+
         if self.path.startswith("/conversation"):
             # Confirmed live: the desktop HUD's chat log only ever showed
             # messages IT sent through /command -- a voice conversation
@@ -689,8 +711,17 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
+            return
+
+        if self.path == "/business/run_cycle":
+            # Runs in the background and returns immediately -- a cycle can
+            # involve several web-search-backed OpenAI calls and take a
+            # while; the dashboard polls /business/summary afterward to see
+            # what happened, same pattern as the Apps tab's rescan button.
+            threading.Thread(target=run_business_cycle, daemon=True).start()
+            self._send_json({"ok": True, "status": "started"})
             return
 
         if self.path == "/files/open":
@@ -1794,7 +1825,8 @@ threading.Thread(target=_phone_poll_loop, daemon=True).start()
 print("Type 'exit' to quit.")
 
 start_voice_listener()
-start_mobile_server()
+# start_mobile_server() is deliberately NOT called here -- see where it's
+# actually called, right before the main loop, for why.
 ensure_hardware_monitor_running()
 
 
@@ -10332,6 +10364,8 @@ def run_local_command_flow(command, user_message):
         return True
     if handle_scan_installed_apps_command(command):
         return True
+    if handle_business_command(command):
+        return True
     if handle_natural_app_command(command):
         return True
     if handle_extra_natural_commands(command):
@@ -10785,6 +10819,393 @@ def write_article_online(topic):
     except Exception as error:
         print("Article generation error:", error)
         return None
+
+
+# ============================================================
+# AUTONOMOUS BUSINESS LOOP
+#
+# The persistent "business brain" (opportunities, experiments, scoring,
+# budget, lessons, decisions) lives in jarvis_business.py as a clean,
+# independently-testable module with NO OpenAI dependency -- deliberately
+# separate so the decision math (weighted scoring, budget caps, dedup)
+# can be tested without needing a live API call. This section is the
+# part that DOES need OpenAI (real web-search-backed research) plus the
+# actual experiment runners, and glues it to that brain.
+#
+# Two hard limits, not stylistic choices: this never creates an account
+# or spends real money anywhere by itself -- anything that needs either
+# gets logged to jbiz.queue_human_action() and the experiment waits
+# there. And every opportunity is scored from evidence a real web search
+# actually gathered (see _business_gather_evidence), never from a model
+# just asserting "this one's good".
+# ============================================================
+
+# Business model types with a real, working experiment runner below.
+# Discovery can (and does) surface other kinds of ideas too -- they get
+# scored and stored like anything else, for honest comparison -- but
+# only these are ever actually selected to run, since running one for
+# real is the whole point, not generating a plausible-looking plan for
+# something nobody can execute yet. Grows over time as more runners get
+# built; see run_business_cycle().
+BUSINESS_RUNNABLE_TYPES = {"content_article"}
+
+
+def _parse_json_loose(text):
+    """
+    OpenAI models asked for JSON reliably wrap it in a ```json fence or
+    add a sentence before/after it despite instructions not to -- this
+    strips that rather than letting json.loads blow up on it.
+    """
+    if not text:
+        return None
+    text = str(text).strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # Last resort: grab the first {...} or [...] block in the text.
+    match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return None
+    return None
+
+
+_BUSINESS_DISCOVERY_INSTRUCTIONS = """You are Jarvis's business research function, discovering REAL, legitimate
+online income opportunities for Danny using live web search -- not
+brainstorming from general knowledge.
+
+Hard rules, no exceptions:
+- Never propose spam, fraud, deception, impersonation, fake reviews/engagement,
+  credential theft, bypassing platform security/CAPTCHAs, or anything illegal
+  or against a platform's terms of service.
+- Only propose ideas whose FIRST testable step needs no new paid account and
+  no payment -- Jarvis can research, write long-form articles with citations,
+  and generate images, and that's it for now. A later step of an idea CAN
+  need a human to create an account or publish somewhere; that's fine and
+  expected -- just the very first test must not.
+- Right now, only propose ideas with business_model_type exactly
+  "content_article" (a researched, written long-form article/blog post on a
+  specific topic, monetizable later via ads/affiliate/etc once published) --
+  that is the only experiment type Jarvis can actually execute end-to-end
+  today. Still genuinely compare and pick SPECIFIC topics/angles based on
+  real evidence of demand, not generic ones.
+
+Return ONLY a JSON array (no other text), each item:
+{"name": "short specific name", "business_model_type": "content_article",
+ "description": "2-3 sentences on the specific angle and why", "topic": "the exact article topic/title to write"}
+"""
+
+
+# Rough flat estimates for a Responses API call with web_search enabled --
+# good enough for a budget GATE, not meant to be exact accounting. Used
+# both to check can_spend() BEFORE the call (the actual guardrail) and
+# to record_spend() after it.
+_BUSINESS_COST_DISCOVER = 0.03
+_BUSINESS_COST_EVIDENCE = 0.03
+_BUSINESS_COST_ARTICLE = 0.06
+
+
+def business_discover_opportunities(count=3):
+    """Real web-search-backed discovery. Returns the list of new opportunity ids saved (skips anything already known)."""
+    if not online_available():
+        return []
+    if not jbiz.can_spend(_BUSINESS_COST_DISCOVER):
+        jbiz.log_decision("budget_block", f"Skipped discovery -- would exceed the daily budget cap (estimated cost £{_BUSINESS_COST_DISCOVER:.2f}).")
+        print("BUSINESS DISCOVER: blocked by budget cap.")
+        return []
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(_BUSINESS_DISCOVERY_INSTRUCTIONS),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(
+                f"Research and propose {count} specific, currently-relevant content_article "
+                "opportunities (real topics with evidence of real search/reader demand right now, "
+                "not generic evergreen guesses). Return the JSON array now."
+            ),
+        )
+        ideas = _parse_json_loose(response.output_text)
+        if not isinstance(ideas, list):
+            print("BUSINESS DISCOVER: model did not return a JSON array, got:", str(response.output_text)[:200])
+            return []
+        jbiz.record_spend(_BUSINESS_COST_DISCOVER)
+        saved = []
+        for idea in ideas:
+            if not isinstance(idea, dict):
+                continue
+            name = str(idea.get("name", "")).strip()
+            business_model_type = str(idea.get("business_model_type", "")).strip() or "content_article"
+            if not name:
+                continue
+            if jbiz.already_known(name, business_model_type):
+                continue
+            opp_id = jbiz.save_opportunity(name, business_model_type, str(idea.get("description", "")), idea)
+            jbiz.log_decision(
+                "discover",
+                f"Discovered via live web research: {idea.get('description', '')}",
+                opportunity_id=opp_id,
+            )
+            saved.append(opp_id)
+        print(f"BUSINESS DISCOVER: {len(saved)} new opportunit(y/ies) saved out of {len(ideas)} proposed.")
+        return saved
+    except Exception as error:
+        print("Business discovery error:", error)
+        return []
+
+
+_BUSINESS_EVIDENCE_INSTRUCTIONS = """You are Jarvis's business research function, gathering REAL evidence about
+ONE specific opportunity using live web search, to score it objectively.
+Research actual current demand signals, real competitor examples, typical
+costs, and realistic revenue for this SPECIFIC idea -- do not guess or
+default to the middle score out of convenience; look it up.
+
+Return ONLY a JSON object (no other text), all *_score fields 0-10:
+{
+ "demand_score": 0-10 (10=strong evidenced current demand),
+ "evidence_quality_score": 0-10 (10=found strong concrete evidence, 0=found almost nothing),
+ "automation_score": 0-10 (10=Jarvis can do nearly all of it with no ongoing human time),
+ "scalability_score": 0-10 (10=easily repeated/scaled with more of the same effort),
+ "margin_score": 0-10 (10=very high margin),
+ "competition_score": 0-10 (10=LITTLE competition, 0=saturated),
+ "startup_cost_score": 0-10 (10=very cheap/free to start),
+ "operating_cost_score": 0-10 (10=very cheap to keep running),
+ "time_required_score": 0-10 (10=very little ongoing time needed),
+ "complexity_score": 0-10 (10=very simple to execute),
+ "platform_dependence_score": 0-10 (10=not reliant on one platform's goodwill),
+ "risk_score": 0-10 (10=very low risk of wasted effort or policy violation),
+ "startup_cost_est": number (GBP, realistic one-off cost),
+ "operating_cost_est_monthly": number (GBP/month),
+ "revenue_est_monthly": number (GBP/month, realistic not best-case),
+ "evidence_summary": "2-4 sentences citing what you actually found"
+}
+"""
+
+
+def business_gather_evidence(opportunity_id):
+    """Real web-search-backed research for one opportunity, scored deterministically by jarvis_business.score_opportunity."""
+    opp = jbiz.get_opportunity(opportunity_id)
+    if not opp or not online_available():
+        return None
+    if not jbiz.can_spend(_BUSINESS_COST_EVIDENCE):
+        jbiz.log_decision("budget_block", f"Skipped researching '{opp['name']}' -- would exceed the daily budget cap.", opportunity_id=opportunity_id)
+        print(f"BUSINESS EVIDENCE: blocked by budget cap for '{opp['name']}'.")
+        return None
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(_BUSINESS_EVIDENCE_INSTRUCTIONS),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(
+                f"Research this opportunity and return the scoring JSON now.\n"
+                f"Name: {opp['name']}\nDescription: {opp['description']}"
+            ),
+        )
+        evidence = _parse_json_loose(response.output_text)
+        if not isinstance(evidence, dict):
+            print("BUSINESS EVIDENCE: model did not return a JSON object for", opp["name"])
+            return None
+        jbiz.record_spend(_BUSINESS_COST_EVIDENCE)
+        total, reasoning = jbiz.score_opportunity(opportunity_id, evidence)
+        print(f"BUSINESS EVIDENCE: '{opp['name']}' scored {total:.2f}/10")
+        return total
+    except Exception as error:
+        print("Business evidence error:", error)
+        return None
+
+
+def run_content_article_experiment(experiment_id, opportunity):
+    """
+    The one fully-implemented experiment runner so far: researches and
+    writes a real, publishable article (reusing write_article_online),
+    then actually publishes it -- jarvis_blog.rebuild_and_publish() commits
+    the rendered page to the jarvis-blog GitHub repo, which Cloudflare
+    Pages auto-deploys (same push-to-deploy pattern already used for
+    Jarvis Phone -> Render). No human step for THIS part anymore.
+
+    The one thing still genuinely human-only for this business line is
+    turning on actual monetization (ads/affiliate) -- that needs a real
+    account Jarvis cannot create for itself. Queued once, not per
+    article, the first time there's a live article with nowhere to earn
+    from yet.
+    """
+    if not jbiz.can_spend(_BUSINESS_COST_ARTICLE):
+        jbiz.update_experiment(experiment_id, status="review", notes="Blocked by the daily budget cap before writing started.")
+        jbiz.log_decision("budget_block", f"Could not run '{opportunity['name']}' -- would exceed the daily budget cap.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.queue_human_action(
+            "other", f"Daily budget cap reached -- '{opportunity['name']}' is waiting until tomorrow (or a higher cap).",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+        print(f"BUSINESS BUILD: blocked by budget cap for '{opportunity['name']}'.")
+        return False
+
+    evidence = {}
+    try:
+        evidence = json.loads(opportunity.get("evidence_json") or "{}")
+    except Exception:
+        pass
+    topic = evidence.get("topic") or opportunity["name"]
+
+    article_path = write_article_online(topic)
+    if not article_path:
+        jbiz.update_experiment(experiment_id, status="review", notes="Article generation failed.")
+        jbiz.log_lesson(
+            "failure", f"Article generation failed for '{opportunity['name']}' -- no output from write_article_online.",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+        jbiz.log_decision("build_failed", "Article generation returned nothing.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    jbiz.record_spend(_BUSINESS_COST_ARTICLE, experiment_id=experiment_id)
+    jbiz.log_decision("build", f"Generated and saved article draft at {article_path}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+
+    try:
+        published_ok, publish_msg, article_urls = jarvis_blog.rebuild_and_publish()
+    except Exception as error:
+        published_ok, publish_msg, article_urls = False, f"Publisher crashed: {error}", {}
+
+    if published_ok:
+        live_url = article_urls.get(os.path.basename(article_path), "")
+        jbiz.update_experiment(
+            experiment_id, status="review",
+            artifact_paths=[article_path, live_url] if live_url else [article_path],
+            notes=f"Published live at {live_url}" if live_url else f"Published ({publish_msg}).",
+        )
+        jbiz.log_decision("launch", f"Published to the live site: {live_url or publish_msg}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.log_lesson(
+            "insight", f"'{opportunity['name']}' is now live at {live_url} -- real performance (traffic/revenue) still unmeasured; no analytics/monetization connected yet.",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+        # Queued once, not per article -- real revenue needs an actual
+        # monetization account, which only Danny can create.
+        if not jbiz.has_human_action_like("needs an ads or affiliate account"):
+            jbiz.queue_human_action(
+                "create_account",
+                "The blog is live and publishing articles automatically, but has no way to earn yet -- "
+                "it needs an ads or affiliate account (e.g. Google AdSense) set up and connected to actually make money from it.",
+                opportunity_id=opportunity["id"], experiment_id=experiment_id,
+            )
+    else:
+        jbiz.update_experiment(experiment_id, status="review", notes=f"Article drafted but publishing failed: {publish_msg}")
+        jbiz.log_decision("publish_failed", publish_msg, opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.log_lesson("failure", f"Publishing '{opportunity['name']}' failed: {publish_msg}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.queue_human_action(
+            "other", f"Auto-publish failed for \"{opportunity['name']}\" ({publish_msg}) -- draft saved at {article_path}.",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+    return True
+
+
+def run_business_cycle():
+    """
+    Thin, always-safe wrapper around _run_business_cycle_once -- this is
+    the thing called from a bare background thread (both the POST
+    endpoint and the scheduler loop), so an unexpected exception here
+    must never silently kill that thread with nothing logged anywhere.
+    Confirmed by design, not assumed: every *_business_* helper already
+    catches its own OpenAI/parsing errors internally and degrades
+    gracefully, but this is the last line of defence for anything that
+    still gets through (e.g. a DB error).
+    """
+    try:
+        return _run_business_cycle_once()
+    except Exception as error:
+        msg = f"Business cycle crashed: {error}"
+        print("BUSINESS CYCLE ERROR:", error)
+        try:
+            jbiz.log_decision("error", msg)
+        except Exception:
+            pass
+        return msg
+
+
+def _run_business_cycle_once():
+    """
+    One real pass of DISCOVER -> RESEARCH -> EVALUATE -> SELECT -> BUILD,
+    doing exactly one meaningful action per call so each run stays small
+    and auditable in decisions_log, rather than one call trying to do
+    the whole loop silently. Call run_business_cycle() repeatedly (see
+    the background scheduler thread, or the "run a business cycle" voice
+    command) to actually advance through the loop over time.
+
+    Deliberately throttles on a pending-human-action backlog: there is
+    no point generating endless unpublished drafts nobody has reviewed
+    yet, and Danny asked to be able to inspect what Jarvis has done
+    rather than being flooded by it.
+    """
+    jbiz.log_decision("cycle_start", "Starting a business cycle.")
+
+    pending_actions = jbiz.summary().get("pending_human_actions", [])
+    if len(pending_actions) >= 3:
+        msg = f"Paused: {len(pending_actions)} item(s) already waiting on Danny in the human action queue."
+        jbiz.log_decision("pause", msg)
+        print("BUSINESS CYCLE:", msg)
+        return msg
+
+    candidate = jbiz.select_best_runnable_opportunity(list(BUSINESS_RUNNABLE_TYPES))
+    if candidate:
+        exp_id = jbiz.start_experiment(
+            candidate["id"], candidate["business_model_type"],
+            hypothesis=f"Testing: {candidate['name']} (score {candidate['total_score']:.2f}/10)",
+        )
+        jbiz.log_decision(
+            "select", f"Selected '{candidate['name']}' (score {candidate['total_score']:.2f}/10) to test -- highest-scored runnable opportunity.",
+            opportunity_id=candidate["id"], experiment_id=exp_id,
+        )
+        if candidate["business_model_type"] == "content_article":
+            ok = run_content_article_experiment(exp_id, candidate)
+            msg = f"Started and ran a content_article experiment on '{candidate['name']}' ({'succeeded' if ok else 'failed'})."
+        else:
+            msg = f"Selected '{candidate['name']}' but no runner is implemented for '{candidate['business_model_type']}' yet."
+        print("BUSINESS CYCLE:", msg)
+        return msg
+
+    unscored = jbiz.list_opportunities(status="discovered", limit=3)
+    if unscored:
+        scored_count = 0
+        for opp in unscored:
+            if business_gather_evidence(opp["id"]) is not None:
+                scored_count += 1
+        msg = f"Scored {scored_count}/{len(unscored)} discovered opportunit(y/ies)."
+        print("BUSINESS CYCLE:", msg)
+        return msg
+
+    new_ids = business_discover_opportunities(count=3)
+    msg = f"Discovered {len(new_ids)} new opportunit(y/ies)."
+    print("BUSINESS CYCLE:", msg)
+    return msg
+
+
+def _business_cycle_loop():
+    """Background scheduler: one cycle roughly every 2 hours while the engine is up -- matches the '3-6 hours/day' framing loosely without needing a precise daily-window scheduler for v1."""
+    while True:
+        time.sleep(7200)
+        try:
+            run_business_cycle()
+        except Exception as error:
+            print("Business cycle loop error:", error)
+
+
+def handle_business_command(command):
+    """Voice/text triggers for manually running or checking the business loop."""
+    c = command.strip().lower()
+    if c in ("run a business cycle", "run the business cycle", "do a business cycle", "business cycle"):
+        result = run_business_cycle()
+        say(f"Done, sir. {result}")
+        return True
+    if c in ("business status", "business update", "how's the business doing", "how is the business doing"):
+        s = jbiz.summary()
+        say(
+            f"Sir: {s['experiment_counts'].get('review', 0) + s['experiment_counts'].get('running', 0)} active experiment(s), "
+            f"£{s['profit_total']:.2f} profit so far, £{s['budget']['spent_today']:.2f} spent today of the £{s['budget']['daily_cap']:.2f} cap, "
+            f"and {len(s['pending_human_actions'])} thing(s) waiting on you."
+        )
+        return True
+    return False
 
 
 
@@ -12908,6 +13329,19 @@ if _pending_crash_summary:
 
 _reconcile_phone_conversations()
 threading.Thread(target=_reconcile_phone_conversations_loop, daemon=True).start()
+threading.Thread(target=_business_cycle_loop, daemon=True).start()
+
+# Confirmed live: start_mobile_server() used to run near the top of the
+# file (right after start_voice_listener()), which starts a real
+# ThreadingHTTPServer in a background thread immediately -- meaning it
+# could, and did, start serving real requests while the REST of this
+# file was still executing top-to-bottom on the main thread. Any request
+# for an endpoint whose handler references a global defined further down
+# the file (e.g. /last_image's _last_generated_image_lock, defined
+# thousands of lines later) could hit a genuine NameError in that
+# window. Moved here, alongside the file's other "only run once
+# everything has definitely loaded" calls, for the same reason as those.
+start_mobile_server()
 
 while True:
     try:

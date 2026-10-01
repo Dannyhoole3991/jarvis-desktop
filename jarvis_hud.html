@@ -277,6 +277,7 @@
   <button class="nav-item" data-tab="files" title="Files"><span class="nav-icon">&#128193;</span><span class="nav-label">Files</span></button>
   <button class="nav-item" data-tab="apps" title="Apps"><span class="nav-icon">&#9635;</span><span class="nav-label">Apps</span></button>
   <button class="nav-item" data-tab="system" title="System"><span class="nav-icon">&#128202;</span><span class="nav-label">System</span></button>
+  <button class="nav-item" data-tab="business" title="Business"><span class="nav-icon">&#128176;</span><span class="nav-label">Business</span></button>
   <div class="sidebar-spacer"></div>
   <button class="nav-item" data-tab="settings" title="Settings"><span class="nav-icon">&#9881;</span><span class="nav-label">Settings</span></button>
 </div>
@@ -337,6 +338,30 @@
   <div class="panel-card" id="systemCard"></div>
   <h2>Recent activity</h2>
   <div class="panel-card" id="recentActivityCard"></div>
+</div>
+
+<div class="tab-panel" id="tabBusiness" style="display:none;">
+  <h2>Business</h2>
+  <div class="panel-card" id="businessObjectiveCard"></div>
+
+  <h2>Today</h2>
+  <div class="panel-card" id="businessTodayCard"></div>
+
+  <h2>Active experiments</h2>
+  <div class="panel-card" id="businessExperimentsCard"></div>
+
+  <h2>Next actions <span class="panel-hint" style="font-weight:400;">(things only you can do)</span></h2>
+  <div class="panel-card" id="businessActionsCard"></div>
+
+  <h2>Lessons learned</h2>
+  <div class="panel-card" id="businessLessonsCard"></div>
+
+  <h2>Recent decisions</h2>
+  <div class="panel-card" id="businessDecisionsCard"></div>
+
+  <div style="margin:18px 0 8px 0;">
+    <button class="panel-btn" id="runBusinessCycleBtn">Run a cycle now</button>
+  </div>
 </div>
 
 <div class="tab-panel" id="tabSettings" style="display:none;">
@@ -939,13 +964,13 @@ modeToggleBtn.addEventListener("click", () => {
 // others are new utility panels. A pure show/hide swap, same spirit as
 // the orb/window-mode toggle: nothing underneath is torn down.
 // ============================================================
-const TAB_IDS = ["chat", "files", "apps", "system", "settings"];
+const TAB_IDS = ["chat", "files", "apps", "system", "business", "settings"];
 let activeTab = "chat";
 function switchTab(tab) {
   if (!TAB_IDS.includes(tab)) return;
   activeTab = tab;
   document.getElementById("tabChat").style.display = tab === "chat" ? "" : "none";
-  for (const other of ["files", "apps", "system", "settings"]) {
+  for (const other of ["files", "apps", "system", "business", "settings"]) {
     document.getElementById("tab" + other[0].toUpperCase() + other.slice(1)).style.display = tab === other ? "" : "none";
   }
   document.querySelectorAll(".nav-item").forEach(btn => {
@@ -954,6 +979,7 @@ function switchTab(tab) {
   if (tab === "files") refreshFilesList(currentFilesPath);
   if (tab === "apps") refreshAppsList();
   if (tab === "system") refreshSystemDetail();
+  if (tab === "business") refreshBusinessPanel();
   if (tab === "settings") refreshSettingsPanel();
 }
 document.querySelectorAll(".nav-item").forEach(btn => {
@@ -1147,6 +1173,95 @@ function ensureSystemPolling() {
   }, 3000);
 }
 ensureSystemPolling();
+
+// ------------------------------------------------------------
+// Business -- the autonomous business loop's dashboard. Read-only
+// (the one action here, "Run a cycle now", just nudges the loop --
+// everything else is Jarvis's own doing, logged for Danny to inspect
+// rather than operate).
+// ------------------------------------------------------------
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text == null ? "" : String(text);
+  return div.innerHTML;
+}
+function timeAgoLabel(isoString) {
+  if (!isoString) return "";
+  const then = new Date(isoString).getTime();
+  if (Number.isNaN(then)) return isoString;
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
+}
+async function refreshBusinessPanel() {
+  try {
+    const res = await fetch(BASE + "/business/summary", { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+    const s = await res.json();
+    if (s.error) throw new Error(s.error);
+
+    document.getElementById("businessObjectiveCard").innerHTML = `
+      <div class="panel-row"><div>Target</div><div>&pound;${s.target_daily_revenue[0]}&ndash;&pound;${s.target_daily_revenue[1]} / day</div></div>
+      <div class="panel-row"><div>Profit so far (all time)</div><div>&pound;${s.profit_total.toFixed(2)}</div></div>
+      <div class="panel-row"><div>Daily spend cap</div><div>&pound;${s.budget.spent_today.toFixed(2)} / &pound;${s.budget.daily_cap.toFixed(2)}</div></div>
+    `;
+
+    const oc = s.opportunity_counts || {}, ec = s.experiment_counts || {};
+    document.getElementById("businessTodayCard").innerHTML = `
+      <div class="panel-row"><div>Opportunities discovered</div><div>${Object.values(oc).reduce((a,b)=>a+b,0)}</div></div>
+      <div class="panel-row"><div>Opportunities scored</div><div>${(oc.scored||0) + (oc.testing||0)}</div></div>
+      <div class="panel-row"><div>Experiments run</div><div>${Object.values(ec).reduce((a,b)=>a+b,0)}</div></div>
+      <div class="panel-row"><div>Total spent</div><div>&pound;${s.cost_total.toFixed(2)}</div></div>
+      <div class="panel-row"><div>Total revenue</div><div>&pound;${s.revenue_total.toFixed(2)}</div></div>
+    `;
+
+    const expCard = document.getElementById("businessExperimentsCard");
+    expCard.innerHTML = s.active_experiments.length
+      ? s.active_experiments.map(e => `
+          <div class="panel-row">
+            <div>${escapeHtml(e.opportunity_name)} <span class="panel-hint">(${escapeHtml(e.business_model_type)}, ${escapeHtml(e.status)})</span></div>
+            <div>&pound;${(e.cost_spent||0).toFixed(2)} spent</div>
+          </div>`).join("")
+      : `<div class="files-empty">Nothing active right now.</div>`;
+
+    const actionsCard = document.getElementById("businessActionsCard");
+    actionsCard.innerHTML = s.pending_human_actions.length
+      ? s.pending_human_actions.map(a => `
+          <div class="panel-row">
+            <div>${escapeHtml(a.description)} <span class="panel-hint">(${escapeHtml(a.action_type)})</span></div>
+            <div class="panel-hint">${timeAgoLabel(a.created_at)}</div>
+          </div>`).join("")
+      : `<div class="files-empty">Nothing waiting on you.</div>`;
+
+    const lessonsCard = document.getElementById("businessLessonsCard");
+    lessonsCard.innerHTML = s.recent_lessons.length
+      ? s.recent_lessons.map(l => `
+          <div class="recent-action-line"><span class="time">[${escapeHtml(l.category)}]</span>${escapeHtml(l.lesson_text)}</div>`).join("")
+      : `<div class="files-empty">No lessons recorded yet.</div>`;
+
+    const decisionsCard = document.getElementById("businessDecisionsCard");
+    decisionsCard.innerHTML = s.recent_decisions.length
+      ? s.recent_decisions.slice(0, 10).map(d => `
+          <div class="recent-action-line"><span class="time">${escapeHtml(d.decision_type)}</span>${escapeHtml((d.reasoning||"").split("\n")[0])}</div>`).join("")
+      : `<div class="files-empty">No decisions logged yet.</div>`;
+  } catch (err) {
+    document.getElementById("businessObjectiveCard").innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+}
+document.getElementById("runBusinessCycleBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("runBusinessCycleBtn");
+  btn.textContent = "Running...";
+  btn.disabled = true;
+  try {
+    await fetch(BASE + "/business/run_cycle", { method: "POST", headers: authHeaders() });
+  } catch (err) {}
+  setTimeout(async () => {
+    await refreshBusinessPanel();
+    btn.textContent = "Run a cycle now";
+    btn.disabled = false;
+  }, 20000);
+});
 
 // ------------------------------------------------------------
 // Settings
