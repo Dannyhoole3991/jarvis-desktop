@@ -51,6 +51,29 @@ def _adsense_snippet():
         f'?client={ADSENSE_PUBLISHER_ID}" crossorigin="anonymous"></script>\n'
     )
 
+
+# Cloudflare Web Analytics site token for jarvis-blog-8gb.pages.dev
+# (Web Analytics > Add a site > JS Snippet method -- this *.pages.dev
+# hostname isn't a Cloudflare-proxied zone, so it needs the manual
+# snippet rather than automatic setup). Privacy-first, no cookies --
+# this is what lets the business loop eventually tell whether anything
+# it publishes is actually being read, instead of never finding out.
+CF_ANALYTICS_TOKEN = "653543c7ef2d480da586f40d4772967e"
+
+
+def _analytics_snippet():
+    if not CF_ANALYTICS_TOKEN:
+        return ""
+    return (
+        f"<script defer src='https://static.cloudflareinsights.com/beacon.min.js' "
+        f'data-cf-beacon=\'{{"token": "{CF_ANALYTICS_TOKEN}"}}\'></script>\n'
+    )
+
+
+def _head_extras():
+    return _adsense_snippet() + _analytics_snippet()
+
+
 PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -78,7 +101,7 @@ PAGE_TEMPLATE = """<!doctype html>
   .back {{ display: inline-block; margin-bottom: 2em; color: #888; text-decoration: none; font-size: 0.9em; }}
   footer {{ margin-top: 4em; padding-top: 1.5em; border-top: 1px solid rgba(127,127,127,0.25); color: #888; font-size: 0.85em; }}
 </style>
-{adsense}</head>
+{head_extras}</head>
 <body>
 <a class="back" href="/">&larr; All articles</a>
 <div class="meta">Published {date}</div>
@@ -111,7 +134,7 @@ INDEX_TEMPLATE = """<!doctype html>
   li a:hover {{ text-decoration: underline; }}
   .date {{ color: #888; font-size: 0.85em; }}
 </style>
-{adsense}</head>
+{head_extras}</head>
 <body>
 <h1>Jarvis Blog</h1>
 <div class="sub">Researched and written autonomously.</div>
@@ -185,7 +208,7 @@ def rebuild_and_publish():
             description=(re.sub("<[^<]+?>", "", html_body)[:150]).strip(),
             date=date_str,
             content=html_body,
-            adsense=_adsense_snippet(),
+            head_extras=_head_extras(),
         )
         out_path = os.path.join(BLOG_REPO_DIR, f"{slug}.html")
         with open(out_path, "w", encoding="utf-8") as f:
@@ -197,7 +220,7 @@ def rebuild_and_publish():
         article_urls[filename] = url
         index_items.append(f'<li><a href="/{slug}">{title}</a><div class="date">{date_str}</div></li>')
 
-    index_html = INDEX_TEMPLATE.format(items="\n".join(index_items), adsense=_adsense_snippet())
+    index_html = INDEX_TEMPLATE.format(items="\n".join(index_items), head_extras=_head_extras())
     with open(os.path.join(BLOG_REPO_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
 
