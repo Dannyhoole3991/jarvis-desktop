@@ -243,6 +243,28 @@ def log_decision(decision_type, reasoning, opportunity_id=None, experiment_id=No
             conn.close()
 
 
+def record_metric(experiment_id, traffic=None, conversions=None, conversion_rate=None,
+                   revenue=None, cost=None, notes=None):
+    """
+    Records one real, timestamped measurement for an experiment (e.g. a
+    pageview count pulled from Cloudflare Web Analytics). Appends rather
+    than overwrites -- the metrics table is a time series, so calling
+    this repeatedly over an experiment's life builds a real trend, not
+    just a single snapshot.
+    """
+    with _db_lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO metrics (experiment_id, recorded_at, traffic, conversions, conversion_rate, revenue, cost, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (experiment_id, _now(), traffic, conversions, conversion_rate, revenue, cost, notes),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def log_lesson(category, lesson_text, opportunity_id=None, experiment_id=None):
     with _db_lock:
         conn = _connect()
@@ -622,7 +644,9 @@ def summary():
                 "SELECT * FROM human_action_queue WHERE status = 'pending' ORDER BY id DESC"
             ).fetchall()]
             active_experiments = [dict(r) for r in conn.execute(
-                "SELECT e.*, o.name AS opportunity_name FROM experiments e "
+                "SELECT e.*, o.name AS opportunity_name, "
+                "(SELECT traffic FROM metrics m WHERE m.experiment_id = e.id ORDER BY m.id DESC LIMIT 1) AS latest_traffic "
+                "FROM experiments e "
                 "JOIN opportunities o ON o.id = e.opportunity_id "
                 "WHERE e.status IN ('running', 'review') ORDER BY e.id DESC"
             ).fetchall()]

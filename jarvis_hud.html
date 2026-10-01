@@ -1220,7 +1220,7 @@ async function refreshBusinessPanel() {
     expCard.innerHTML = s.active_experiments.length
       ? s.active_experiments.map(e => `
           <div class="panel-row">
-            <div>${escapeHtml(e.opportunity_name)} <span class="panel-hint">(${escapeHtml(e.business_model_type)}, ${escapeHtml(e.status)})</span></div>
+            <div>${escapeHtml(e.opportunity_name)} <span class="panel-hint">(${escapeHtml(e.business_model_type)}, ${escapeHtml(e.status)}${e.latest_traffic != null ? ", " + e.latest_traffic + " views" : ""})</span></div>
             <div>&pound;${(e.cost_spent||0).toFixed(2)} spent</div>
           </div>`).join("")
       : `<div class="files-empty">Nothing active right now.</div>`;

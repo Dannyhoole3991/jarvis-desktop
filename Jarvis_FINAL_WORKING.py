@@ -2,6 +2,7 @@
 from openai import OpenAI
 import jarvis_business as jbiz
 import jarvis_blog
+import jarvis_analytics
 import re
 import requests
 import subprocess
@@ -11202,6 +11203,107 @@ def run_print_on_demand_experiment(experiment_id, opportunity):
     return True
 
 
+# A published article has no backlinks or promotion yet, so real traffic
+# starts near zero regardless of quality -- these thresholds are
+# deliberately lenient and were chosen for that reason, not tuned against
+# real data (there wasn't any yet when they were set). _ABANDON_AGE_DAYS
+# gives an article time to possibly get indexed/found before judging it;
+# the two traffic thresholds are a low bar (abandon) and a modest one
+# (scale) rather than anything resembling real marketing benchmarks.
+_ANALYSIS_ABANDON_AGE_DAYS = 10
+_ANALYSIS_ABANDON_TRAFFIC = 3
+_ANALYSIS_SCALE_TRAFFIC = 15
+
+
+def business_analyse_published_content():
+    """
+    Real MEASURE -> ANALYSE -> SCALE-OR-ABANDON step for content_article
+    experiments: pulls actual pageview counts per article from Cloudflare
+    Web Analytics (the beacon jarvis_blog.py already injects into every
+    published page), records them as a real, timestamped metric every
+    time this runs, and -- once an article has had a fair amount of time
+    live -- deterministically scales or abandons it based on that real
+    number. Nothing here asks a model whether an article "did well";
+    it's a plain pageview count against a fixed threshold, same
+    evidence-based-not-vibes-based principle as score_opportunity().
+
+    Revenue isn't part of this yet -- AdSense needs to approve the site
+    and there's no revenue-reporting API wired up -- so traffic is
+    honestly the only real signal available right now. Returns None if
+    analytics isn't configured (see jarvis_analytics.available()), or a
+    list of short result strings (one per experiment actually touched;
+    can be empty if none exist yet or none have a live URL).
+    """
+    if not jarvis_analytics.available():
+        return None
+
+    candidates = [
+        e for e in jbiz.list_experiments(status="review", limit=200)
+        if e["business_model_type"] == "content_article"
+    ]
+    if not candidates:
+        return []
+
+    by_path = jarvis_analytics.fetch_pageviews_by_path(days=30)
+    if by_path is None:
+        return None
+
+    now = datetime.datetime.now()
+    results = []
+    for exp in candidates:
+        try:
+            started = datetime.datetime.fromisoformat(exp["started_at"])
+        except Exception:
+            continue
+
+        try:
+            artifact_paths = json.loads(exp.get("artifact_paths") or "[]")
+        except Exception:
+            artifact_paths = []
+        live_url = next((p for p in artifact_paths if isinstance(p, str) and p.startswith("http")), None)
+        if not live_url:
+            continue
+
+        age_days = (now - started).days
+        pageviews = jarvis_analytics.pageviews_for_url(live_url, by_path=by_path) or 0
+        jbiz.record_metric(
+            exp["id"], traffic=pageviews,
+            notes=f"Cloudflare Web Analytics pageviews, trailing 30 days, as of {now.date().isoformat()} ({age_days}d after publish).",
+        )
+
+        if age_days < _ANALYSIS_ABANDON_AGE_DAYS:
+            results.append(f"Measured experiment {exp['id']}: {pageviews} view(s) so far, {age_days}d old (too early to decide).")
+            continue
+
+        if pageviews < _ANALYSIS_ABANDON_TRAFFIC:
+            jbiz.update_experiment(exp["id"], status="abandoned",
+                                    notes=f"{exp.get('notes') or ''} | Abandoned: only {pageviews} pageview(s) after {age_days} days.")
+            jbiz.set_opportunity_status(exp["opportunity_id"], "abandoned",
+                                         rejection_reason=f"Real traffic too low: {pageviews} pageview(s) after {age_days} days live.")
+            jbiz.log_decision("abandon", f"Only {pageviews} pageview(s) after {age_days} days live -- abandoning.",
+                               opportunity_id=exp["opportunity_id"], experiment_id=exp["id"])
+            jbiz.log_lesson("failure", f"{live_url} got essentially no real traffic ({pageviews} views in {age_days} days) -- this topic or angle didn't find an audience.",
+                             opportunity_id=exp["opportunity_id"], experiment_id=exp["id"])
+            results.append(f"Abandoned experiment {exp['id']} ({pageviews} view(s) in {age_days}d).")
+        elif pageviews >= _ANALYSIS_SCALE_TRAFFIC:
+            jbiz.update_experiment(exp["id"], status="scaled",
+                                    notes=f"{exp.get('notes') or ''} | Scaling signal: {pageviews} pageview(s) after {age_days} days.")
+            jbiz.set_opportunity_status(exp["opportunity_id"], "scaled")
+            jbiz.log_decision("scale", f"{pageviews} real pageview(s) after {age_days} days -- a genuine signal, similar topics are worth prioritising.",
+                               opportunity_id=exp["opportunity_id"], experiment_id=exp["id"])
+            jbiz.log_lesson("success", f"{live_url} actually got read ({pageviews} views in {age_days} days) -- worth doing more like this.",
+                             opportunity_id=exp["opportunity_id"], experiment_id=exp["id"])
+            results.append(f"Scaling signal on experiment {exp['id']} ({pageviews} view(s) in {age_days}d).")
+        else:
+            jbiz.update_experiment(exp["id"], status="completed",
+                                    notes=f"{exp.get('notes') or ''} | Measured: {pageviews} pageview(s) after {age_days} days (inconclusive).")
+            jbiz.log_decision("hold", f"{pageviews} pageview(s) after {age_days} days -- not enough signal either way.",
+                               opportunity_id=exp["opportunity_id"], experiment_id=exp["id"])
+            results.append(f"Inconclusive on experiment {exp['id']} ({pageviews} view(s) in {age_days}d).")
+
+    return results
+
+
 def run_business_cycle():
     """
     Thin, always-safe wrapper around _run_business_cycle_once -- this is
@@ -11245,6 +11347,13 @@ def _run_business_cycle_once():
     if len(pending_actions) >= 3:
         msg = f"Paused: {len(pending_actions)} item(s) already waiting on Danny in the human action queue."
         jbiz.log_decision("pause", msg)
+        print("BUSINESS CYCLE:", msg)
+        return msg
+
+    analysis_results = business_analyse_published_content()
+    if analysis_results:
+        msg = f"Analysed published content: {'; '.join(analysis_results)}"
+        jbiz.log_decision("cycle_action", msg)
         print("BUSINESS CYCLE:", msg)
         return msg
 
