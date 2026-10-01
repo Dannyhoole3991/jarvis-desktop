@@ -267,6 +267,26 @@ def log_decision(decision_type, reasoning, opportunity_id=None, experiment_id=No
             conn.close()
 
 
+def has_metric_today(experiment_id):
+    """
+    True if a metric was already recorded for this experiment today --
+    used to cap analysis to once per experiment per day, so the
+    business cycle's analysis step doesn't perpetually report "something
+    to do" (re-measuring the same unchanged articles) and block
+    discovery/scoring/building from ever running again.
+    """
+    with _db_lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT id FROM metrics WHERE experiment_id = ? AND recorded_at >= ? LIMIT 1",
+                (experiment_id, _today()),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+
 def record_metric(experiment_id, traffic=None, conversions=None, conversion_rate=None,
                    revenue=None, cost=None, notes=None):
     """

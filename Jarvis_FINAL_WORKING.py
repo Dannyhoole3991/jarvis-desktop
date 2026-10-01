@@ -11465,6 +11465,13 @@ def business_analyse_published_content():
         live_url = next((p for p in artifact_paths if isinstance(p, str) and p.startswith("http")), None)
         if not live_url:
             continue
+        # Capped to once per experiment per day -- otherwise, with at least
+        # one published article always existing, this step would return a
+        # non-empty result on literally every cycle forever and the early
+        # return just below would permanently block discovery/scoring/
+        # building from ever running again.
+        if jbiz.has_metric_today(exp["id"]):
+            continue
 
         age_days = (now - started).days
         pageviews = jarvis_analytics.pageviews_for_url(live_url, by_path=by_path) or 0
