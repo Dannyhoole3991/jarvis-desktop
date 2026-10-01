@@ -211,6 +211,30 @@ def record_spend(amount, experiment_id=None):
             conn.close()
 
 
+def record_revenue(experiment_id, amount, notes=None):
+    """
+    Records REAL money Danny actually received -- Jarvis has no payment
+    account of its own and never will, so this only ever gets called when
+    Danny tells it he got paid (e.g. after a Fiverr/Upwork order, or an
+    AdSense payout). Increments the experiment's running total rather than
+    overwriting it, same pattern as record_spend.
+    """
+    if amount <= 0:
+        return
+    with _db_lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                "UPDATE experiments SET revenue_earned = revenue_earned + ? WHERE id = ?",
+                (amount, experiment_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    record_metric(experiment_id, revenue=amount, notes=notes or f"Revenue logged: £{amount:.2f}")
+    log_decision("revenue", f"Logged real revenue of £{amount:.2f}." + (f" {notes}" if notes else ""), experiment_id=experiment_id)
+
+
 def set_budget(daily_cap=None, per_experiment_cap=None):
     with _db_lock:
         conn = _connect()

@@ -10848,7 +10848,7 @@ def write_article_online(topic):
 # real is the whole point, not generating a plausible-looking plan for
 # something nobody can execute yet. Grows over time as more runners get
 # built; see run_business_cycle().
-BUSINESS_RUNNABLE_TYPES = {"content_article", "print_on_demand"}
+BUSINESS_RUNNABLE_TYPES = {"content_article", "print_on_demand", "freelance_gig"}
 
 
 def _parse_json_loose(text):
@@ -10890,7 +10890,7 @@ Hard rules, no exceptions:
   need a human to create an account or publish somewhere; that's fine and
   expected -- just the very first test must not.
 - Right now, only propose ideas with business_model_type exactly one of these
-  two -- the only experiment types Jarvis can actually execute end-to-end
+  three -- the only experiment types Jarvis can actually execute end-to-end
   today:
   - "content_article": a researched, written long-form article/blog post on
     a specific topic, published to Jarvis's own blog automatically, later
@@ -10901,16 +10901,29 @@ Hard rules, no exceptions:
     automatically; actually listing/selling it still needs a human to set
     up a print-on-demand shop account (Redbubble/Etsy/etc.), same as
     content_article needing ads connected later.
+  - "freelance_gig": a SPECIFIC, text-deliverable freelance service Jarvis
+    can actually produce well end-to-end (e.g. "I will write a 1000-word
+    SEO blog post", "I will summarize a research paper into a plain-English
+    brief", "I will write product descriptions for an e-commerce store") --
+    NOT anything requiring live client interaction, voice/video calls, or
+    a physical/manual skill. Jarvis drafts the gig listing and a real
+    sample deliverable; actually listing it still needs a human to set up
+    a Fiverr/Upwork seller account, same pattern as the other two types.
   Still genuinely compare and pick SPECIFIC ideas based on real evidence of
   demand, not generic ones.
 
-Return ONLY a JSON array (no other text), each item EITHER:
+Return ONLY a JSON array (no other text), each item EXACTLY ONE of:
 {"name": "short specific name", "business_model_type": "content_article",
  "description": "2-3 sentences on the specific angle and why", "topic": "the exact article topic/title to write"}
 OR:
 {"name": "short specific name", "business_model_type": "print_on_demand",
  "description": "2-3 sentences on why this design/style and audience",
  "image_prompt": "a detailed visual description for an AI image generator -- style, subject, composition, color palette"}
+OR:
+{"name": "short specific name", "business_model_type": "freelance_gig",
+ "description": "2-3 sentences on who'd buy this and why, citing real evidence of demand for this exact service",
+ "service_title": "the gig title as it would appear on Fiverr/Upwork",
+ "service_brief": "what the service actually delivers and for whom -- enough detail to write the listing and a sample from"}
 """
 
 
@@ -10922,6 +10935,8 @@ _BUSINESS_COST_DISCOVER = 0.03
 _BUSINESS_COST_EVIDENCE = 0.03
 _BUSINESS_COST_ARTICLE = 0.06
 _BUSINESS_COST_IMAGE = 0.06  # gpt-image-1 at 1024x1024
+_BUSINESS_COST_GIG = 0.06
+_BUSINESS_COST_GIG_FULFILL = 0.06
 
 
 def business_discover_opportunities(count=3):
@@ -10938,10 +10953,10 @@ def business_discover_opportunities(count=3):
             instructions=openai_safe_text(_BUSINESS_DISCOVERY_INSTRUCTIONS),
             tools=[{"type": "web_search"}],
             input=openai_safe_text(
-                f"Research and propose {count} specific, currently-relevant opportunities (real topics/designs "
-                "with evidence of real demand right now, not generic evergreen guesses). Use a genuine MIX of "
-                "both allowed business_model_types across the {count} -- not all the same one -- so they can "
-                "be honestly compared against each other. Return the JSON array now."
+                f"Research and propose {count} specific, currently-relevant opportunities (real topics/designs/"
+                "services with evidence of real demand right now, not generic evergreen guesses). Use a genuine "
+                "MIX across all three allowed business_model_types -- not all the same one -- so they can be "
+                "honestly compared against each other. Return the JSON array now."
             ),
         )
         ideas = _parse_json_loose(response.output_text)
@@ -11203,6 +11218,193 @@ def run_print_on_demand_experiment(experiment_id, opportunity):
     return True
 
 
+_FREELANCE_GIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_freelance_gigs")
+
+_GIG_LISTING_INSTRUCTIONS = """You are Jarvis, writing a real freelance gig listing and a genuine sample
+deliverable for Danny to post on Fiverr or Upwork. This must be something a
+real buyer would pay for, not generic filler.
+
+Return ONLY a JSON object (no other text):
+{
+ "title": "the gig title exactly as it should appear on the platform",
+ "description": "the full gig description buyers would read -- what they get, who it's for, why this is a good fit",
+ "packages": [
+   {"name": "Basic", "price_gbp": number, "delivery_days": number, "includes": "what's included"},
+   {"name": "Standard", "price_gbp": number, "delivery_days": number, "includes": "what's included"},
+   {"name": "Premium", "price_gbp": number, "delivery_days": number, "includes": "what's included"}
+ ],
+ "sample_deliverable": "a REAL, complete, ready-to-show example of the actual work (e.g. if this is a blog-writing gig, a real ~300-400 word sample article; if it's a summarization gig, a real summary of a real, findable source) -- this goes straight into Danny's portfolio, so it must be genuinely good, not a placeholder"
+}
+"""
+
+
+def run_freelance_gig_experiment(experiment_id, opportunity):
+    """
+    Third fully-implemented runner: drafts a real, ready-to-post Fiverr/
+    Upwork gig listing (title, description, three pricing tiers) plus a
+    genuine sample deliverable demonstrating the actual skill -- reusing
+    the same OpenAI web-search pattern as write_article_online, just aimed
+    at "write a strong gig listing" instead of "write an article".
+
+    Like print_on_demand, there's no automated "launch" here: actually
+    listing a gig needs a real human-created Fiverr/Upwork seller account
+    with its own verification -- something Jarvis is never allowed to set
+    up for anyone. So this runner's honest scope stops at "produced a
+    ready-to-post listing and a real sample", with a one-time (not
+    per-gig) request for that account.
+    """
+    if not jbiz.can_spend(_BUSINESS_COST_GIG):
+        jbiz.update_experiment(experiment_id, status="review", notes="Blocked by the daily budget cap before drafting started.")
+        jbiz.log_decision("budget_block", f"Could not run '{opportunity['name']}' -- would exceed the daily budget cap.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        print(f"BUSINESS BUILD: blocked by budget cap for '{opportunity['name']}'.")
+        return False
+
+    if not online_available():
+        jbiz.update_experiment(experiment_id, status="review", notes="OpenAI unavailable.")
+        jbiz.log_decision("build_failed", "OpenAI client unavailable.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    evidence = {}
+    try:
+        evidence = json.loads(opportunity.get("evidence_json") or "{}")
+    except Exception:
+        pass
+    service_title = evidence.get("service_title") or opportunity["name"]
+    service_brief = evidence.get("service_brief") or opportunity.get("description") or opportunity["name"]
+
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(_GIG_LISTING_INSTRUCTIONS),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(
+                f"Service: {service_title}\nWhat it delivers: {service_brief}\n"
+                "Research what similar successful gigs on Fiverr/Upwork actually look like (pricing, structure), "
+                "then write this one for real, including a genuine sample deliverable. Return the JSON object now."
+            ),
+        )
+        listing = _parse_json_loose(response.output_text)
+    except Exception as error:
+        jbiz.update_experiment(experiment_id, status="review", notes=f"Gig listing generation failed: {error}")
+        jbiz.log_lesson("failure", f"Gig listing generation failed for '{opportunity['name']}': {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        jbiz.log_decision("build_failed", f"Gig listing error: {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    if not isinstance(listing, dict) or not listing.get("title"):
+        jbiz.update_experiment(experiment_id, status="review", notes="Gig listing generation returned no usable content.")
+        jbiz.log_decision("build_failed", "Model did not return a usable gig listing.", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    jbiz.record_spend(_BUSINESS_COST_GIG, experiment_id=experiment_id)
+
+    try:
+        os.makedirs(_FREELANCE_GIGS_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = _slugify(listing.get("title") or opportunity["name"])
+        file_path = os.path.join(_FREELANCE_GIGS_DIR, f"{timestamp}_{slug}.md")
+        lines = [
+            f"# {listing.get('title', service_title)}", "",
+            "## Description", listing.get("description", ""), "",
+            "## Packages",
+        ]
+        for pkg in listing.get("packages", []) or []:
+            if not isinstance(pkg, dict):
+                continue
+            lines.append(
+                f"- **{pkg.get('name', '')}** -- £{pkg.get('price_gbp', '?')}, "
+                f"{pkg.get('delivery_days', '?')} day(s): {pkg.get('includes', '')}"
+            )
+        lines += ["", "## Sample deliverable (for your portfolio)", "", listing.get("sample_deliverable", "")]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        meta_path = file_path[:-3] + ".json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(listing, f, indent=2, ensure_ascii=False)
+    except Exception as error:
+        jbiz.update_experiment(experiment_id, status="review", notes=f"Gig listing generated but saving failed: {error}")
+        jbiz.log_decision("build_failed", f"Could not save gig listing: {error}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+        return False
+
+    jbiz.update_experiment(
+        experiment_id, status="review",
+        artifact_paths=[file_path],
+        notes=f"Gig listing ready at {file_path}.",
+    )
+    jbiz.log_decision("build", f"Drafted gig listing '{listing.get('title')}' at {file_path}", opportunity_id=opportunity["id"], experiment_id=experiment_id)
+    jbiz.log_lesson(
+        "insight", f"'{listing.get('title')}' is ready to post, but not listed anywhere yet -- real orders/revenue still unmeasured.",
+        opportunity_id=opportunity["id"], experiment_id=experiment_id,
+    )
+    if not jbiz.has_human_action_like("Fiverr or Upwork seller account"):
+        jbiz.queue_human_action(
+            "create_account",
+            "Jarvis has a ready-to-post gig listing but no Fiverr or Upwork seller account to actually post it on -- "
+            "set one up, paste the listing from the saved file, and once real orders come in tell Jarvis the client's "
+            "brief (\"fulfil gig order: ...\") and it'll write the deliverable.",
+            opportunity_id=opportunity["id"], experiment_id=experiment_id,
+        )
+    return True
+
+
+def fulfil_gig_order(brief_text, experiment_id=None):
+    """
+    Real order fulfilment: once Danny has an actual Fiverr/Upwork order,
+    he pastes the client's brief and this writes the real deliverable --
+    same OpenAI call pattern as everything else here, just aimed at one
+    specific paying client's brief instead of Jarvis's own content plan.
+    Attaches to the given experiment, or the most recently active
+    freelance_gig experiment if none is given. Returns the saved file path,
+    or None on failure.
+    """
+    if not jbiz.can_spend(_BUSINESS_COST_GIG_FULFILL):
+        jbiz.log_decision("budget_block", "Could not fulfil gig order -- would exceed the daily budget cap.", experiment_id=experiment_id)
+        return None
+    if not online_available():
+        jbiz.log_decision("build_failed", "OpenAI client unavailable for gig fulfilment.", experiment_id=experiment_id)
+        return None
+
+    if experiment_id is None:
+        gigs = [e for e in jbiz.list_experiments(limit=200) if e["business_model_type"] == "freelance_gig"]
+        experiment_id = gigs[0]["id"] if gigs else None
+
+    try:
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=openai_safe_text(
+                "You are Jarvis, producing a real, complete, client-ready deliverable for a paid freelance order. "
+                "Write the actual finished work the client is paying for -- not a plan, not an outline unless that's "
+                "literally what was ordered. High quality, ready to deliver as-is."
+            ),
+            tools=[{"type": "web_search"}],
+            input=openai_safe_text(f"Client brief:\n{brief_text}\n\nProduce the finished deliverable now."),
+        )
+        deliverable = response.output_text
+    except Exception as error:
+        jbiz.log_decision("build_failed", f"Gig fulfilment failed: {error}", experiment_id=experiment_id)
+        return None
+
+    if not deliverable or not deliverable.strip():
+        jbiz.log_decision("build_failed", "Gig fulfilment returned no content.", experiment_id=experiment_id)
+        return None
+
+    jbiz.record_spend(_BUSINESS_COST_GIG_FULFILL, experiment_id=experiment_id)
+    try:
+        os.makedirs(_FREELANCE_GIGS_DIR, exist_ok=True)
+        deliverables_dir = os.path.join(_FREELANCE_GIGS_DIR, "deliverables")
+        os.makedirs(deliverables_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(deliverables_dir, f"{timestamp}_deliverable.md")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(f"Client brief:\n{brief_text}\n\n---\n\n{deliverable}")
+    except Exception as error:
+        jbiz.log_decision("build_failed", f"Gig deliverable generated but saving failed: {error}", experiment_id=experiment_id)
+        return None
+
+    jbiz.log_decision("fulfil_gig", f"Produced a real deliverable for brief: {brief_text[:150]}", experiment_id=experiment_id)
+    jbiz.log_lesson("insight", f"Fulfilled a real client order -- saved at {file_path}.", experiment_id=experiment_id)
+    return file_path
+
+
 # A published article has no backlinks or promotion yet, so real traffic
 # starts near zero regardless of quality -- these thresholds are
 # deliberately lenient and were chosen for that reason, not tuned against
@@ -11343,17 +11545,22 @@ def _run_business_cycle_once():
     """
     jbiz.log_decision("cycle_start", "Starting a business cycle.")
 
-    pending_actions = jbiz.summary().get("pending_human_actions", [])
-    if len(pending_actions) >= 3:
-        msg = f"Paused: {len(pending_actions)} item(s) already waiting on Danny in the human action queue."
-        jbiz.log_decision("pause", msg)
-        print("BUSINESS CYCLE:", msg)
-        return msg
-
+    # Analysis is read-only housekeeping on content already published -- it
+    # doesn't spend money or add to the human action queue, so it runs
+    # regardless of the backlog throttle below (which exists specifically
+    # to stop generating MORE unreviewed work, not to stop measuring
+    # what's already live).
     analysis_results = business_analyse_published_content()
     if analysis_results:
         msg = f"Analysed published content: {'; '.join(analysis_results)}"
         jbiz.log_decision("cycle_action", msg)
+        print("BUSINESS CYCLE:", msg)
+        return msg
+
+    pending_actions = jbiz.summary().get("pending_human_actions", [])
+    if len(pending_actions) >= 3:
+        msg = f"Paused: {len(pending_actions)} item(s) already waiting on Danny in the human action queue."
+        jbiz.log_decision("pause", msg)
         print("BUSINESS CYCLE:", msg)
         return msg
 
@@ -11373,6 +11580,9 @@ def _run_business_cycle_once():
         elif candidate["business_model_type"] == "print_on_demand":
             ok = run_print_on_demand_experiment(exp_id, candidate)
             msg = f"Started and ran a print_on_demand experiment on '{candidate['name']}' ({'succeeded' if ok else 'failed'})."
+        elif candidate["business_model_type"] == "freelance_gig":
+            ok = run_freelance_gig_experiment(exp_id, candidate)
+            msg = f"Started and ran a freelance_gig experiment on '{candidate['name']}' ({'succeeded' if ok else 'failed'})."
         else:
             msg = f"Selected '{candidate['name']}' but no runner is implemented for '{candidate['business_model_type']}' yet."
         print("BUSINESS CYCLE:", msg)
@@ -11419,6 +11629,34 @@ def handle_business_command(command):
             f"and {len(s['pending_human_actions'])} thing(s) waiting on you."
         )
         return True
+
+    gig_match = re.match(r"(?i)^fulfil+\s+gig\s+order[:\s]+(.+)$", command.strip())
+    if gig_match:
+        brief = gig_match.group(1).strip()
+        if not brief:
+            say("I need the client's brief, sir -- say it right after 'fulfil gig order'.")
+            return True
+        say("On it, sir -- writing the deliverable now.")
+        file_path = fulfil_gig_order(brief)
+        if file_path:
+            say(f"Done, sir. The deliverable is saved at {file_path}.")
+        else:
+            say("That didn't work, sir -- the business decision log will say why.")
+        return True
+
+    revenue_match = re.search(r"(?:log(?:ged)?\s+(?:gig\s+)?revenue\s+of|got\s+paid)\D*£?\s*(\d+(?:\.\d+)?)", c)
+    if revenue_match and ("gig" in c or "revenue" in c):
+        amount = float(revenue_match.group(1))
+        gigs = jbiz.list_experiments(limit=200)
+        gig_exp = next((e for e in gigs if e["business_model_type"] == "freelance_gig"), None)
+        if gig_exp is None:
+            say("I don't have a gig experiment to attach that revenue to yet, sir.")
+            return True
+        jbiz.record_revenue(gig_exp["id"], amount, notes="Logged via voice/text command.")
+        s = jbiz.summary()
+        say(f"Logged £{amount:.2f}, sir. Total profit is now £{s['profit_total']:.2f}.")
+        return True
+
     return False
 
 
