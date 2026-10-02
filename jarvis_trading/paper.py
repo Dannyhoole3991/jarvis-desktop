@@ -50,14 +50,15 @@ def read_paper_trades(db_path):
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT pair, open_date, close_date, stake_amount, profit_ratio, profit_abs, fee_open_cost, fee_close_cost "
-            "FROM trades WHERE is_open = 0 AND close_date IS NOT NULL ORDER BY close_date").fetchall()
+            "SELECT pair, open_date, close_date, stake_amount, close_profit, close_profit_abs, fee_open_cost, fee_close_cost, "
+            "leverage, is_short FROM trades WHERE is_open = 0 AND close_date IS NOT NULL ORDER BY close_date").fetchall()
     finally:
         conn.close()
     return [{"pair": r["pair"], "open_ts": M.to_epoch(r["open_date"]), "close_ts": M.to_epoch(r["close_date"]),
-             "profit_ratio": float(r["profit_ratio"] or 0.0), "profit_abs": float(r["profit_abs"] or 0.0),
+             "profit_ratio": float(r["close_profit"] or 0.0), "profit_abs": float(r["close_profit_abs"] or 0.0),
              "stake": float(r["stake_amount"] or 0.0),
-             "fee_paid": float(r["fee_open_cost"] or 0.0) + float(r["fee_close_cost"] or 0.0)} for r in rows]
+             "fee_paid": float(r["fee_open_cost"] or 0.0) + float(r["fee_close_cost"] or 0.0),
+             "leverage": float(r["leverage"] or 1.0), "is_short": bool(r["is_short"])} for r in rows]
 
 
 def read_open_positions(db_path):
@@ -111,6 +112,7 @@ class PaperManager:
         os.makedirs(p["dir"], exist_ok=True)
         cfg = A.build_config(list(pairs), v["parameters"]["timeframe"], PAPER_WALLET, PAPER_WALLET * self.risk.limits.max_position_pct, self.risk.limits.max_open_positions)
         cfg["db_url"] = "sqlite:///" + p["db"].replace("\\", "/")
+        cfg["initial_state"] = "running"  # `freqtrade trade` otherwise starts STOPPED and, with no API/Telegram, never trades
         A.assert_safe_config(cfg)
         with open(p["config"], "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, sort_keys=True)
@@ -175,6 +177,10 @@ class PaperManager:
         window_end = max(end or 0, time.time())
         paper = M.compute_metrics(trades, PAPER_WALLET, started or start, window_end) if (started or trades) else {"n_trades": 0, "days": 0}
         verdict = C.evaluate_paper(paper, self.expected_from_backtest(strategy_id, version), criteria)
+        if any(t.get("leverage", 1.0) > 1.0 or t.get("is_short") for t in trades):
+            # The lab forbids leverage and shorting; seeing either means something is wrong with the run itself.
+            verdict = C.Verdict("REJECTED", [("PAPER_LEVERAGE_OR_SHORT", "a paper trade used leverage or was a short, which the lab forbids")]
+                                + list(verdict.reasons if verdict.status == "REJECTED" else []), verdict.criteria_fingerprint)
         self.registry.record_experiment(strategy_id, version, "paper_check",
                                         {"metrics": paper, "verdict": verdict.status, "reasons": verdict.reasons},
                                         passed=verdict.status != "REJECTED")

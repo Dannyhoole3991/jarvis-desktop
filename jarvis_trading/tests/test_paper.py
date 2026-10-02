@@ -18,14 +18,17 @@ def _load(path):
         return json.load(f)
 
 
-def make_trades_db(path, closed=(), open_positions=()):
+def make_trades_db(path, closed=(), open_positions=(), leverage=1.0, is_short=0):
+    """Builds a SQLite file with the columns of Freqtrade's real trades table (verified against a live dry-run database)."""
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE trades (pair TEXT, open_date TEXT, close_date TEXT, stake_amount REAL, profit_ratio REAL, "
-                 "profit_abs REAL, fee_open_cost REAL, fee_close_cost REAL, is_open INTEGER)")
+    conn.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, pair TEXT, is_open INTEGER, fee_open_cost REAL, fee_close_cost REAL, "
+                 "close_profit REAL, close_profit_abs REAL, stake_amount REAL, open_date TEXT, close_date TEXT, leverage REAL, is_short INTEGER)")
     for pair, opened, closed_at, stake, ratio in closed:
-        conn.execute("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,0)", (pair, opened, closed_at, stake, ratio, ratio * stake, 0.1, 0.1))
+        conn.execute("INSERT INTO trades (pair, is_open, fee_open_cost, fee_close_cost, close_profit, close_profit_abs, stake_amount, open_date, close_date, leverage, is_short) "
+                     "VALUES (?,0,0.1,0.1,?,?,?,?,?,?,?)", (pair, ratio, ratio * stake, stake, opened, closed_at, leverage, is_short))
     for pair, stake in open_positions:
-        conn.execute("INSERT INTO trades VALUES (?,?,NULL,?,0,0,0.1,0,1)", (pair, "2026-10-01 00:00:00", stake))
+        conn.execute("INSERT INTO trades (pair, is_open, fee_open_cost, fee_close_cost, close_profit, close_profit_abs, stake_amount, open_date, close_date, leverage, is_short) "
+                     "VALUES (?,1,0.1,0,NULL,NULL,?,'2026-10-01 00:00:00',NULL,1.0,0)", (pair, stake))
     conn.commit()
     conn.close()
 
@@ -65,6 +68,7 @@ class PaperTests(unittest.TestCase):
         cfg = _load(paths["config"])
         A.assert_safe_config(cfg)
         self.assertTrue(cfg["dry_run"])
+        self.assertEqual(cfg["initial_state"], "running")  # Freqtrade would otherwise boot STOPPED and never trade
         self.assertEqual(cfg["exchange"]["key"], "")
         self.assertTrue(_load(paths["gate"])["allow_entries"])
         self.assertEqual(self.reg.status(self.sid, self.ver), "paper")
@@ -105,6 +109,18 @@ class PaperTests(unittest.TestCase):
         self.assertEqual(verdict.status, "REJECTED")
         self.assertEqual(self.reg.status(self.sid, self.ver), "rejected")
         self.assertIn("Paper trading:", self.reg.status_history(self.sid, self.ver)[-1]["reason"])
+
+    def test_leverage_or_short_in_a_paper_run_is_rejected(self):
+        for kw in ({"leverage": 3.0}, {"is_short": 1}):
+            self.setUp()
+            self.make_candidate()
+            paths = self.mgr.prepare(self.sid, self.ver)
+            now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            make_trades_db(paths["db"], closed=[("BTC/USDT", now, now, 100.0, 0.01)], **kw)
+            verdict, _ = self.mgr.evaluate(self.sid, self.ver)
+            self.assertEqual(verdict.status, "REJECTED")
+            self.assertIn("PAPER_LEVERAGE_OR_SHORT", verdict.codes())
+            self.tearDown()
 
     def test_too_little_paper_time_is_incomplete_not_a_pass(self):
         self.make_candidate()

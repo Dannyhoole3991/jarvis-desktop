@@ -77,6 +77,88 @@ the tested strategies averaged 0.015% to 0.02% per day. BTC/ETH buy-and-hold had
 but averaged ~0.2%/day. Reaching 3%/day from these return streams needs ~15x to ~200x leverage, which liquidates
 the account on the historical path and in 94 to 100% of resampled years.
 
+## Stage 2: expanded research, continuous operation (2026-10-02)
+
+### Strategy families (all deterministic, long-only, spot, unleveraged, every entry passes the Risk Engine gate)
+| Family | Idea | Engine |
+|---|---|---|
+| sma_cross, rsi_reversion, bollinger_reversion, donchian_breakout, momentum_roc | the original five | Freqtrade |
+| mtf_pullback | daily-trend filter (informative 1d) + RSI dip on 1h/4h | Freqtrade |
+| mtf_trend_breakout | Donchian breakout gated by daily trend and daily momentum | Freqtrade |
+| vol_regime_trend | MA cross only in a low- or high-volatility regime (ATR percentile) | Freqtrade |
+| trend_momentum | price > trend MA, ROC > threshold, ADX > threshold | Freqtrade |
+| meanrev_combo | RSI oversold + below lower Bollinger band + above long MA | Freqtrade |
+| breakout_volume | breakout with abnormal volume (volume z-score) | Freqtrade |
+| obv_trend | on-balance-volume trend confirmation | Freqtrade |
+| signal_vote | k-of-n agreement of trend / momentum / breakout / volume / calm-volatility signals | Freqtrade |
+| ml_walkforward | gradient-boosted classifier, retrained monthly on rolling/expanding windows | own simulator (`mlrunner`) |
+
+Adaptive sizing (`sizing = inv_vol`) can only *shrink* a position (inverse volatility, encoded in the entry tag so it is
+vectorised from past candles) and is further capped by the Risk Engine's `max_stake`. Controls that deliberately cheat
+(`lookahead_control`, `mtf_leak_control`, `sizing_leak_control`, `ml_leak_control`) exist to prove each leakage channel is policed.
+
+**Not tested, and why:** true order-flow features (taker buy/sell volume, order book) are not available in the public OHLCV
+data used here, so only volume-derived features are tested. FreqAI was not used: its leakage handling is not covered by
+Freqtrade's lookahead detector; the ML family instead runs in a lab-owned walk-forward simulator with its own causality tests.
+GPU: the machine has an AMD GPU without CUDA, so ML runs on CPU (scikit-learn, BSD-3).
+
+### Universe
+9 pairs fixed by an ex-ante rule (largest early-2019 coins with a Binance USDT pair): BTC, ETH, XRP, BCH, LTC, BNB, ADA, XLM, TRX.
+**Survivorship bias:** coins large in 2019 that were since delisted or collapsed (e.g. EOS) cannot be tested, which flatters
+results. It can only increase false positives, so no gate was relaxed because of it.
+
+### Pipeline additions (gates are unchanged or stricter)
+- Static leakage lint (`lint.py`) runs before the dynamic detector. **Found:** Freqtrade's lookahead-analysis cannot see a
+  one-day leak through an informative timeframe (the daily candle on the truncation boundary is loaded complete). Since all code
+  is template-generated, the source is also checked for any forward-looking construct; both checks must pass.
+- Inconclusive leakage checks are retried on 3 progressively longer windows, then treated as failure.
+- Near-duplicate detection: strategies whose (pair, entry day, size tag) overlap an earlier one by >= 80% are rejected as NEAR_DUPLICATE.
+- Early gates: in-sample trade count / drawdown / cost / plausibility are checked before the expensive robustness sweep;
+  robustness + regime failure rejects **before the held-out period is touched**. The sweep is a deterministic sample of at most 8
+  neighbours with fail-fast; every neighbour run still counts as a trial.
+- Significance: p-value is the larger of the per-trade and per-day-aggregated sign-flip tests (trades across pairs are correlated).
+  Beyond Monte Carlo resolution a rigorous Hoeffding upper bound is used. The bar is Bonferroni: alpha / (all parameter sets ever tried).
+- Resume safety: an interrupted run restarts from the beginning, **except** if it had already consumed the held-out period, in which
+  case the version is retired (INTERRUPTED_AFTER_TEST) rather than re-tested on the same data.
+
+### Parallel research
+`batch.py` runs strategies in worker processes (default 6 of 16 threads, below-normal priority). Every Freqtrade run has a private
+config/results directory; the registry serialises id allocation (`BEGIN IMMEDIATE`); each concurrent worker adds an assumed trial.
+`daemon.py` loops batches with new seeds, supervises paper trading in a thread, and stops at a **trial budget** (default 6000),
+because every extra trial makes the next significance bar stricter. A `STOP_RESEARCH` file stops it gracefully.
+
+### Experiment tracking (`tracking.py`, dashboard, HUD Trading tab, chat)
+Funnel (registered -> leakage-clean -> backtested -> early gates -> development gates -> candidate -> paper), rejection reasons
+by code and family, leaderboard ranked by **out-of-sample Sharpe minus the Sharpe luck alone would produce as the best of N tries**
+(never raw profit), per-strategy scorecards (development vs out-of-sample vs paper, drawdown, fee share, parameter instability,
+p-value vs required p), and a statistical-power readout: the smallest true Sharpe the held-out window can confirm at the current trial count.
+Strategies that fail *only* the significance test are listed as near-misses; they are **not** candidates and are not paper traded.
+
+### Paper trading (`paper.py`, `supervisor.py`)
+Candidates are started automatically in Freqtrade dry-run against live Binance data (public endpoints, no keys), up to 3 at once.
+The supervisor restarts dead runs (storm-limited), rewrites each run's Risk Engine gate file every minute from real paper-account state,
+and hourly compares paper vs backtest expectation (daily return, drawdown, trade rate, activity), rejecting and stopping degraded runs.
+Any leveraged or short paper trade rejects the run. The ML family cannot reach paper trading yet (it does not run in Freqtrade).
+
+### Execution layer and the live pathway (`execution.py`, `live_readiness.py`)
+`strategy -> OrderRequest -> RiskEngine.evaluate -> ExecutionVenue.place` is the single pipeline. `PaperVenue` simulates fills with fee
+and slippage. `LiveVenue` is a placeholder that **cannot be constructed**; `ExecutionGateway` refuses any venue whose mode the Risk
+Engine does not allow, and the strategy cannot choose its own mode. A future, separately reviewed live module would implement the
+same `ExecutionVenue` interface and go through the same gateway and veto. `live_readiness.assess()` is an executable checklist
+(60+ paper days, 50+ paper trades, paper consistent with backtest, drawdown <= 15%, no risk halts, written human sign-off, reviewed
+live module, restricted exchange key, capital cap). It only reports; it cannot enable anything.
+
+### Bugs found and fixed in this stage
+1. Significance test could not return p-values below 1/(n_perm+1), yet the Bonferroni bar falls below that after ~200 trials: nothing could ever pass.
+2. `gate_snapshot` allowed entries when exposure was already full (fail-open).
+3. Freqtrade's lookahead detector misses informative-timeframe leaks (static lint added).
+4. Parallel runs shared one config/results directory (race); registry id allocation was racy across processes.
+5. Batch runner crashed with `CancelledError` when the stop flag cancelled pending jobs.
+6. Inconclusive leakage verdicts for low-frequency strategies (window too short).
+7. Paper reader used column names that do not exist in Freqtrade's real trades table (found only by running a live dry-run wiring test).
+8. Freqtrade `trade` boots STOPPED with no API/Telegram, so a paper run would never have traded (`initial_state: running`).
+9. A per-trade significance test overstated evidence for correlated cross-pair trades (per-day test added).
+
 ## Open source reviewed
 
 | Project | Licence | Decision |
