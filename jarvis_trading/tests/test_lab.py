@@ -44,6 +44,9 @@ class FakeRunner:
         self.written[name] = source
 
     def run_lookahead_analysis(self, name, timerange, timeframe, pairs=None):
+        self.lookahead_windows = getattr(self, "lookahead_windows", []) + [timerange]
+        if self.lookahead == "needs_long_window":
+            return {"clean": True if timerange == L.LOOKAHEAD_WINDOWS[-1] else None, "raw": "fake", "exit_code": 0}
         return {"clean": self.lookahead, "raw": "fake", "exit_code": 0}
 
     def run_backtest(self, name, timerange, timeframe, pairs=None):
@@ -87,6 +90,18 @@ class LabTests(unittest.TestCase):
         self.assertIn("LOOKAHEAD_BIAS", result["codes"])
         self.assertIn("static check", result["verdict"])
         self.assertEqual(runner.backtests, [])
+
+    def test_inconclusive_detector_is_retried_on_longer_windows_then_accepted_if_clean(self):
+        runner = FakeRunner(lookahead="needs_long_window", mean=0.008, sd=0.03, trades_per_period=200)
+        result = self.lab(runner).research("sma_cross")
+        self.assertEqual(runner.lookahead_windows[:3], list(L.LOOKAHEAD_WINDOWS))
+        self.assertNotIn("LEAKAGE_CHECK_INCONCLUSIVE", result["codes"])
+
+    def test_still_inconclusive_after_every_window_is_a_rejection(self):
+        runner = FakeRunner(lookahead=None)
+        result = self.lab(runner).research("sma_cross")
+        self.assertEqual(runner.lookahead_windows, list(L.LOOKAHEAD_WINDOWS))
+        self.assertIn("LEAKAGE_CHECK_INCONCLUSIVE", result["codes"])
 
     def test_inconclusive_leakage_check_is_not_a_pass(self):
         runner = FakeRunner(lookahead=None)
@@ -225,6 +240,66 @@ class EfficiencyAndDedupTests(unittest.TestCase):
         many = L.Lab(self.reg, runner, daily_closes=synthetic_closes(), concurrency=6).trials_so_far()
         self.assertGreater(many, solo)
         self.assertEqual(many, 5)  # 0 recorded trials + 5 assumed in flight
+
+
+class SweepAndResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.reg = R.Registry(os.path.join(self.tmp.name, "lab.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sweep_runs(self, runner):
+        return [t for _, t in runner.backtests if t == "20190101-20240630"]
+
+    def test_robustness_sweep_is_capped(self):
+        runner = FakeRunner(mean=0.008, sd=0.03, trades_per_period=200)
+        L.Lab(self.reg, runner, daily_closes=synthetic_closes(), mc_sims=100).research("vol_regime_trend")
+        self.assertLessEqual(len(self.sweep_runs(runner)), L.MAX_NEIGHBOURS)
+
+    def test_sweep_stops_early_once_the_failure_limit_is_certain(self):
+        runner = FakeRunner(mean=0.008, sd=0.03, trades_per_period=200, per_period_mean={"20190101-20240630": -0.02})
+        lab = L.Lab(self.reg, runner, daily_closes=synthetic_closes(), mc_sims=100)
+        result = lab.research("vol_regime_trend")
+        self.assertIn("UNSTABLE_PARAMETERS", result["codes"])
+        self.assertLessEqual(len(self.sweep_runs(runner)), int(0.4 * L.MAX_NEIGHBOURS) + 1)
+
+    def test_sweep_is_deterministic(self):
+        names = []
+        for i in range(2):
+            runner = FakeRunner(mean=0.008, sd=0.03, trades_per_period=200)
+            reg = R.Registry(os.path.join(self.tmp.name, f"d{i}.db"))
+            L.Lab(reg, runner, daily_closes=synthetic_closes(), mc_sims=100).research("vol_regime_trend")
+            names.append([n for n, t in runner.backtests if t == "20190101-20240630"])
+        self.assertEqual(names[0], names[1])
+
+    def test_interrupted_run_without_test_period_is_resumed(self):
+        runner = FakeRunner(mean=0.008, sd=0.03, trades_per_period=200)
+        lab = L.Lab(self.reg, runner, daily_closes=synthetic_closes(), mc_sims=100)
+        from jarvis_trading import strategies as S
+        name, source, params = S.generate("sma_cross")
+        sid, ver, _ = self.reg.create_strategy(S.hypothesis("sma_cross"), "template:sma_cross", "/".join(lab.pairs), params["timeframe"],
+                                               params, source, L.PERIODS["training"], L.PERIODS["validation"], L.PERIODS["test"])
+        self.reg.set_status(sid, ver, "backtested", "simulated interruption")
+        result = lab.research("sma_cross")
+        self.assertEqual(result["strategy_id"], sid)
+        self.assertIn(result["status"], ("candidate", "rejected"))
+        self.assertTrue(self.reg.experiments(sid, ver, "verdict"))
+
+    def test_interrupted_after_heldout_use_is_retired_not_retested(self):
+        runner = FakeRunner(mean=0.008, sd=0.03, trades_per_period=200)
+        lab = L.Lab(self.reg, runner, daily_closes=synthetic_closes(), mc_sims=100)
+        from jarvis_trading import strategies as S
+        name, source, params = S.generate("sma_cross")
+        sid, ver, _ = self.reg.create_strategy(S.hypothesis("sma_cross"), "template:sma_cross", "/".join(lab.pairs), params["timeframe"],
+                                               params, source, L.PERIODS["training"], L.PERIODS["validation"], L.PERIODS["test"])
+        self.reg.set_status(sid, ver, "backtested", "x")
+        self.reg.record_experiment(sid, ver, "backtest_test", {"total_return": 0.5})
+        result = lab.research("sma_cross")
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("INTERRUPTED_AFTER_TEST", result["codes"])
+        self.assertEqual(runner.backtests, [])
 
 
 class ClusteredRunner(FakeRunner):

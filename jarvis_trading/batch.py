@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from jarvis_trading import freqtrade_adapter as A  # noqa: E402
 from jarvis_trading import lab as L  # noqa: E402
 from jarvis_trading import registry as R  # noqa: E402
+from jarvis_trading import runners as RUN  # noqa: E402
 from jarvis_trading import strategies as S  # noqa: E402
 from jarvis_trading import strategies_v2 as V2  # noqa: E402
 from jarvis_trading import universe as U  # noqa: E402
@@ -41,9 +42,9 @@ def plan_batch(registry, families=None, per_family=20, seed=1, pairs=None):
     market = "/".join(pairs)
     known = {(t, m, p) for t, m, p in registry.known_parameter_sets()}
     per = {}
-    for family in (families or V2.RESEARCH_FAMILIES):
+    for family in (families or [t for t in S.research_templates() if t in V2.FAMILIES or S.is_ml(t)]):
         exclude = {p for t, m, p in known if t == family and m == market}
-        per[family] = V2.sample(family, per_family, seed=seed, exclude=exclude)
+        per[family] = S.sample(family, per_family, seed=seed, exclude=exclude)
     plan = []
     for i in range(per_family):
         for family, items in per.items():
@@ -66,7 +67,7 @@ def _research_one(job):
     if os.path.exists(STOP_FLAG):
         return {"family": family, "status": "skipped", "verdict": "stop flag present"}
     if "lab" not in _worker_state:
-        _worker_state["lab"] = L.Lab(R.Registry(), A, daily_closes=_daily_closes(), concurrency=workers)
+        _worker_state["lab"] = L.Lab(R.Registry(), RUN.RouterRunner(A), daily_closes=_daily_closes(), concurrency=workers)
     try:
         r = _worker_state["lab"].research(family, params)
         return {"family": family, "strategy_id": r["strategy_id"], "status": r["status"], "verdict": r["verdict"], "codes": r["codes"]}
@@ -81,17 +82,23 @@ def _write_status(state):
     os.replace(tmp, STATUS_FILE)
 
 
-def run_batch(plan, workers=DEFAULT_WORKERS, log=print):
+def run_batch(plan, workers=DEFAULT_WORKERS, log=print, pool_factory=None, job=None):
     state = {"started": time.time(), "total": len(plan), "done": 0, "candidates": 0, "rejected": 0, "errors": 0, "running": True, "last": ""}
     _write_status(state)
     if not plan:
         state["running"] = False
         _write_status(state)
         return state
-    ctx = multiprocessing.get_context("spawn")
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-        futures = [pool.submit(_research_one, (family, params, workers)) for family, params in plan]
+    job = job or _research_one
+    if pool_factory is None:
+        ctx = multiprocessing.get_context("spawn")
+        pool_factory = lambda: concurrent.futures.ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
+    with pool_factory() as pool:
+        futures = [pool.submit(job, (family, params, workers)) for family, params in plan]
         for fut in concurrent.futures.as_completed(futures):
+            if fut.cancelled():
+                state["skipped"] = state.get("skipped", 0) + 1
+                continue  # cancelled after the stop flag appeared; nothing ran
             r = fut.result()
             state["done"] += 1
             state["candidates"] += r["status"] == "candidate"

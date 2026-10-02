@@ -20,6 +20,8 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 
+from .universe import UNIVERSE
+
 MIN_PROBE_ORDER = 10.0  # quote units; roughly an exchange minimum order, used by gate_snapshot
 MODES_ALLOWED = ("backtest", "paper")
 
@@ -32,7 +34,7 @@ class RiskLimits:
     max_leverage: float = 1.0
     daily_loss_limit_pct: float = 0.03    # entries stop after losing this much in a day
     max_drawdown_halt_pct: float = 0.15   # from peak equity; triggers a persistent halt
-    allowed_pairs: tuple = ("BTC/USDT", "ETH/USDT")
+    allowed_pairs: tuple = tuple(UNIVERSE)  # the fixed research universe; per-position and total-exposure limits are unchanged
 
     def fingerprint(self):
         return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:16]

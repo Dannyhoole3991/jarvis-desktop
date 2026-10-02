@@ -109,7 +109,7 @@ class PaperManager:
         pairs = self.risk.limits.allowed_pairs
         p = _paths(strategy_id, version)
         os.makedirs(p["dir"], exist_ok=True)
-        cfg = A.build_config(list(pairs), v["parameters"]["timeframe"], PAPER_WALLET, 100.0, 2)
+        cfg = A.build_config(list(pairs), v["parameters"]["timeframe"], PAPER_WALLET, PAPER_WALLET * self.risk.limits.max_position_pct, self.risk.limits.max_open_positions)
         cfg["db_url"] = "sqlite:///" + p["db"].replace("\\", "/")
         A.assert_safe_config(cfg)
         with open(p["config"], "w", encoding="utf-8") as f:

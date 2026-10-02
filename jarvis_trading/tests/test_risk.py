@@ -128,7 +128,8 @@ class RiskEngineTests(unittest.TestCase):
     def test_gate_denies_when_every_pair_is_at_its_position_cap(self):
         capped = PortfolioState(equity=1000.0, peak_equity=1000.0, start_of_day_equity=1000.0,
                                 open_positions=[{"pair": "BTC/USDT", "value": 100.0}, {"pair": "ETH/USDT", "value": 100.0}])
-        self.assertFalse(self.engine.gate_snapshot(capped)["allow_entries"])
+        two = RiskEngine(RiskLimits(allowed_pairs=("BTC/USDT", "ETH/USDT")))
+        self.assertFalse(two.gate_snapshot(capped)["allow_entries"])
 
     def test_gate_allows_a_pair_that_still_has_room(self):
         partial = PortfolioState(equity=1000.0, peak_equity=1000.0, start_of_day_equity=1000.0,

@@ -20,7 +20,9 @@ Survivors become CANDIDATE and are eligible for paper trading. Nothing is
 """
 
 import csv
+import json
 import os
+import random
 
 from . import criteria as C
 from . import lint as LINT
@@ -35,7 +37,11 @@ PERIODS = {
     "test": "20240701-20260930",
 }
 LOOKAHEAD_WINDOW = "20230101-20230630"
+# Low-frequency strategies may not trade enough in six months for the detector to give a verdict, so it is retried
+# on progressively longer windows before an inconclusive result is treated as a failure.
+LOOKAHEAD_WINDOWS = (LOOKAHEAD_WINDOW, "20210101-20231231", "20190601-20240630")
 STARTING_BALANCE = 1000.0
+MAX_NEIGHBOURS = 8       # robustness sweep size cap (a deterministic subset, so it is reproducible)
 DEDUP_OVERLAP = 0.80     # Jaccard overlap of (pair, entry day, size tag) at or above which two strategies are "the same"
 DEDUP_MIN_TRADES = 20    # below this there is too little behaviour to compare
 
@@ -156,9 +162,20 @@ class Lab:
         self.registry.log_decision("start", f"Researching {template} {params} ({'new' if created else 'already registered'})", sid, version)
 
         status = self.registry.status(sid, version)
-        if status != "generated":
+        finished = bool(self.registry.experiments(sid, version, "verdict"))
+        if status not in ("generated", "backtested") or finished:
             return {"strategy_id": sid, "version": version, "status": status, "verdict": "already researched; not re-run",
                     "codes": [], "evidence": {}}
+        if self.registry.experiments(sid, version, "backtest_test"):
+            # A previous run was interrupted AFTER consuming the held-out test period without reaching a verdict.
+            # Re-running would reuse that data, so the version is retired instead.
+            verdict = C.Verdict("REJECTED", [("INTERRUPTED_AFTER_TEST", "a previous run was interrupted after the held-out period was used; "
+                                              "the version is retired rather than re-tested on the same data")], self.criteria.fingerprint())
+            if status == "generated":
+                self.registry.set_status(sid, version, "backtested", "Resumed after interruption.")
+            return self._reject(sid, version, verdict, {})
+        if status == "backtested":
+            self.registry.log_decision("resume", "Resuming an interrupted research run from the start of the pipeline.", sid, version)
         evidence = {"leverage": 1.0}
 
         # 2a. static leakage lint (catches what the dynamic detector cannot see, e.g. informative-timeframe leaks)
@@ -170,7 +187,11 @@ class Lab:
             return self._reject(sid, version, verdict, evidence)
 
         # 2b. dynamic leakage detector
-        look = self.runner.run_lookahead_analysis(name, LOOKAHEAD_WINDOW, params["timeframe"], pairs=self.pairs)
+        look = None
+        for window in LOOKAHEAD_WINDOWS:
+            look = self.runner.run_lookahead_analysis(name, window, params["timeframe"], pairs=self.pairs)
+            if look["clean"] is not None:
+                break
         evidence["lookahead_clean"] = look["clean"] is True
         self.registry.record_experiment(sid, version, "lookahead", {"clean": look["clean"], "tail": look["raw"][-400:]},
                                         passed=look["clean"] is True, command="freqtrade lookahead-analysis",
@@ -188,7 +209,8 @@ class Lab:
         in_sample_trades = train_trades + val_trades
         evidence["in_sample"] = M.compute_metrics(in_sample_trades, STARTING_BALANCE,
                                                   _range_epochs(PERIODS["training"])[0], _range_epochs(PERIODS["validation"])[1])
-        self.registry.set_status(sid, version, "backtested", "Training and validation backtests complete.")
+        if self.registry.status(sid, version) == "generated":
+            self.registry.set_status(sid, version, "backtested", "Training and validation backtests complete.")
 
         # 3b. behavioural de-duplication: skip strategies that trade (almost) exactly like one already tested
         signature = self._signature(train_trades)
@@ -214,14 +236,21 @@ class Lab:
         if pre.status == "REJECTED":
             return self._reject(sid, version, pre, evidence, "Rejected on in-sample evidence before the robustness sweep.")
 
-        # 4. robustness (development period only)
+        # 4. robustness (development period only): a deterministic subset of nearby parameter sets,
+        #    stopping as soon as the failure limit is certain to be exceeded (every neighbour tried still counts as a trial)
         dev_range = "20190101-20240630"
         fails, total = 0, 0
-        for neighbour in neighbour_params(params):
+        neighbours = []
+        for candidate in (S.neighbours(template, params) or neighbour_params(params)):
             try:
-                n_name, n_source, _ = S.generate(template, neighbour)
+                neighbours.append((candidate,) + S.generate(template, candidate)[:2])
             except ValueError:
-                continue  # neighbour is not a valid parameter combination for this family
+                continue  # not a valid parameter combination for this family
+        picker = random.Random(json.dumps(params, sort_keys=True))
+        if len(neighbours) > MAX_NEIGHBOURS:
+            neighbours = picker.sample(neighbours, MAX_NEIGHBOURS)
+        fail_limit = int(self.criteria.max_neighbour_fail_fraction * len(neighbours))
+        for neighbour, n_name, n_source in neighbours:
             self.runner.write_strategy(n_name, n_source)
             try:
                 res = self.runner.run_backtest(n_name, dev_range, neighbour["timeframe"], pairs=self.pairs)
@@ -231,6 +260,8 @@ class Lab:
             nm = M.compute_metrics(res["trades"], STARTING_BALANCE, a, b)
             total += 1
             fails += nm["total_return"] <= 0
+            if fails > fail_limit:
+                break  # already beyond the allowed fraction of the full sweep; no need to run the rest
         evidence["robustness"] = {"neighbour_fail_fraction": (fails / total) if total else 1.0, "neighbours_tested": total}
         self.registry.record_experiment(sid, version, "robustness", evidence["robustness"], params=params, seed=self.seed)
 

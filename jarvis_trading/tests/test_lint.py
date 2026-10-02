@@ -15,6 +15,8 @@ class LintTests(unittest.TestCase):
 
     def test_every_control_is_caught(self):
         for template in S.CONTROL_TEMPLATES:
+            if S.is_ml(template):
+                continue  # the ML control is text-only config; it is caught by the dynamic feature-causality test instead
             _, source, _ = S.generate(template)
             self.assertTrue(L.future_reference_findings(source), template)
 

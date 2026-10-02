@@ -112,6 +112,20 @@ class NoiseBenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(S.noise_sharpe_benchmark(50, 365), simulated, delta=0.35)
 
 
+class PowerTests(unittest.TestCase):
+    def test_more_trials_or_less_data_raise_the_bar(self):
+        self.assertGreater(S.min_detectable_sharpe(1000, 820), S.min_detectable_sharpe(10, 820))
+        self.assertGreater(S.min_detectable_sharpe(100, 200), S.min_detectable_sharpe(100, 2000))
+
+    def test_known_value(self):
+        # one trial, five years: z(0.95)=1.645, sharpe = 1.645/sqrt(5)
+        self.assertAlmostEqual(S.min_detectable_sharpe(1, 365 * 5), 1.6449 / math.sqrt(5), places=3)
+
+    def test_threshold_is_consistent_with_the_noise_benchmark_direction(self):
+        # beyond the expected luck-only maximum for the same number of trials
+        self.assertGreater(S.min_detectable_sharpe(500, 820), S.noise_sharpe_benchmark(500, 820) * 0.9)
+
+
 class RegimeTests(unittest.TestCase):
     def closes(self, daily_growth, n=300):
         price, out = 100.0, []

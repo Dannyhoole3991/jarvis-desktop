@@ -112,6 +112,17 @@ def noise_sharpe_benchmark(n_strategies, n_days):
     return z / math.sqrt(n_days) * math.sqrt(M.DAYS_PER_YEAR)
 
 
+def min_detectable_sharpe(n_trials, n_days, alpha=0.05):
+    """
+    Smallest annualised Sharpe whose t-statistic (Sharpe * sqrt(years)) clears the one-sided
+    Bonferroni threshold alpha / n_trials. A strategy with a smaller TRUE Sharpe is expected to fail
+    the significance gate on `n_days` of data no matter how real its edge is: the data cannot resolve it.
+    """
+    n_trials = max(1, int(n_trials))
+    z = statistics.NormalDist().inv_cdf(1 - alpha / n_trials)
+    return z / math.sqrt(max(n_days, 1) / M.DAYS_PER_YEAR)
+
+
 def classify_regimes(daily_closes, lookback=90, trend_threshold=0.15, high_vol_quantile=0.67):
     """
     Labels each day from daily closes [(epoch, close)] using only data BEFORE

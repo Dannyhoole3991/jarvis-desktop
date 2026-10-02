@@ -733,7 +733,7 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open", "/trading/run_research") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open", "/trading/run_research", "/trading/stop_research") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
             return
 
@@ -748,6 +748,10 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             except Exception as error:
                 self._send_json({"error": str(error)}, status=400)
+            return
+
+        if self.path == "/trading/stop_research":
+            self._send_json({"ok": True, "message": jtrading.stop_research()})
             return
 
         if self.path == "/trading/run_research":

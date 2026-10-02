@@ -374,8 +374,20 @@
   <div class="panel-card" id="tradingStatusCard"></div>
   <div class="panel-hint" style="margin:6px 0 4px 0;">Research and paper trading only. No real money, no live trading, no leverage. A strategy that survives history is a candidate, not a proven edge.</div>
 
-  <h2>Strategies</h2>
-  <div class="panel-card" id="tradingStrategiesCard"></div>
+  <h2>Funnel <span class="panel-hint" style="font-weight:400;">(how many survived each gate)</span></h2>
+  <div class="panel-card" id="tradingFunnelCard"></div>
+
+  <h2>Why strategies were rejected</h2>
+  <div class="panel-card" id="tradingReasonsCard"></div>
+
+  <h2>Best by risk-adjusted score <span class="panel-hint" style="font-weight:400;">(not raw profit)</span></h2>
+  <div class="panel-card" id="tradingLeaderCard"></div>
+
+  <h2>Paper trading</h2>
+  <div class="panel-card" id="tradingPaperCard"></div>
+
+  <h2>Path to live trading <span class="panel-hint" style="font-weight:400;">(checklist only, nothing is enabled)</span></h2>
+  <div class="panel-card" id="tradingReadyCard"></div>
 
   <h2>The "3-10% a day" claim</h2>
   <div class="panel-card" id="tradingClaimCard"></div>
@@ -384,7 +396,8 @@
   <div class="panel-card" id="tradingDecisionsCard"></div>
 
   <div style="margin:18px 0 8px 0;">
-    <button class="panel-btn" id="runTradingResearchBtn">Run research</button>
+    <button class="panel-btn" id="runTradingResearchBtn">Start research</button>
+    <button class="panel-btn" id="stopTradingResearchBtn">Stop research</button>
   </div>
 </div>
 
@@ -1313,17 +1326,33 @@ document.getElementById("runBusinessCycleBtn").addEventListener("click", async (
 // ------------------------------------------------------------
 async function refreshTradingPanel() {
   try {
-    const res = await fetch(BASE + "/trading/summary", { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+    const res = await fetch(BASE + "/trading/summary", { headers: authHeaders(), signal: AbortSignal.timeout(15000) });
     const s = await res.json();
     if (s.error) throw new Error(s.error);
     const counts = Object.entries(s.counts || {}).map(([k, v]) => `${v} ${escapeHtml(k)}`).join(", ") || "none yet";
+    const b = s.batch || {};
+    const progress = b.total ? `${b.done || 0} / ${b.total} in this batch` : "";
     document.getElementById("tradingStatusCard").innerHTML = `
       <div class="panel-row"><div>Mode</div><div>${escapeHtml(s.mode)}</div></div>
       <div class="panel-row"><div>Strategy versions</div><div>${counts}</div></div>
-      <div class="panel-row"><div>Research run</div><div>${s.running ? "in progress" : "idle"}</div></div>`;
-    document.getElementById("tradingStrategiesCard").innerHTML = (s.strategies || []).length
-      ? s.strategies.map(r => `<div class="recent-action-line"><span class="time">${escapeHtml(r.id)} ${escapeHtml(r.status)}</span>${escapeHtml(r.template)} &mdash; ${escapeHtml((r.reason || "").slice(0, 220))}</div>`).join("")
-      : `<div class="files-empty">No strategies tested yet.</div>`;
+      <div class="panel-row"><div>Parameter sets tried</div><div>${s.n_trials} <span class="panel-hint">(each one raises the bar for the next)</span></div></div>
+      <div class="panel-row"><div>Research daemon</div><div>${s.running ? "running " + escapeHtml(progress) : "stopped"}</div></div>`;
+    document.getElementById("tradingFunnelCard").innerHTML = (s.funnel || []).map(f =>
+      `<div class="panel-row"><div>${escapeHtml(f.label)}</div><div>${f.count}</div></div>`).join("");
+    document.getElementById("tradingReasonsCard").innerHTML = (s.rejection_reasons || []).length
+      ? s.rejection_reasons.map(([k, v]) => `<div class="panel-row"><div>${escapeHtml(k)}</div><div>${v}</div></div>`).join("")
+      : `<div class="files-empty">No rejections yet.</div>`;
+    const fmt = (x, d = 2) => (x === null || x === undefined) ? "-" : Number(x).toFixed(d);
+    document.getElementById("tradingLeaderCard").innerHTML = (s.leaderboard || []).length
+      ? s.leaderboard.map(r => `<div class="recent-action-line"><span class="time">${escapeHtml(r.id)} ${escapeHtml(r.status)}</span>${escapeHtml(r.template)} &mdash; score ${fmt(r.score)}, OOS Sharpe ${fmt(r.oos_sharpe)}, drawdown ${fmt((r.oos_dd || 0) * 100, 0)}%, p ${r.p === null || r.p === undefined ? "-" : Number(r.p).toExponential(1)} (needs &lt; ${r.required_p === null || r.required_p === undefined ? "-" : Number(r.required_p).toExponential(1)})</div>`).join("")
+      : `<div class="files-empty">No strategy has reached the out-of-sample test yet.</div>`;
+    const p = s.paper || {};
+    document.getElementById("tradingPaperCard").innerHTML = (p.running || []).length
+      ? (p.running.map(r => `<div class="panel-row"><div>${escapeHtml(r)}</div><div>${escapeHtml((p.verdicts || {})[r] || "running")}</div></div>`).join(""))
+      : `<div class="files-empty">Nothing is paper trading. A strategy only gets there by surviving every research gate.</div>`;
+    const ready = s.readiness || { items: [] };
+    document.getElementById("tradingReadyCard").innerHTML = ready.items.map(i =>
+      `<div class="recent-action-line"><span class="time">${i.ok ? "met" : "not met"}${i.kind === "human" ? " (you)" : ""}</span>${escapeHtml(i.detail)}</div>`).join("");
     document.getElementById("tradingClaimCard").innerHTML = (s.claim || []).length
       ? s.claim.map(l => `<div class="recent-action-line">${escapeHtml(l)}</div>`).join("")
       : `<div class="files-empty">Claim experiment not run yet.</div>`;
@@ -1338,15 +1367,14 @@ document.getElementById("runTradingResearchBtn").addEventListener("click", async
   const btn = document.getElementById("runTradingResearchBtn");
   btn.textContent = "Starting...";
   btn.disabled = true;
-  try {
-    await fetch(BASE + "/trading/run_research", { method: "POST", headers: authHeaders() });
-  } catch (err) {}
-  setTimeout(async () => {
-    await refreshTradingPanel();
-    btn.textContent = "Run research";
-    btn.disabled = false;
-  }, 8000);
+  try { await fetch(BASE + "/trading/run_research", { method: "POST", headers: authHeaders() }); } catch (err) {}
+  setTimeout(async () => { await refreshTradingPanel(); btn.textContent = "Start research"; btn.disabled = false; }, 6000);
 });
+document.getElementById("stopTradingResearchBtn").addEventListener("click", async () => {
+  try { await fetch(BASE + "/trading/stop_research", { method: "POST", headers: authHeaders() }); } catch (err) {}
+  setTimeout(refreshTradingPanel, 1500);
+});
+setInterval(() => { if (document.getElementById("tabTrading").style.display !== "none") refreshTradingPanel(); }, 30000);
 
 // ------------------------------------------------------------
 // Settings

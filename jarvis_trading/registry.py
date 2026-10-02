@@ -235,6 +235,16 @@ class Registry:
                 "SELECT s.source, s.market, v.parameters_json FROM strategy_versions v JOIN strategies s ON s.strategy_id=v.strategy_id").fetchall()
         return [(r["source"].split(":", 1)[-1], r["market"], r["parameters_json"]) for r in rows]
 
+    def all_experiments_grouped(self):
+        """{(strategy_id, version): {kind: [{metrics, passed}, ...]}} in one query, for dashboards over many strategies."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT strategy_id, version, kind, metrics_json, passed FROM experiments ORDER BY id").fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault((r["strategy_id"], r["version"]), {}).setdefault(r["kind"], []).append(
+                {"metrics": json.loads(r["metrics_json"]), "passed": r["passed"]})
+        return out
+
     def all_experiments(self, kind):
         """Every experiment of one kind across all strategies (for cross-strategy checks such as near-duplicate detection)."""
         with self._connect() as conn:
