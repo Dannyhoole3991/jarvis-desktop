@@ -25,7 +25,9 @@ CHANNELS = [
     {
         "key": "fiverr_gigs", "name": "Fiverr gigs", "url": "https://www.fiverr.com/users/danielhoole/manage_gigs",
         "what": "Danny's Fiverr seller account (danielhoole). Four gigs are live: SEO blog posts, "
-                "SEO product descriptions, plain-English research briefs, and email newsletter issues.",
+                "SEO product descriptions, plain-English research briefs, and email newsletter issues. "
+                "Fiverr caps new sellers at 4 gigs, so a fifth (e.g. the drafted TikTok ad scripts gig in "
+                "generated_freelance_gigs) can only be listed by replacing one or once the cap rises.",
     },
     {
         "key": "fiverr_orders", "name": "Fiverr orders", "url": "https://www.fiverr.com/users/danielhoole/manage_orders",
