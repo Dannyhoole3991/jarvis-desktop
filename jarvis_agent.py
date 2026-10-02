@@ -33,7 +33,7 @@ import jarvis_business as jbiz
 
 OLLAMA_CHAT_URL = os.environ.get("JARVIS_OLLAMA_CHAT_URL", "http://127.0.0.1:11434/api/chat")
 LOCAL_MODEL = os.environ.get("JARVIS_AGENT_LOCAL_MODEL", "gpt-oss:20b")
-OPENAI_MODEL = os.environ.get("JARVIS_AGENT_OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_MODEL = os.environ.get("JARVIS_AGENT_OPENAI_MODEL", "gpt-4.1")
 ANTHROPIC_MODEL = os.environ.get("JARVIS_AGENT_ANTHROPIC_MODEL", "claude-sonnet-5-5")
 
 MAX_STEPS = 12
@@ -224,7 +224,7 @@ def configured_api_brain():
     """The paid brain Jarvis can use for hard tasks, if a key is set (Anthropic preferred)."""
     if os.environ.get("JARVIS_ANTHROPIC_API_KEY", "").strip():
         return "anthropic"
-    if os.environ.get("JARVIS_AGENT_USE_OPENAI", "").strip() and os.environ.get("JARVIS_OPENAI_API_KEY", "").strip():
+    if os.environ.get("JARVIS_AGENT_USE_OPENAI", "1").strip() != "0" and os.environ.get("JARVIS_OPENAI_API_KEY", "").strip():
         return "openai"
     return None
 
