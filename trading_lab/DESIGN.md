@@ -159,6 +159,77 @@ live module, restricted exchange key, capital cap). It only reports; it cannot e
 8. Freqtrade `trade` boots STOPPED with no API/Telegram, so a paper run would never have traded (`initial_state: running`).
 9. A per-trade significance test overstated evidence for correlated cross-pair trades (per-day test added).
 
+## Stage 3: the finished product - LIVE trader + continuous RESEARCH, separated (2026-10-03)
+
+```
+                    JARVIS (chat / HUD Trading section / engine endpoints)
+                       |
+          +------------+-------------+
+          |                          |
+     LIVE TRADER                RESEARCH LAB (daemon, always running)
+  jarvis_trading/live/          lab, batch, daemon, supervisor, paper
+  frozen bundle, 1 strategy     RESEARCH -> gates -> PAPER/CHALLENGER
+          |                          |
+          |                    promotion.review()  (read-only: flags, never promotes)
+          |                          |
+          +--------- PROMOTION GATE -+
+                     live/approval.py  (human-typed confirmation, logged, reversible)
+```
+
+### Three strategy states (registry statuses)
+- **RESEARCH**: hypothesis / generated / backtested / candidate. No access to execution of any kind.
+- **PAPER / CHALLENGER**: `paper`. Freqtrade dry-run on live market data with simulated money; supervised, compared with the backtest and (via `promotion.review`) with the live strategy.
+- **LIVE**: `live`. At most one version. Unreachable through `set_status`; only `promote_to_live` / `rollback_to`, which need an eligible, recent review (or a prior live period) and write `live_history` in the same transaction. `retired` is terminal except through a recorded rollback.
+
+### Promotion (explicit, logged, reversible)
+1. `promotion.review` (PromotionCriteria, frozen + fingerprinted, on top of the research gates): still a CANDIDATE under the current research criteria, code regenerates byte-for-byte, >= 60 paper days, >= 50 paper trades, paper verdict CONTINUE, paper drawdown <= 15%, no paper breach ever. To REPLACE a live strategy it must also have >= 60 days of overlapping evidence, a Sharpe margin >= 0.30 over the live strategy's own record (`live_check`, else its paper record) and no materially worse drawdown. It logs "Strategy B is a candidate to replace Strategy A" and the exact phrase to approve. It never changes status.
+2. `live/approval.approve_promotion`: you type `PROMOTE <id> v<n> REVIEW <review id>`. The version is frozen into a read-only bundle (`live/bundle.py`), becomes LIVE, any arming is cancelled. **This does not enable trading.**
+3. `live/approval.arm`: you type `ENABLE LIVE TRADING <id> v<n> WITH <capital> USDT`. Requires a live strategy, a capital limit, stored credentials, a verified bundle, no emergency latch. Time-limited (default 30 days) and bound to the bundle hash and the limits fingerprint.
+4. `start the live trader` (chat/CLI): refuses unless armed and every precondition holds.
+5. Rollback (`ROLLBACK TO <id> v<n>`), retire (`RETIRE LIVE STRATEGY`), disarm and emergency stop are always available; disarm and emergency stop need no confirmation. The full history is in `live_history` and `promotion_log` (append-only).
+
+### What stops an experimental strategy touching real money
+1. **Import separation (tests/test_separation.py):** no research module imports, even transitively, anything under `jarvis_trading.live`; only `service.py` (which carries your typed commands) does. Only `live/approval.py` may call `promote_to_live` / `rollback_to` / `retire_live`; no non-live module references live paths or credentials.
+2. **The research Risk Engine refuses mode "live"**; the live engine (a separate subclass built only inside the live package) refuses everything except "live" (or "rehearsal").
+3. **Frozen bundle:** the live strategy is a read-only file whose hash is re-verified at start and every minute; a mismatch triggers an emergency stop. It has no code path to modify itself. The research daemon writes only to the research registry and `trading_lab/` research folders.
+4. **Mandatory, fresh gate:** the bundle's live wrapper makes the Risk Engine gate file required and time-stamped; missing, unreadable, halted or older than 180 s (watchdog dead) means no entries.
+5. **Limits are frozen data with hard ceilings in code** (leverage 1x, position <= 100%, <= 5 positions, ...). Their fingerprint is bound to the arming; changing capital/limits requires disarm + re-arm. Research code cannot construct `LiveLimits` or touch the arming file.
+6. **No arming file => no real order path.** Default state is disarmed; promotion alone never enables trading.
+
+### Live safety features (spec -> implementation)
+| Requirement | Where |
+|---|---|
+| exchange connection | Freqtrade (GPL, separate process) + independent ccxt client (`live/exchange.py`) |
+| secure API credentials | Windows DPAPI, outside the repo, never in a config file or log (`live/creds.py`, `setup_credentials`); keys reach Freqtrade via environment only |
+| spot, no leverage | `assert_safe_live_config`, `LiveLimits` ceilings, position sanity check (leverage/short => emergency stop) |
+| no withdrawals | the key must have withdrawals disabled, spot only, IP-restricted; the trader verifies via the exchange (Binance `apiRestrictions`) and **fails closed**; no withdraw method exists in the code |
+| capital limit | `capital_limit`, Freqtrade `available_capital`, fixed stake, Risk Engine sizing |
+| position / daily loss / drawdown limits | live Risk Engine; drawdown halt persists across restarts until a human clears it |
+| emergency stop | file / HUD / chat / CLI: stop entries, market force-exit all, verify flat, fall back to direct exchange sells, stop engine, latch, disarm |
+| stale data | independent ticker age vs `stale_data_seconds` vetoes entries |
+| API failure | circuit breaker: entries vetoed after 5 consecutive failures, emergency stop after 20 |
+| duplicate orders | one-position-per-pair sanity check, `DuplicateOrderGuard` client ids for emergency sells, Freqtrade's own trade DB |
+| order reconciliation | engine's open trades vs real exchange balances every 5 min; shortfall halts entries |
+| restart recovery | Freqtrade trade DB + persisted peak/day baseline + persistent halt/latch files; wind-down on disarm |
+| exchange-side protection | `stoploss_on_exchange` (Binance spot: limit stops only) keeps positions protected if the PC goes offline |
+| complete trade logging | append-only `live_trades.jsonl` and `live_events.jsonl` (credentials redacted), plus Freqtrade DB |
+
+### Rehearsal mode (the whole path without real money)
+`python -m jarvis_trading.live.cli rehearse --test-emergency` runs the **same** trader and watchdog code with `dry_run` on and no keys. It passed against the real Freqtrade REST API (15 healthy loops, fresh gate, real Binance price feed, emergency stop executed, no orphan processes) and writes `rehearsal_ok.json`, which the readiness checklist requires.
+
+### Small-account feasibility (public Binance data, 2026-10-03)
+Binance spot minimum order: 5 USDT (BTC/USDT, ETH/USDT). GBP 10 = about 11.8 USDT, so at most two minimum-size positions (about 45% of the account each); `max_position_pct` is 50% in the live limits for that reason. Fees are 0.10% per side, a larger share of a tiny order. Stop-loss orders must also meet the minimum. Run `cli feasibility --capital 10 --currency GBP` for current numbers.
+
+### Market regime tracking (`regime.py`)
+Trend (bull/bear/chop), volatility class, volume class, sideways detection and regime-change events with hysteresis (major = trend flip or low<->high volatility). Labels use past data only (tested: future data never changes an earlier label), are logged by the daemon, and are **informational only**: never used to tune, filter or switch the live strategy.
+
+### Honest limits of what has been verified
+- The real-money order path (Freqtrade with live keys, ccxt private calls such as `apiRestrictions`, exchange-side stop orders, fills) has **never been exercised against a real account**. It is covered by unit tests with simulated exchanges and by the dry-run rehearsal through the real Freqtrade API. One live-only defect (Binance supports only limit stop orders) was found by reading Freqtrade's source, not by running it; there may be others.
+- Because it moves real money, `jarvis_trading/live` deserves an independent code review before it is armed (a checklist item).
+- Exchange availability/regulation for your country is your decision; research data and fee assumptions are Binance-based.
+- The ML family cannot be deployed live (it runs in the lab's own simulator).
+- No strategy has yet earned promotion, so nothing is approved, armed or trading.
+
 ## Open source reviewed
 
 | Project | Licence | Decision |

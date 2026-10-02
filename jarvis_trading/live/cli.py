@@ -174,16 +174,30 @@ def cmd_rehearse(args):
         return 1
     trader.engine_proc.start()
     print("rehearsal engine started; waiting for it to come up")
+    healthy = 0
+    emergency_ok = False
     try:
         time.sleep(25)
         while time.time() < deadline and trader.state not in ("STOPPED", "EMERGENCY"):
             snap = trader.step()
+            if snap["state"] == "RUNNING" and not snap["problems"] and (snap.get("gate") or {}).get("allow_entries"):
+                healthy += 1
             print(f"{snap['ts']} state={snap['state']} data_age={snap.get('data_age_seconds')} gate_ok={(snap.get('gate') or {}).get('allow_entries')} "
                   f"equity={snap.get('equity')} open={len(snap.get('open_positions', []))} failures={snap['api_failures']}", flush=True)
             time.sleep(10)
         if args.test_emergency:
             print("testing emergency stop path against the real Freqtrade API")
-            print(json.dumps(trader.emergency_stop("rehearsal: emergency-stop test", wait_seconds=30), default=str))
+            report = trader.emergency_stop("rehearsal: emergency-stop test", wait_seconds=30)
+            print(json.dumps(report, default=str))
+            emergency_ok = all(ok for _, ok in report["steps"]) and os.path.exists(paths.EMERGENCY_LATCH)
+        if healthy >= 10 and emergency_ok:
+            from . import readiness
+            with open(readiness.rehearsal_ok_path(), "w", encoding="utf-8") as f:
+                json.dump({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "healthy_loops": healthy, "emergency_stop_tested": True,
+                           "strategy": trader.manifest["strategy_id"]}, f)
+            print(f"REHEARSAL PASSED: {healthy} healthy watchdog loops against the real Freqtrade API and the emergency stop worked.")
+        else:
+            print(f"Rehearsal did not qualify as a pass (healthy loops {healthy}, emergency tested {emergency_ok}).")
     finally:
         trader.engine_proc.terminate()
         for p in (paths.EMERGENCY_LATCH,):

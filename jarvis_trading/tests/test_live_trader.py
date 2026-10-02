@@ -271,6 +271,12 @@ class EmergencyTests(TraderTestBase):
         self.assertIsNone(AP.read_arming())
         self.assertEqual(self.reg.promotion_events("emergency")[0]["details"]["action"], "stop")
 
+    def test_rehearsal_emergency_never_writes_to_the_promotion_history(self):
+        tr = self.make("rehearsal")
+        tr.emergency_stop("rehearsal test")
+        self.assertEqual(self.reg.promotion_events("emergency"), [])
+        self.assertEqual([e for e in self.reg.promotion_events("disarm")], [])
+
     def test_latch_survives_and_blocks_a_new_trader_until_cleared(self):
         tr = self.make()
         tr.emergency_stop("test")

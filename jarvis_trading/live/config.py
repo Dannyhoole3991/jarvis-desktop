@@ -73,8 +73,9 @@ def build_freqtrade_config(limits, timeframe, rehearsal, db_url, api_port, api_u
         "trading_mode": "spot", "timeframe": timeframe, "initial_state": "running", "force_entry_enable": False,
         "cancel_open_orders_on_exit": False, "process_throttle_secs": 5, "db_url": db_url, "bot_name": "jarvis-live",
         "unfilledtimeout": {"entry": 10, "exit": 10, "unit": "minutes"},
-        "order_types": {"entry": "limit", "exit": "limit", "stoploss": "market", "stoploss_on_exchange": True,
-                        "stoploss_on_exchange_interval": 60},
+        # Binance spot supports only LIMIT stop orders on the exchange (stop_loss_limit); verified in Freqtrade's exchange code.
+        "order_types": {"entry": "limit", "exit": "limit", "stoploss": "limit", "stoploss_on_exchange": True,
+                        "stoploss_on_exchange_interval": 60, "stoploss_on_exchange_limit_ratio": 0.99},
         "exchange": {"name": exchange, "key": "", "secret": "", "pair_whitelist": list(limits.allowed_pairs), "pair_blacklist": []},
         "entry_pricing": {"price_side": "same", "use_order_book": False},
         "exit_pricing": {"price_side": "same", "use_order_book": False},
@@ -114,6 +115,8 @@ def assert_safe_live_config(cfg, limits, rehearsal):
         problems.append("stake_amount exceeds the per-position limit")
     if set(ex.get("pair_whitelist", [])) - set(limits.allowed_pairs):
         problems.append("whitelist contains pairs the live limits do not allow")
+    if cfg.get("order_types", {}).get("stoploss") not in (None, "limit"):
+        problems.append("on Binance spot the exchange-side stop must be a limit order")
     if not cfg.get("order_types", {}).get("stoploss_on_exchange"):
         problems.append("stoploss_on_exchange must be on so positions stay protected if this PC goes offline")
     if problems:

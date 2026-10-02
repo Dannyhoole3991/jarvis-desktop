@@ -11,7 +11,7 @@ module does NOT exist here:
   - `LiveVenue` is a placeholder that refuses to be constructed.
   - The Risk Engine rejects mode "live" unconditionally.
   - Enabling either is a code change that needs a separate human review,
-    not a configuration flag. `live_readiness.py` lists what must be true first.
+    not a configuration flag. live/readiness.py lists what must be true first.
 
 Nothing in this module talks to an exchange.
 """
@@ -83,7 +83,7 @@ class LiveVenue(ExecutionVenue):
     def __init__(self, *args, **kwargs):
         raise LiveTradingDisabled(
             "Live trading is not implemented or enabled. A real-money venue requires a separately reviewed module "
-            "and explicit human authorisation; see jarvis_trading/live_readiness.py.")
+            "and explicit human authorisation; see jarvis_trading/live (the live trader runs Freqtrade under the live Risk Engine).")
 
 
 class ExecutionGateway:

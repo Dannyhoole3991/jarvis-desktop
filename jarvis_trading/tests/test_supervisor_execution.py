@@ -7,7 +7,8 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 from jarvis_trading import criteria as C
 from jarvis_trading import execution as E
-from jarvis_trading import live_readiness as LR
+from jarvis_trading.live import paths as LRP
+from jarvis_trading.live import readiness as LR
 from jarvis_trading import paper as P
 from jarvis_trading import registry as R
 from jarvis_trading import risk as RK
@@ -168,31 +169,44 @@ class LiveReadinessTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.reg = R.Registry(os.path.join(self.tmp.name, "r.db"))
+        self.patches = [mock.patch.object(LRP, n, os.path.join(self.tmp.name, f)) for n, f in (
+            ("LIVE_DIR", "live"), ("ARMED_FILE", "live/ARMED.json"), ("CONFIG_FILE", "live/cfg.json"), ("EMERGENCY_LATCH", "live/L.json"))]
+        for p in self.patches:
+            p.start()
+        os.makedirs(LRP.LIVE_DIR, exist_ok=True)
+        self.env = mock.patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        for k in ("JARVIS_EXCHANGE_API_KEY", "JARVIS_EXCHANGE_API_SECRET"):
+            os.environ.pop(k, None)
 
     def tearDown(self):
+        self.env.stop()
+        for p in self.patches:
+            p.stop()
         self.tmp.cleanup()
 
     def test_nothing_in_paper_is_not_ready_and_explains_why(self):
         report = LR.assess(self.reg)
-        self.assertFalse(report["ready_for_review"])
+        self.assertFalse(report["ready"])
         keys = {i.key: i for i in report["items"]}
         self.assertFalse(keys["strategy_in_paper"].ok)
-        self.assertFalse(keys["exchange_key_restrictions"].ok)  # human steps can never be auto-passed
-        self.assertIn("Nothing here enables trading", report["note"])
+        self.assertFalse(keys["promotion_approved"].ok)
+        self.assertFalse(keys["armed"].ok)
+        self.assertIn("only reports", report["note"])
 
-    def test_human_items_cannot_be_satisfied_by_the_registry_alone(self):
+    def test_human_steps_can_never_be_satisfied_by_paper_results_alone(self):
         name, source, params = S.generate("sma_cross")
         sid, ver, _ = self.reg.create_strategy("h", "template:sma_cross", "m", "1h", params, source)
         for st in ("backtested", "candidate", "paper"):
             self.reg.set_status(sid, ver, st, "x")
         self.reg.record_experiment(sid, ver, "paper_check", {"metrics": {"days": 90, "n_trades": 200, "max_drawdown": 0.05}, "verdict": "CONTINUE"})
-        with mock.patch.object(LR, "SIGNOFF_FILE", os.path.join(self.tmp.name, "none.json")), \
-                mock.patch.object(LR, "LIVE_MODULE_REVIEW_FILE", os.path.join(self.tmp.name, "none2.json")):
-            report = LR.assess(self.reg)
+        report = LR.assess(self.reg)
         keys = {i.key: i for i in report["items"]}
         self.assertTrue(keys["paper_duration"].ok and keys["paper_trade_count"].ok and keys["paper_matches_backtest"].ok)
-        self.assertFalse(report["ready_for_review"])
-        self.assertFalse(keys["human_signoff"].ok)
+        for human in ("credentials_stored", "capital_configured", "armed", "independent_review"):
+            self.assertFalse(keys[human].ok, human)
+            self.assertEqual(keys[human].kind, "human")
+        self.assertFalse(report["ready"])
 
 
 if __name__ == "__main__":

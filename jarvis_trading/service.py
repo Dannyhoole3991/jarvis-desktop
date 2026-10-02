@@ -13,8 +13,8 @@ import threading
 import time
 
 from . import freqtrade_adapter as A
-from . import live_readiness as LR
 from .live import approval as LAP
+from .live import readiness as LR
 from .live import paths as LPATHS
 from .live import status as LSTATUS
 from . import registry as R

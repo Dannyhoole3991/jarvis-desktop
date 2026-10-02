@@ -392,8 +392,9 @@ class LiveTrader:
         if self.engine_proc:
             self.engine_proc.terminate()
         try:
-            approval.disarm(self.registry, f"emergency stop: {reason}")
-            self.registry.record_promotion_event("emergency", None, None, None, {"action": "stop", "reason": reason}, "system")
+            if not self.rehearsal:  # a rehearsal must never write to the real promotion history
+                approval.disarm(self.registry, f"emergency stop: {reason}")
+                self.registry.record_promotion_event("emergency", None, None, None, {"action": "stop", "reason": reason}, "system")
         except Exception as error:
             self.events.write("action_failed", action="record_emergency", error=str(error)[:200])
         return report

@@ -370,6 +370,27 @@
 </div>
 
 <div class="tab-panel" id="tabTrading" style="display:none;">
+  <h2>Trading</h2>
+  <div class="panel-card" id="tradingModeCard"></div>
+  <div class="panel-card" id="tradingExplainCard" style="margin-top:8px;"></div>
+  <div style="margin:10px 0;">
+    <button class="panel-btn" id="emergencyStopBtn" style="background:#8b1a1a;color:#fff;">EMERGENCY STOP</button>
+    <button class="panel-btn" id="disarmLiveBtn">Disarm live trading</button>
+  </div>
+
+  <h2>Live strategy &amp; account</h2>
+  <div class="panel-card" id="tradingLiveCard"></div>
+
+  <h2>Risk state, last trade, last rejected trade</h2>
+  <div class="panel-card" id="tradingRiskCard"></div>
+
+  <h2>Challengers <span class="panel-hint" style="font-weight:400;">(paper trading, compared with live)</span></h2>
+  <div class="panel-card" id="tradingChallengersCard"></div>
+
+  <h2>Strategy version &amp; promotion history</h2>
+  <div class="panel-card" id="tradingHistoryCard"></div>
+  <div class="panel-hint" style="margin:6px 0 4px 0;">Approvals and arming are never done from a button: you type an exact confirmation phrase to Jarvis (or the CLI), which names the strategy and capital.</div>
+
   <h2>Trading research lab</h2>
   <div class="panel-card" id="tradingStatusCard"></div>
   <div class="panel-hint" style="margin:6px 0 4px 0;">Research and paper trading only. No real money, no live trading, no leverage. A strategy that survives history is a candidate, not a proven edge.</div>
@@ -1324,7 +1345,60 @@ document.getElementById("runBusinessCycleBtn").addEventListener("click", async (
 // ------------------------------------------------------------
 // Trading research lab -- read-only view of the strategy registry.
 // ------------------------------------------------------------
+async function refreshTradingProduct() {
+  try {
+    const res = await fetch(BASE + "/trading/product", { headers: authHeaders(), signal: AbortSignal.timeout(15000) });
+    const p = await res.json();
+    if (p.error) throw new Error(p.error);
+    const t = p.trader || {};
+    const fmt = (x, d = 2) => (x === null || x === undefined) ? "-" : Number(x).toFixed(d);
+    const badge = (on, label) => `<span style="padding:2px 8px;border-radius:10px;margin-right:6px;background:${on ? "#1f7a3d" : "#444"};color:#fff;">${label}${on ? " ON" : " off"}</span>`;
+    document.getElementById("tradingModeCard").innerHTML =
+      badge(p.modes.live, "LIVE") + badge(p.modes.paper, "PAPER") + badge(p.modes.research, "RESEARCH") +
+      (p.emergency_latched ? ` <b style="color:#ff7b72;">EMERGENCY STOP LATCHED</b>` : "") + (p.halted ? ` <b style="color:#e3b341;">RISK HALT</b>` : "");
+    document.getElementById("tradingExplainCard").innerHTML = (p.explain || []).map(l => `<div class="recent-action-line">${escapeHtml(l)}</div>`).join("");
+    const live = p.live_strategy;
+    const pos = (t.open_positions || []).map(o => `${escapeHtml(o.pair)} (${fmt(o.stake)} USDT)`).join(", ") || "none";
+    document.getElementById("tradingLiveCard").innerHTML = `
+      <div class="panel-row"><div>Live strategy</div><div>${live ? escapeHtml(live.strategy_id) + " v" + live.version : "none approved"}</div></div>
+      <div class="panel-row"><div>Armed</div><div>${p.arming ? "yes, until " + escapeHtml(p.arming.expires_at) + " (" + fmt(p.arming.capital_limit) + " USDT)" : "no"}</div></div>
+      <div class="panel-row"><div>Trader</div><div>${escapeHtml(t.state || "NOT RUNNING")}${t.mode ? " (" + escapeHtml(t.mode) + ")" : ""}</div></div>
+      <div class="panel-row"><div>Capital allocated / available</div><div>${fmt(t.capital_allocated)} / ${fmt(t.available_capital)} USDT</div></div>
+      <div class="panel-row"><div>Account value</div><div>${fmt(t.equity)} USDT</div></div>
+      <div class="panel-row"><div>Realised / unrealised P&amp;L</div><div>${fmt(t.realised_pnl)} / ${fmt(t.unrealised_pnl)} USDT</div></div>
+      <div class="panel-row"><div>Today</div><div>${fmt(t.today)} USDT</div></div>
+      <div class="panel-row"><div>Drawdown</div><div>${t.drawdown === undefined ? "-" : fmt(t.drawdown * 100, 1) + "%"}</div></div>
+      <div class="panel-row"><div>Open positions</div><div>${pos}</div></div>`;
+    const gate = t.gate || {};
+    const lt = t.last_trade, lv = t.last_veto;
+    document.getElementById("tradingRiskCard").innerHTML = `
+      <div class="panel-row"><div>Risk Engine</div><div>${t.risk_halted ? "HALTED: " + escapeHtml(t.halt_reason) : (gate.allow_entries ? "entries allowed" : "entries blocked: " + escapeHtml(gate.reason || "-"))}</div></div>
+      <div class="panel-row"><div>Price data age</div><div>${t.data_age_seconds === undefined || t.data_age_seconds === null ? "-" : fmt(t.data_age_seconds, 0) + "s"}</div></div>
+      <div class="panel-row"><div>Exchange/API failures</div><div>${t.api_failures === undefined ? "-" : t.api_failures}</div></div>
+      <div class="panel-row"><div>Last trade</div><div>${lt ? escapeHtml(lt.kind + " " + ((lt.trade || {}).pair || "") + " " + lt.ts) : "none"}</div></div>
+      <div class="panel-row"><div>Last rejected trade</div><div>${lv ? escapeHtml(lv.pair + " at " + lv.ts + ": " + (lv.reason || "")) : "none"}</div></div>`;
+    document.getElementById("tradingChallengersCard").innerHTML = (p.challengers || []).length
+      ? p.challengers.map(c => `<div class="recent-action-line"><span class="time">${escapeHtml(c.strategy_id)} v${c.version}</span>paper ${fmt((c.paper || {}).days, 0)}d, ${(c.paper || {}).n_trades || 0} trades, Sharpe ${fmt((c.paper || {}).sharpe)}, DD ${fmt(((c.paper || {}).max_drawdown || 0) * 100, 1)}% &mdash; ${c.eligible ? "<b>candidate to " + (live ? "replace the live strategy" : "go live") + " (needs your approval)</b>" : "not yet eligible: " + escapeHtml((c.blocking || [])[0] || "no review yet")}${c.phrase ? "<br><small>To approve, type exactly: " + escapeHtml(c.phrase) + "</small>" : ""}</div>`).join("")
+      : `<div class="files-empty">No challenger is paper trading yet.</div>`;
+    const hist = (p.live_history || []).map(h => `<div class="recent-action-line"><span class="time">${escapeHtml(h.ts)}</span>${escapeHtml(h.event)} ${escapeHtml(h.strategy_id)} v${h.version} &mdash; ${escapeHtml((h.reason || "").slice(0, 120))}</div>`).join("");
+    const promo = (p.promotion_history || []).slice(0, 8).map(h => `<div class="recent-action-line"><span class="time">${escapeHtml(h.ts)}</span>${escapeHtml(h.kind)} ${escapeHtml(h.strategy_id || "")} ${h.version ? "v" + h.version : ""} (${escapeHtml(h.actor)})</div>`).join("");
+    document.getElementById("tradingHistoryCard").innerHTML = (hist || `<div class="files-empty">No strategy has ever been live.</div>`) + promo;
+  } catch (err) {
+    document.getElementById("tradingModeCard").innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+}
+document.getElementById("emergencyStopBtn").addEventListener("click", async () => {
+  if (!confirm("EMERGENCY STOP: stop new entries, close every open position and latch until you clear it. Continue?")) return;
+  try { await fetch(BASE + "/trading/emergency_stop", { method: "POST", headers: authHeaders() }); } catch (err) {}
+  setTimeout(refreshTradingProduct, 1500);
+});
+document.getElementById("disarmLiveBtn").addEventListener("click", async () => {
+  try { await fetch(BASE + "/trading/disarm", { method: "POST", headers: authHeaders() }); } catch (err) {}
+  setTimeout(refreshTradingProduct, 1000);
+});
+
 async function refreshTradingPanel() {
+  refreshTradingProduct();
   try {
     const res = await fetch(BASE + "/trading/summary", { headers: authHeaders(), signal: AbortSignal.timeout(15000) });
     const s = await res.json();

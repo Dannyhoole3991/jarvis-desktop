@@ -72,7 +72,7 @@ class FtApi:
         return self._request("POST", "/stopentry")
 
     def force_exit_all(self):
-        return self._request("POST", "/forceexit", {"tradeid": "all"})
+        return self._request("POST", "/forceexit", {"tradeid": "all", "ordertype": "market"})
 
     def stop_bot(self):
         return self._request("POST", "/stop")

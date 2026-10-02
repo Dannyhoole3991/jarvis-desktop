@@ -199,6 +199,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(live["trading_mode"], "spot")
         self.assertEqual(live["api_server"]["listen_ip_address"], "127.0.0.1")
         self.assertTrue(live["order_types"]["stoploss_on_exchange"])
+        self.assertEqual(live["order_types"]["stoploss"], "limit")   # Binance spot supports only limit stops on the exchange
         self.assertEqual(live["stake_amount"], 6.0)
         self.assertLessEqual(live["max_open_trades"], 2)
 
