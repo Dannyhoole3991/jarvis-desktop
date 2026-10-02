@@ -230,6 +230,36 @@ Trend (bull/bear/chop), volatility class, volume class, sideways detection and r
 - The ML family cannot be deployed live (it runs in the lab's own simulator).
 - No strategy has yet earned promotion, so nothing is approved, armed or trading.
 
+## Stage 4: forward-only paper trial of the near-misses (started 2026-10-02T23:16:21Z)
+
+**Question it answers:** how do strategies that nearly passed the historical gates behave on live market data they have never seen?
+**What it is not:** a second chance. `criteria.py` (research gates) is unchanged; the near-misses stay `rejected`; nothing about the trial can promote them.
+
+### Selection (fixed rules, existing results only; `forward.select_near_misses`)
+A near-miss is a strategy that is REJECTED with **NOT_SIGNIFICANT as its only reason**. From those: p-value <= 0.10, out-of-sample Sharpe >= 0.80, out-of-sample drawdown <= 25%, <= 25% of nearby parameter sets losing money, not ML (cannot run in Freqtrade). Ranked by the leaderboard's luck-adjusted score (equivalent to out-of-sample Sharpe at a fixed trial count), at most 2 per family, and no two selected strategies may enter more than 50% of the same trades (behavioural overlap). 26 qualified; 5 selected: S-0007 (trend_momentum), S-0052 (trend_momentum), S-0182 (mtf_trend_breakout), S-0272 (breakout_volume), S-0010 (mtf_trend_breakout). Every skipped candidate and its reason is stored.
+
+### Freezing and the hard start
+At creation, one append-only `forward_trials` row stores: the exact version and parameters, the registry content hash, the SHA-256 of the exact strategy file that runs, the evaluation criteria (`ForwardCriteria`, fingerprinted), the selection rationale, and the hard start epoch. One trial per strategy version, ever (UNIQUE), so there are no re-runs until something passes. The strategy file is a read-only copy (generated source + an inert signal recorder) re-hashed every supervision tick; any change INVALIDATES the trial. Only trades opened after the start timestamp count.
+
+### Isolation: why a forward-trial strategy cannot trade real money or go live
+1. Research status stays `rejected` (terminal): `set_status` cannot move it, and `promote_to_live` refuses any version that has a forward trial (checked inside the same transaction).
+2. `promotion.review` fails it (`not_a_forward_trial_strategy`); `live.bundle.freeze` refuses it.
+3. The trial runs Freqtrade **dry-run only**: `--dry-run` is asserted at launch, `assert_safe_config` forbids keys/leverage/live, exchange key environment variables are stripped. It uses the research Risk Engine, which refuses mode "live".
+4. `forward.py` is research-side: the separation tests prove it (and everything it imports) cannot reach `jarvis_trading.live`.
+
+### What is recorded (hash-chained ledger + registry log)
+Every entry/exit **signal** (via the recorder, including signals that did not become trades), every hypothetical **entry** and **exit** (price, amount, stake, exchange fee, assumed 0.05% slippage per side, slippage-adjusted price and P&L, exit reason), the **market regime** at each event, and timestamps. Freqtrade dry-run models the exchange fee but no slippage, so all results are reported after the same slippage assumption as the backtests (raw figures are kept too). The ledger is hash-chained (editing/deleting any line breaks every later hash); its head is committed to the append-only `forward_log` at every check, so truncation or rewriting is detectable (`forward audit`).
+
+### Evaluation (pre-registered; stored with the trial)
+Runs to the horizon: at least 90 days AND 20 trades (hard end at 180 days; fewer than 20 trades then = INCONCLUSIVE). Outcome describes the *historical evidence only*:
+- **SUPPORTS**: net return > 0 after fees and slippage, profit factor >= 1, forward Sharpe >= 50% of the out-of-sample Sharpe.
+- **CONTRADICTS**: net return <= 0, or Sharpe < 25% of out-of-sample, or profit factor < 0.9.
+- otherwise INCONCLUSIVE.
+Compared with: the original backtest (training/validation), the out-of-sample results, and an equal-weight buy-and-hold of the universe over the *same* window. A forward p-value (max of per-trade and per-day sign-flip) is reported, Bonferroni-corrected for the 5 strategies in the set. Bad performance is **recorded, never fixed** (drawdown > 20% and losing after >= 10 trades are logged once as breaches; the strategy keeps running unchanged). Exceptional performance (Sharpe >= 2 with >= 30 days and >= 20 trades) is **flagged for human review as a possible bug**, not promoted. At the end `write_report` produces `trading_lab/reports/forward_trial_<set>.md`: does live forward performance support or contradict the historical evidence? Even a SUPPORTS outcome leaves the strategy a non-candidate: it would have to re-enter research as a new version under the unchanged gates.
+
+### Operation
+`ForwardSupervisor` runs inside the research daemon: starts/restarts the 5 dry-run processes (storm-limited), rewrites each gate, syncs the ledger every minute, checks hourly, finalises at the horizon. All state is in the registry and `trading_lab/forward/T###_*` folders, so it survives Jarvis and daemon restarts. HUD: "FORWARD PAPER TRIAL" card; chat: "forward trial status"; CLI: `python -m jarvis_trading.forward select|start|status|report|audit`.
+
 ## Open source reviewed
 
 | Project | Licence | Decision |

@@ -677,6 +677,16 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, status=500)
             return
 
+        if self.path == "/trading/forward":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send_json(jtrading.forward_view())
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=500)
+            return
+
         if self.path == "/trading/product":
             if not self._action_authorized():
                 self._send_json({"error": "unauthorized"}, status=401)

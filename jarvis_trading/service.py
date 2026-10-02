@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 
+from . import forward as FW
 from . import freqtrade_adapter as A
 from .live import approval as LAP
 from .live import readiness as LR
@@ -35,6 +36,8 @@ _DISARM = re.compile(r"(?i)\b(disarm|disable live trading|turn off live trading|
 _START_LIVE = re.compile(r"(?i)\b(start|run|launch)\b.*\b(live trader|live trading engine)\b")
 _EXPLAIN = re.compile(r"(?i)(what (strategy|are you running|is live)|which strategy|have you traded|did you trade|any trades?|why (no|didn.t|haven.t).*trade|challenger|promotion status|trading status|live status|how is the live)")
 _TYPED = re.compile(r"^\s*(PROMOTE\s+S-\d+\s+V\d+\s+REVIEW\s+\d+|ENABLE LIVE TRADING\s+S-\d+\s+V\d+\s+WITH\s+[\d.]+\s+USDT|ROLLBACK TO\s+S-\d+\s+V\d+|RETIRE LIVE STRATEGY|CLEAR EMERGENCY STOP|CLEAR RISK HALT)\s*$", re.I)
+
+_FORWARD = re.compile(r"(?i)(forward( paper)? trial|near.?miss)")
 
 _lock = threading.Lock()
 _cache = {"at": 0.0, "value": None}
@@ -63,7 +66,25 @@ def product(max_age=10):
     view = LSTATUS.build(reg)
     view["explain"] = LSTATUS.explain(reg, view)
     view["research_summary"] = summary()
+    view["forward"] = forward_view()
     return view
+
+
+def forward_view():
+    return FW.status_view(R.Registry())
+
+
+def _forward_text():
+    v = forward_view()
+    if not v["trials"]:
+        return "No forward paper trial has been started yet."
+    lines = [f"FORWARD PAPER TRIAL: {len(v['trials'])} near-miss strategies are being paper traded on live market data, unchanged, from their hard start time. "
+             "They stay rejected by the research gates and can never be promoted to live because of this trial."]
+    for t in v["trials"]:
+        pnl = "n/a" if t["pnl_pct"] is None else f"{t['pnl_pct']:+.1%}"
+        dd = "n/a" if t["max_drawdown"] is None else f"{t['max_drawdown']:.1%}"
+        lines.append(f"{t['strategy']} ({t['template']}): started {t['start']}, {t['days_elapsed']:.0f} days, {t['trades']} trades, P&L {pnl}, drawdown {dd}, status {t['status']}.")
+    return " ".join(lines)
 
 
 def emergency_stop_request():
@@ -228,6 +249,8 @@ def chat_reply(command):
         return disarm_request()
     if _START_LIVE.search(text):
         return start_live_trader()[1]
+    if _FORWARD.search(text):
+        return _forward_text()
     if _EXPLAIN.search(text):
         return " ".join(LSTATUS.explain(R.Registry()))
     if _READY.search(text):  # a question about readiness gets the honest checklist, not a refusal

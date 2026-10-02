@@ -139,8 +139,8 @@ class PaperManager:
         env = dict(os.environ, JARVIS_RISK_GATE_FILE=p["gate"])
         for secret in ("FREQTRADE__EXCHANGE__KEY", "FREQTRADE__EXCHANGE__SECRET"):
             env.pop(secret, None)
-        log = open(os.path.join(p["dir"], "freqtrade.log"), "ab")
-        proc = subprocess.Popen(args, env=env, stdout=log, stderr=log, cwd=A.LAB_DIR)
+        with open(os.path.join(p["dir"], "freqtrade.log"), "ab") as log:
+            proc = subprocess.Popen(args, env=env, stdout=log, stderr=log, cwd=A.LAB_DIR)
         with open(p["pid"], "w") as f:
             f.write(str(proc.pid))
         return proc.pid

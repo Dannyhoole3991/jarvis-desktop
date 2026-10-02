@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from jarvis_trading import batch as B  # noqa: E402
+from jarvis_trading import forward as FW  # noqa: E402
 from jarvis_trading import freqtrade_adapter as A  # noqa: E402
 from jarvis_trading import paper as P  # noqa: E402
 from jarvis_trading import regime as RG  # noqa: E402
@@ -45,8 +46,14 @@ def _refresh_regime(registry, previous):
 
 def _supervise_forever(registry, stop, interval=60, max_paper=3):
     sup = SUP.Supervisor(registry, P.PaperManager(registry), max_concurrent=max_paper)
+    forward = FW.ForwardSupervisor(registry)   # keeps the forward-only trials alive and recorded; state lives in the registry
     last_regime, regime_state = 0.0, None
     while not stop.is_set():
+        try:
+            for action in forward.tick():
+                registry.log_decision("forward_trial", action)
+        except Exception as error:
+            registry.log_decision("forward_error", f"Forward supervisor tick failed: {error}")
         if time.time() - last_regime >= 3600:
             last_regime = time.time()
             try:

@@ -63,6 +63,8 @@ def freeze(registry, strategy_id, version, limits, review_id=None, base_dir=None
     stored = registry.get_version(strategy_id, version)
     if not meta or not stored:
         raise BundleError(f"Unknown strategy {strategy_id} v{version}")
+    if registry.has_forward_trial(strategy_id, version):
+        raise BundleError("This strategy version is in a forward-only trial (a near-miss) and can never be frozen for live use.")
     template = meta["source"].split(":", 1)[1]
     if S.is_ml(template):
         raise BundleError("ML strategies run in the lab's own simulator and cannot be deployed live.")

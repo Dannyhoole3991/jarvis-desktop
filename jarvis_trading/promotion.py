@@ -66,6 +66,9 @@ def review(registry, strategy_id, version, criteria=None, research_criteria=None
     def add(key, ok, detail):
         items.append({"key": key, "ok": bool(ok), "detail": detail})
 
+    add("not_a_forward_trial_strategy", not registry.has_forward_trial(strategy_id, version),
+        "not part of a forward-only trial" if not registry.has_forward_trial(strategy_id, version) else
+        "this strategy is a near-miss in a forward-only trial; it can never be promoted to live")
     status = registry.status(strategy_id, version)
     add("status_is_paper", status == "paper", f"status is '{status}' (must be paper/challenger)")
 

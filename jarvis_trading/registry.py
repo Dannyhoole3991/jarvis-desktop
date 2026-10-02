@@ -98,9 +98,31 @@ CREATE TABLE IF NOT EXISTS live_history (
     bundle_hash TEXT, limits_fingerprint TEXT,
     review_id INTEGER, reason TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS forward_trials (
+    trial_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    set_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL, version INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,       -- registry content hash at the time the trial was frozen
+    code_sha256 TEXT NOT NULL,        -- hash of the exact strategy file run in the trial
+    params_json TEXT NOT NULL,
+    start_epoch REAL NOT NULL,        -- the hard start timestamp: only trades opened after this count
+    criteria_json TEXT NOT NULL,      -- the evaluation rules, fixed BEFORE the trial starts
+    criteria_fingerprint TEXT NOT NULL,
+    selection_json TEXT NOT NULL,     -- why this strategy was chosen (research evidence at selection time)
+    UNIQUE (strategy_id, version)     -- one trial per strategy version, ever: no re-runs until something passes
+);
+CREATE TABLE IF NOT EXISTS forward_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    trial_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,               -- status | check | breach | flag | integrity | note | report
+    details_json TEXT NOT NULL
+);
 """
 
-_IMMUTABLE = ("strategies", "strategy_versions", "status_log", "experiments", "decisions_log", "promotion_log", "live_history")
+_IMMUTABLE = ("strategies", "strategy_versions", "status_log", "experiments", "decisions_log", "promotion_log", "live_history",
+              "forward_trials", "forward_log")
 TRIGGERS = "".join(
     f"""
 CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t}
@@ -269,6 +291,8 @@ class Registry:
             current = status_of(strategy_id, version)
             if current is None:
                 raise RegistryError(f"Unknown strategy version {strategy_id} v{version}")
+            if conn.execute("SELECT 1 FROM forward_trials WHERE strategy_id=? AND version=?", (strategy_id, version)).fetchone():
+                raise RegistryError("This strategy version is in a forward-only trial (a near-miss) and can never be promoted to live.")
             if "live" not in ALLOWED[current]:
                 raise RegistryError(f"{strategy_id} v{version} is '{current}' and cannot go live.")
             previous = None
@@ -326,6 +350,61 @@ class Registry:
                          (strategy_id, version, "retired", reason, _now()))
             conn.execute("INSERT INTO live_history (ts, event, strategy_id, version, reason) VALUES (?,?,?,?,?)",
                          (_now(), "retired", strategy_id, version, reason))
+
+    # ------------------------------------------------------- forward trials
+    def has_forward_trial(self, strategy_id, version):
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM forward_trials WHERE strategy_id=? AND version=?", (strategy_id, version)).fetchone() is not None
+
+    def create_forward_trial(self, set_id, strategy_id, version, content_hash, code_sha256, params, start_epoch, criteria, fingerprint, selection):
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "INSERT INTO forward_trials (ts, set_id, strategy_id, version, content_hash, code_sha256, params_json, start_epoch, "
+                "criteria_json, criteria_fingerprint, selection_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (_now(), set_id, strategy_id, version, content_hash, code_sha256, json.dumps(params, sort_keys=True), float(start_epoch),
+                 json.dumps(criteria, sort_keys=True), fingerprint, json.dumps(selection, sort_keys=True, default=str)))
+            return cur.lastrowid
+
+    def _trial_row(self, row):
+        d = dict(row)
+        for key in ("params_json", "criteria_json", "selection_json"):
+            d[key[:-5]] = json.loads(d[key])
+        return d
+
+    def forward_trials(self, set_id=None):
+        query, args = "SELECT * FROM forward_trials", []
+        if set_id:
+            query += " WHERE set_id=?"
+            args.append(set_id)
+        with self._connect() as conn:
+            return [self._trial_row(r) for r in conn.execute(query + " ORDER BY trial_id", args).fetchall()]
+
+    def forward_trial(self, trial_id):
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM forward_trials WHERE trial_id=?", (trial_id,)).fetchone()
+        return self._trial_row(row) if row else None
+
+    def log_forward(self, trial_id, kind, details):
+        with self._lock, self._connect() as conn:
+            return conn.execute("INSERT INTO forward_log (ts, trial_id, kind, details_json) VALUES (?,?,?,?)",
+                                (_now(), trial_id, kind, json.dumps(details, sort_keys=True, default=str))).lastrowid
+
+    def forward_log(self, trial_id, kind=None, limit=1000):
+        query, args = "SELECT * FROM forward_log WHERE trial_id=?", [trial_id]
+        if kind:
+            query += " AND kind=?"
+            args.append(kind)
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute(query + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()]
+        for r in rows:
+            r["details"] = json.loads(r["details_json"])
+        return rows
+
+    def forward_status(self, trial_id):
+        """Latest recorded status of a trial, or None."""
+        rows = self.forward_log(trial_id, "status", limit=1)
+        return rows[0]["details"]["status"] if rows else None
 
     # -------------------------------------------------------- experiments
     def record_experiment(self, strategy_id, version, kind, metrics, passed=None, notes="", data_hash=None,
