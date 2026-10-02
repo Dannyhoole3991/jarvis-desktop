@@ -278,6 +278,7 @@
   <button class="nav-item" data-tab="apps" title="Apps"><span class="nav-icon">&#9635;</span><span class="nav-label">Apps</span></button>
   <button class="nav-item" data-tab="system" title="System"><span class="nav-icon">&#128202;</span><span class="nav-label">System</span></button>
   <button class="nav-item" data-tab="business" title="Business"><span class="nav-icon">&#128176;</span><span class="nav-label">Business</span></button>
+  <button class="nav-item" data-tab="trading" title="Trading lab"><span class="nav-icon">&#128202;</span><span class="nav-label">Trading</span></button>
   <div class="sidebar-spacer"></div>
   <button class="nav-item" data-tab="settings" title="Settings"><span class="nav-icon">&#9881;</span><span class="nav-label">Settings</span></button>
 </div>
@@ -365,6 +366,25 @@
 
   <div style="margin:18px 0 8px 0;">
     <button class="panel-btn" id="runBusinessCycleBtn">Run a cycle now</button>
+  </div>
+</div>
+
+<div class="tab-panel" id="tabTrading" style="display:none;">
+  <h2>Trading research lab</h2>
+  <div class="panel-card" id="tradingStatusCard"></div>
+  <div class="panel-hint" style="margin:6px 0 4px 0;">Research and paper trading only. No real money, no live trading, no leverage. A strategy that survives history is a candidate, not a proven edge.</div>
+
+  <h2>Strategies</h2>
+  <div class="panel-card" id="tradingStrategiesCard"></div>
+
+  <h2>The "3-10% a day" claim</h2>
+  <div class="panel-card" id="tradingClaimCard"></div>
+
+  <h2>Recent decisions</h2>
+  <div class="panel-card" id="tradingDecisionsCard"></div>
+
+  <div style="margin:18px 0 8px 0;">
+    <button class="panel-btn" id="runTradingResearchBtn">Run research</button>
   </div>
 </div>
 
@@ -968,13 +988,13 @@ modeToggleBtn.addEventListener("click", () => {
 // others are new utility panels. A pure show/hide swap, same spirit as
 // the orb/window-mode toggle: nothing underneath is torn down.
 // ============================================================
-const TAB_IDS = ["chat", "files", "apps", "system", "business", "settings"];
+const TAB_IDS = ["chat", "files", "apps", "system", "business", "trading", "settings"];
 let activeTab = "chat";
 function switchTab(tab) {
   if (!TAB_IDS.includes(tab)) return;
   activeTab = tab;
   document.getElementById("tabChat").style.display = tab === "chat" ? "" : "none";
-  for (const other of ["files", "apps", "system", "business", "settings"]) {
+  for (const other of ["files", "apps", "system", "business", "trading", "settings"]) {
     document.getElementById("tab" + other[0].toUpperCase() + other.slice(1)).style.display = tab === other ? "" : "none";
   }
   document.querySelectorAll(".nav-item").forEach(btn => {
@@ -984,6 +1004,7 @@ function switchTab(tab) {
   if (tab === "apps") refreshAppsList();
   if (tab === "system") refreshSystemDetail();
   if (tab === "business") refreshBusinessPanel();
+  if (tab === "trading") refreshTradingPanel();
   if (tab === "settings") refreshSettingsPanel();
 }
 document.querySelectorAll(".nav-item").forEach(btn => {
@@ -1285,6 +1306,46 @@ document.getElementById("runBusinessCycleBtn").addEventListener("click", async (
     btn.textContent = "Run a cycle now";
     btn.disabled = false;
   }, 20000);
+});
+
+// ------------------------------------------------------------
+// Trading research lab -- read-only view of the strategy registry.
+// ------------------------------------------------------------
+async function refreshTradingPanel() {
+  try {
+    const res = await fetch(BASE + "/trading/summary", { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+    const s = await res.json();
+    if (s.error) throw new Error(s.error);
+    const counts = Object.entries(s.counts || {}).map(([k, v]) => `${v} ${escapeHtml(k)}`).join(", ") || "none yet";
+    document.getElementById("tradingStatusCard").innerHTML = `
+      <div class="panel-row"><div>Mode</div><div>${escapeHtml(s.mode)}</div></div>
+      <div class="panel-row"><div>Strategy versions</div><div>${counts}</div></div>
+      <div class="panel-row"><div>Research run</div><div>${s.running ? "in progress" : "idle"}</div></div>`;
+    document.getElementById("tradingStrategiesCard").innerHTML = (s.strategies || []).length
+      ? s.strategies.map(r => `<div class="recent-action-line"><span class="time">${escapeHtml(r.id)} ${escapeHtml(r.status)}</span>${escapeHtml(r.template)} &mdash; ${escapeHtml((r.reason || "").slice(0, 220))}</div>`).join("")
+      : `<div class="files-empty">No strategies tested yet.</div>`;
+    document.getElementById("tradingClaimCard").innerHTML = (s.claim || []).length
+      ? s.claim.map(l => `<div class="recent-action-line">${escapeHtml(l)}</div>`).join("")
+      : `<div class="files-empty">Claim experiment not run yet.</div>`;
+    document.getElementById("tradingDecisionsCard").innerHTML = (s.decisions || []).length
+      ? s.decisions.map(d => `<div class="recent-action-line"><span class="time">${escapeHtml(d.category)}</span>${escapeHtml((d.detail || "").slice(0, 200))}</div>`).join("")
+      : `<div class="files-empty">No decisions logged yet.</div>`;
+  } catch (err) {
+    document.getElementById("tradingStatusCard").innerHTML = `<div class="files-empty">Couldn't reach Jarvis.</div>`;
+  }
+}
+document.getElementById("runTradingResearchBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("runTradingResearchBtn");
+  btn.textContent = "Starting...";
+  btn.disabled = true;
+  try {
+    await fetch(BASE + "/trading/run_research", { method: "POST", headers: authHeaders() });
+  } catch (err) {}
+  setTimeout(async () => {
+    await refreshTradingPanel();
+    btn.textContent = "Run research";
+    btn.disabled = false;
+  }, 8000);
 });
 
 // ------------------------------------------------------------

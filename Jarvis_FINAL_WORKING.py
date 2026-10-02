@@ -6,6 +6,7 @@ import jarvis_analytics
 import jarvis_business_context as jbctx
 import jarvis_browser
 import jarvis_agent
+from jarvis_trading import service as jtrading
 import re
 import requests
 import subprocess
@@ -676,6 +677,16 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, status=500)
             return
 
+        if self.path == "/trading/summary":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send_json(jtrading.summary())
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=500)
+            return
+
         if self.path == "/business/channels":
             if not self._action_authorized():
                 self._send_json({"error": "unauthorized"}, status=401)
@@ -722,7 +733,7 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open", "/trading/run_research") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
             return
 
@@ -737,6 +748,11 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             except Exception as error:
                 self._send_json({"error": str(error)}, status=400)
+            return
+
+        if self.path == "/trading/run_research":
+            started, message = jtrading.start_research()
+            self._send_json({"ok": started, "message": message})
             return
 
         if self.path == "/business/run_cycle":
@@ -10336,6 +10352,9 @@ def run_local_command_flow(command, user_message):
     if handle_business_channel_command(command):
         return True
 
+    if handle_trading_command(command):
+        return True
+
     if handle_display_resolution_command(command):
         return True
 
@@ -11725,6 +11744,19 @@ def handle_agent_command(command):
     except Exception:
         pass
     say(final_text)
+    return True
+
+
+def handle_trading_command(command):
+    """Trading research lab: status, run research, and a firm no to live/real-money requests."""
+    try:
+        reply = jtrading.chat_reply(command)
+    except Exception as error:
+        say(f"The trading lab hit a problem, sir: {error}")
+        return True
+    if reply is None:
+        return False
+    say(reply)
     return True
 
 

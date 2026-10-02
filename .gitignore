@@ -38,3 +38,14 @@
 !LibreHardwareMonitor/
 LibreHardwareMonitor/*
 !LibreHardwareMonitor/LibreHardwareMonitor.config
+
+# Trading research lab: the Python package and the design doc are source.
+# trading_lab/ (the Freqtrade venv, downloaded candle data, the registry
+# database, reports, paper-trading state) is data/tooling and stays ignored.
+!jarvis_trading/
+!jarvis_trading/**
+jarvis_trading/**/__pycache__/
+jarvis_trading/**/*.pyc
+!trading_lab/
+trading_lab/*
+!trading_lab/DESIGN.md
