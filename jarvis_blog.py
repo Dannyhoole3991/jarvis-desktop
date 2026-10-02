@@ -72,7 +72,12 @@ def _analytics_snippet():
 
 # Search Console "HTML tag" verification code (the content="..." value Google
 # gives you). Empty until Danny verifies the site in Search Console.
-GOOGLE_SITE_VERIFICATION = ""
+GOOGLE_SITE_VERIFICATION = "aoQYsjGKsklTakz-lXh-XXogh1X_tobZxlweYMZnB5w"
+
+# Search Console "HTML file" verification: Google asks for a file with this
+# exact name at the site root containing the line below. Must stay in place
+# or the property loses verification.
+GOOGLE_VERIFICATION_FILE = "google8c2d4609c988005d.html"
 
 
 def _verification_snippet():
@@ -249,6 +254,9 @@ def rebuild_and_publish():
     )
     with open(os.path.join(BLOG_REPO_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
         f.write(sitemap_xml)
+    if GOOGLE_VERIFICATION_FILE:
+        with open(os.path.join(BLOG_REPO_DIR, GOOGLE_VERIFICATION_FILE), "w", encoding="utf-8") as f:
+            f.write(f"google-site-verification: {GOOGLE_VERIFICATION_FILE}")
     with open(os.path.join(BLOG_REPO_DIR, "robots.txt"), "w", encoding="utf-8") as f:
         f.write(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_BASE_URL}/sitemap.xml\n")
 
