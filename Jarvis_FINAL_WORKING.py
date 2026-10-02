@@ -11732,12 +11732,19 @@ def handle_business_channel_command(command):
             if text:
                 spoken.append(f"Your Fiverr {label}: {text[:450]}")
         if not spoken:
-            say("I opened both pages, sir, but I couldn't read them from here. Please look at the Orders page: "
-                "real orders only ever appear there.")
-        else:
-            say(" ".join(spoken))
-        say("One reminder, sir: a message that says an order has been placed, with a link or an attachment, "
-            "is a scam. Real orders show on the Orders page and nowhere else.")
+            spoken.append("I opened both pages, sir, but I couldn't read them from here. Please look at the Orders page: "
+                          "real orders only ever appear there.")
+        spoken.append("One reminder, sir: a message that says an order has been placed, with a link or an attachment, "
+                      "is a scam. Real orders show on the Orders page and nowhere else.")
+        final_text = " ".join(spoken)
+        # Handler replies only reach the HUD chat if they're the FIRST thing
+        # said (that becomes the /command reply); this result arrives much
+        # later, so it's also written to the conversation log the HUD polls.
+        try:
+            add_to_memory("jarvis", final_text)
+        except Exception:
+            pass
+        say(final_text)
         return True
 
     return False
