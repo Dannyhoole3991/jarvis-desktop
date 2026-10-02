@@ -56,6 +56,7 @@ def _row(version, exps, n_trials, criteria):
     test, mc = _last(exps, "backtest_test"), _last(exps, "monte_carlo")
     rob, verdict = _last(exps, "robustness"), _last(exps, "verdict")
     paper = _last(exps, "paper_check")
+    live_check = _last(exps, "live_check")
     in_paper = version["status"] in ("paper", "retired") or paper is not None
 
     leakage_clean = bool(look and look["metrics"].get("clean") is True and (lint is None or lint["passed"]))
@@ -92,6 +93,7 @@ def _row(version, exps, n_trials, criteria):
             "n_trades", "total_return", "annualised_return", "avg_daily_return", "sharpe", "sortino", "calmar", "profit_factor",
             "max_drawdown", "win_rate", "fees_total", "fees_pct_of_gross_profit", "turnover", "longest_losing_streak", "days")},
         "paper": None if not paper else paper["metrics"].get("metrics"),
+        "live": None if not live_check else live_check["metrics"].get("metrics"),
         "paper_verdict": None if not paper else paper["metrics"].get("verdict"),
         "stability": None if not rob else {"neighbour_fail_fraction": rob["metrics"].get("neighbour_fail_fraction"),
                                           "neighbours_tested": rob["metrics"].get("neighbours_tested")},

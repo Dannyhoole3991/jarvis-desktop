@@ -18,6 +18,7 @@ import time
 
 from . import freqtrade_adapter as A
 from . import paper as P
+from . import promotion as PR
 
 STATUS_FILE = os.path.join(A.LAB_DIR, "paper_status.json")
 MAX_RESTARTS_PER_HOUR = 5
@@ -47,6 +48,8 @@ class Supervisor:
         self.clock = clock
         self.log = log or (lambda category, detail, sid=None, ver=None: registry.log_decision(category, detail, sid, ver))
         self._last_eval = {}
+        self._last_review = 0.0
+        self.review_every = 3600
         self._restarts = {}   # (sid, ver) -> [timestamps]
 
     def _pid(self, sid, ver):
@@ -110,6 +113,14 @@ class Supervisor:
                         actions.append(f"{sid} v{ver} REJECTED in paper: {verdict.summary()}")
             except Exception as error:
                 actions.append(f"supervision error {sid} v{ver}: {error}")
+        if self.clock() - self._last_review >= self.review_every:
+            self._last_review = self.clock()
+            try:  # read-only evaluation: flags eligible challengers in the decision log; it can never promote anything
+                for r in PR.challengers(self.registry):
+                    if r["eligible"]:
+                        actions.append(f"{r['strategy_id']} v{r['version']} is a candidate to promote (awaiting human approval)")
+            except Exception as error:
+                actions.append(f"promotion review error: {error}")
         self._write_status(running, actions, verdicts)
         return actions
 

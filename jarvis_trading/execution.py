@@ -90,8 +90,8 @@ class ExecutionGateway:
     """The single door orders pass through. The Risk Engine can reject anything; a rejection is final."""
 
     def __init__(self, risk_engine, venue, audit=None):
-        if venue.mode not in RK.MODES_ALLOWED:
-            raise LiveTradingDisabled(f"Venue mode '{venue.mode}' is not permitted by the Risk Engine.")
+        if venue.mode not in risk_engine.ALLOWED_MODES:
+            raise LiveTradingDisabled(f"Venue mode '{venue.mode}' is not permitted by this Risk Engine (allowed: {', '.join(risk_engine.ALLOWED_MODES)}).")
         self.risk = risk_engine
         self.venue = venue
         self.audit = audit  # optional callable(category, detail)

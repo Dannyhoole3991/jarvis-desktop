@@ -69,6 +69,11 @@ class Decision:
 
 
 class RiskEngine:
+    # The research/paper engine refuses anything but backtest/paper. A live engine (live/limits.py) is a
+    # separate subclass that is constructed only by the live trader, never by research code.
+    ALLOWED_MODES = MODES_ALLOWED
+    probe_order = MIN_PROBE_ORDER
+
     def __init__(self, limits=None, state_path=None):
         self.limits = limits or RiskLimits()
         self.state_path = state_path
@@ -100,8 +105,8 @@ class RiskEngine:
     def evaluate(self, order, state):
         lim = self.limits
 
-        if order.mode not in MODES_ALLOWED:
-            return Decision(False, "mode", f"Mode '{order.mode}' is not permitted. Live trading is disabled in this system.")
+        if order.mode not in self.ALLOWED_MODES:
+            return Decision(False, "mode", f"Mode '{order.mode}' is not permitted by this engine (allowed: {', '.join(self.ALLOWED_MODES)}).")
         if order.side not in ("buy", "sell"):
             return Decision(False, "side", f"Unknown order side '{order.side}'.")
         if order.value <= 0:
@@ -119,6 +124,9 @@ class RiskEngine:
             return Decision(False, "short", "Selling more than is held would open a short, which is not permitted.")
 
         # From here on the order adds exposure.
+        extra = self._extra_entry_checks(order, state)
+        if extra is not None:
+            return extra
         if state.peak_equity > 0:
             drawdown = (state.peak_equity - state.equity) / state.peak_equity
             if drawdown >= lim.max_drawdown_halt_pct and not self.halted:
@@ -143,6 +151,10 @@ class RiskEngine:
 
         return Decision(True, "ok", "Within all risk limits.")
 
+    def _extra_entry_checks(self, order, state):
+        """Hook for subclasses to add checks that apply only to orders that ADD exposure. Return a Decision to veto, else None."""
+        return None
+
     def gate_snapshot(self, state):
         """
         What a trading engine's strategy callback may read before entering a
@@ -153,7 +165,7 @@ class RiskEngine:
         # Entries are allowed only if the engine would approve a (tiny) buy in at least one allowed pair.
         approved, reason = False, ""
         for pair in lim.allowed_pairs:
-            verdict = self.evaluate(OrderRequest(pair=pair, side="buy", value=MIN_PROBE_ORDER, mode="paper"), state)
+            verdict = self.evaluate(OrderRequest(pair=pair, side="buy", value=self.probe_order, mode=self.ALLOWED_MODES[0]), state)
             if verdict.approved:
                 approved = True
                 break

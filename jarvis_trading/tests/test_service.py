@@ -17,6 +17,45 @@ class ChatTests(unittest.TestCase):
         for phrase in ("go live now", "switch to live trading", "start live trading with the best strategy"):
             self.assertEqual(V.chat_reply(phrase), V.REFUSAL, phrase)
 
+    def test_typed_approval_phrases_go_to_the_approval_layer_and_nothing_else_does(self):
+        with mock.patch.object(V, "typed_control", return_value="done") as m:
+            for phrase in ("PROMOTE S-0001 v1 REVIEW 12", "ENABLE LIVE TRADING S-0001 v1 WITH 12 USDT", "ROLLBACK TO S-0001 v1",
+                           "retire live strategy", "clear emergency stop", "CLEAR RISK HALT"):
+                self.assertEqual(V.chat_reply(phrase), "done", phrase)
+            self.assertEqual(m.call_count, 6)
+            m.reset_mock()
+            for phrase in ("please promote S-0001", "enable live trading", "approve everything", "promote S-0001 v1"):
+                V.chat_reply(phrase)
+            m.assert_not_called()   # vague requests never reach the approval layer
+
+    def test_typed_control_reports_the_required_phrase_on_a_wrong_confirmation(self):
+        import tempfile
+        from jarvis_trading import registry as R
+        with tempfile.TemporaryDirectory() as tmp:
+            real = R.Registry
+            with mock.patch.object(V.R, "Registry", lambda: real(os.path.join(tmp, "x.db"))):
+                reply = V.typed_control("PROMOTE S-0001 v1 REVIEW 5")
+        self.assertIn("review", reply.lower())
+
+    def test_emergency_stop_phrase_triggers_the_stop_without_confirmation(self):
+        with mock.patch.object(V, "emergency_stop_request", return_value="STOPPING") as m:
+            self.assertEqual(V.chat_reply("emergency stop"), "STOPPING")
+            self.assertEqual(V.chat_reply("kill switch now"), "STOPPING")
+            self.assertEqual(m.call_count, 2)
+
+    def test_disarm_needs_no_confirmation(self):
+        with mock.patch.object(V, "disarm_request", return_value="DISARMED"):
+            self.assertEqual(V.chat_reply("disarm live trading"), "DISARMED")
+
+    def test_explain_questions_use_the_status_explainer(self):
+        with mock.patch.object(V.LSTATUS, "explain", return_value=["Line one.", "Line two."]):
+            for phrase in ("what strategy is live", "have you traded today", "why no trade today", "which challenger is strongest"):
+                self.assertEqual(V.chat_reply(phrase), "Line one. Line two.", phrase)
+
+    def test_start_live_trader_phrase(self):
+        with mock.patch.object(V, "start_live_trader", return_value=(True, "Starting.")):
+            self.assertEqual(V.chat_reply("start the live trader"), "Starting.")
+
     def test_unrelated_commands_pass_through(self):
         for phrase in ("open fiverr", "what time is it", "check my messages", "run a business cycle", "when will my fiverr gig go live on the site"):
             self.assertIsNone(V.chat_reply(phrase), phrase)

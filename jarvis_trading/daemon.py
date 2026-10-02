@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from jarvis_trading import batch as B  # noqa: E402
 from jarvis_trading import freqtrade_adapter as A  # noqa: E402
 from jarvis_trading import paper as P  # noqa: E402
+from jarvis_trading import regime as RG  # noqa: E402
 from jarvis_trading import registry as R  # noqa: E402
 from jarvis_trading import supervisor as SUP  # noqa: E402
 
@@ -33,9 +34,25 @@ PID_FILE = os.path.join(A.LAB_DIR, "daemon.pid")
 DEFAULT_MAX_TRIALS = 6000
 
 
+def _refresh_regime(registry, previous):
+    """Hourly: recompute the market regime and log changes (informational only; never used to tune strategies)."""
+    state = RG.run()
+    if state and previous and state["label"] != previous.get("label"):
+        major = any(c["major"] for c in state["recent_changes"][-1:])
+        registry.log_decision("regime", f"Market regime {'MAJOR ' if major else ''}change: {previous.get('label')} -> {state['label']}")
+    return state
+
+
 def _supervise_forever(registry, stop, interval=60, max_paper=3):
     sup = SUP.Supervisor(registry, P.PaperManager(registry), max_concurrent=max_paper)
+    last_regime, regime_state = 0.0, None
     while not stop.is_set():
+        if time.time() - last_regime >= 3600:
+            last_regime = time.time()
+            try:
+                regime_state = _refresh_regime(registry, regime_state)
+            except Exception as error:
+                registry.log_decision("regime_error", f"Regime refresh failed: {error}")
         try:
             sup.tick()
         except Exception as error:

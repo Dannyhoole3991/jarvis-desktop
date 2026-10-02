@@ -15,6 +15,7 @@ Every experiment stores what is needed to reproduce it: data hash, the exact
 command, parameters, random seed and tool versions.
 """
 
+import calendar
 import contextlib
 import hashlib
 import json
@@ -26,17 +27,21 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.path.join(os.path.dirname(HERE), "trading_lab", "jarvis_trading.db")
 
-STATUSES = ("hypothesis", "generated", "backtested", "candidate", "rejected", "paper", "retired")
+STATUSES = ("hypothesis", "generated", "backtested", "candidate", "rejected", "paper", "live", "retired")
 # What each status may move to. "rejected" has no exits: it is terminal for that version.
 ALLOWED = {
     "hypothesis": ("generated", "rejected"),
     "generated": ("backtested", "rejected"),
     "backtested": ("candidate", "rejected"),
     "candidate": ("paper", "rejected"),
-    "paper": ("retired", "rejected"),
-    "retired": (),
+    "paper": ("retired", "rejected", "live"),
+    "live": ("retired",),
+    "retired": ("live",),   # only a recorded rollback may bring a retired live version back
     "rejected": (),
 }
+# "live" is never reachable through set_status(): only promote_to_live / rollback_to, which demand an eligible
+# promotion review (or a prior live period) and write the live history in the same transaction.
+GUARDED_STATUSES = ("live",)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategies (
@@ -75,9 +80,27 @@ CREATE TABLE IF NOT EXISTS decisions_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL, strategy_id TEXT, version INTEGER, category TEXT NOT NULL, detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS promotion_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,            -- review | approval | rollback | arm | disarm | enable | emergency
+    strategy_id TEXT, version INTEGER,
+    eligible INTEGER,
+    details_json TEXT NOT NULL,
+    actor TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS live_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    event TEXT NOT NULL,           -- promoted | rolled_back | retired
+    strategy_id TEXT NOT NULL, version INTEGER NOT NULL,
+    previous_strategy_id TEXT, previous_version INTEGER,
+    bundle_hash TEXT, limits_fingerprint TEXT,
+    review_id INTEGER, reason TEXT NOT NULL
+);
 """
 
-_IMMUTABLE = ("strategies", "strategy_versions", "status_log", "experiments", "decisions_log")
+_IMMUTABLE = ("strategies", "strategy_versions", "status_log", "experiments", "decisions_log", "promotion_log", "live_history")
 TRIGGERS = "".join(
     f"""
 CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t}
@@ -188,6 +211,8 @@ class Registry:
     def set_status(self, strategy_id, version, new_status, reason):
         if new_status not in STATUSES:
             raise RegistryError(f"Unknown status '{new_status}'")
+        if new_status in GUARDED_STATUSES:
+            raise RegistryError(f"'{new_status}' cannot be set directly; it requires the promotion process (promote_to_live / rollback_to).")
         if not reason or not str(reason).strip():
             raise RegistryError("Every status change needs a reason.")
         with self._lock:
@@ -199,6 +224,108 @@ class Registry:
             with self._connect() as conn:
                 conn.execute("INSERT INTO status_log (strategy_id, version, status, reason, ts) VALUES (?,?,?,?,?)",
                              (strategy_id, version, new_status, reason, _now()))
+
+    # ---------------------------------------------------- promotion / live
+    def record_promotion_event(self, kind, strategy_id, version, eligible, details, actor):
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO promotion_log (ts, kind, strategy_id, version, eligible, details_json, actor) VALUES (?,?,?,?,?,?,?)",
+                (_now(), kind, strategy_id, version, None if eligible is None else int(bool(eligible)),
+                 json.dumps(details, sort_keys=True, default=str), actor))
+            return cur.lastrowid
+
+    def promotion_events(self, kind=None, strategy_id=None, limit=100):
+        query, args = "SELECT * FROM promotion_log WHERE 1=1", []
+        if kind:
+            query += " AND kind=?"
+            args.append(kind)
+        if strategy_id:
+            query += " AND strategy_id=?"
+            args.append(strategy_id)
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute(query + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()]
+        for r in rows:
+            r["details"] = json.loads(r["details_json"])
+        return rows
+
+    def current_live(self):
+        """(strategy_id, version) of the single strategy version currently LIVE, or None."""
+        live = self.list_versions(status="live")
+        return (live[0]["strategy_id"], live[0]["version"]) if live else None
+
+    def live_history(self, limit=200):
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute("SELECT * FROM live_history ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+    def _go_live(self, strategy_id, version, event, review_id, bundle_hash, limits_fingerprint, reason):
+        if not reason or not str(reason).strip():
+            raise RegistryError("Going live (or rolling back) needs a reason.")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            def status_of(sid, ver):
+                row = conn.execute("SELECT status FROM status_log WHERE strategy_id=? AND version=? ORDER BY id DESC LIMIT 1", (sid, ver)).fetchone()
+                return row["status"] if row else None
+            current = status_of(strategy_id, version)
+            if current is None:
+                raise RegistryError(f"Unknown strategy version {strategy_id} v{version}")
+            if "live" not in ALLOWED[current]:
+                raise RegistryError(f"{strategy_id} v{version} is '{current}' and cannot go live.")
+            previous = None
+            for row in conn.execute("SELECT DISTINCT strategy_id, version FROM status_log").fetchall():
+                if status_of(row["strategy_id"], row["version"]) == "live":
+                    previous = (row["strategy_id"], row["version"])
+            if previous == (strategy_id, version):
+                raise RegistryError("That version is already live.")
+            if previous:
+                conn.execute("INSERT INTO status_log (strategy_id, version, status, reason, ts) VALUES (?,?,?,?,?)",
+                             (previous[0], previous[1], "retired", f"Replaced by {strategy_id} v{version}: {reason}", _now()))
+                conn.execute("INSERT INTO live_history (ts, event, strategy_id, version, previous_strategy_id, previous_version, bundle_hash, "
+                             "limits_fingerprint, review_id, reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                             (_now(), "retired", previous[0], previous[1], strategy_id, version, None, None, review_id, f"Replaced: {reason}"))
+            conn.execute("INSERT INTO status_log (strategy_id, version, status, reason, ts) VALUES (?,?,?,?,?)",
+                         (strategy_id, version, "live", reason, _now()))
+            conn.execute("INSERT INTO live_history (ts, event, strategy_id, version, previous_strategy_id, previous_version, bundle_hash, "
+                         "limits_fingerprint, review_id, reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         (_now(), event, strategy_id, version, previous[0] if previous else None, previous[1] if previous else None,
+                          bundle_hash, limits_fingerprint, review_id, reason))
+            return previous
+
+    def promote_to_live(self, strategy_id, version, review_id, bundle_hash, limits_fingerprint, reason, max_review_age_hours=168):
+        """
+        The ONLY way a paper strategy becomes LIVE. Requires a recorded promotion review for exactly this
+        version that found it eligible, recent, and not superseded by a later ineligible review.
+        """
+        reviews = [r for r in self.promotion_events("review", strategy_id, limit=500) if r["version"] == version]
+        match = next((r for r in reviews if r["id"] == review_id), None)
+        if not match or not match["eligible"]:
+            raise RegistryError("No eligible promotion review with that id exists for this strategy version.")
+        if reviews and reviews[0]["id"] != review_id and not reviews[0]["eligible"]:
+            raise RegistryError("A newer review found this strategy ineligible; it cannot be promoted on an older review.")
+        age = calendar.timegm(time.gmtime()) - calendar.timegm(time.strptime(match["ts"], "%Y-%m-%dT%H:%M:%S"))
+        if age > max_review_age_hours * 3600:
+            raise RegistryError("The promotion review is too old; run a fresh review.")
+        return self._go_live(strategy_id, version, "promoted", review_id, bundle_hash, limits_fingerprint, reason)
+
+    def rollback_to(self, strategy_id, version, bundle_hash, limits_fingerprint, reason):
+        """Brings back a version that was previously live (and is now retired). Logged in the live history."""
+        was_live = any(h["strategy_id"] == strategy_id and h["version"] == version and h["event"] in ("promoted", "rolled_back")
+                       for h in self.live_history(1000))
+        if not was_live:
+            raise RegistryError("Only a version that was previously live can be rolled back to.")
+        return self._go_live(strategy_id, version, "rolled_back", None, bundle_hash, limits_fingerprint, reason)
+
+    def retire_live(self, strategy_id, version, reason):
+        """Takes the live strategy out of service without replacing it (e.g. emergency demotion)."""
+        if self.status(strategy_id, version) != "live":
+            raise RegistryError("That version is not live.")
+        if not reason or not str(reason).strip():
+            raise RegistryError("Retiring a live strategy needs a reason.")
+        with self._lock, self._connect() as conn:
+            conn.execute("INSERT INTO status_log (strategy_id, version, status, reason, ts) VALUES (?,?,?,?,?)",
+                         (strategy_id, version, "retired", reason, _now()))
+            conn.execute("INSERT INTO live_history (ts, event, strategy_id, version, reason) VALUES (?,?,?,?,?)",
+                         (_now(), "retired", strategy_id, version, reason))
 
     # -------------------------------------------------------- experiments
     def record_experiment(self, strategy_id, version, kind, metrics, passed=None, notes="", data_hash=None,

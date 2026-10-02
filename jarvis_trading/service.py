@@ -14,6 +14,9 @@ import time
 
 from . import freqtrade_adapter as A
 from . import live_readiness as LR
+from .live import approval as LAP
+from .live import paths as LPATHS
+from .live import status as LSTATUS
 from . import registry as R
 from . import report as P
 from . import strategies as S
@@ -27,6 +30,12 @@ _READY = re.compile(r"(?i)\b(live readiness|ready for live|ready to go live|path
 _LEADER = re.compile(r"(?i)\b(leaderboard|best strateg|top strateg|trading results|how many strateg)")
 _TRADING = re.compile(r"(?i)\b(trading (lab|research|status|strateg)|strategy lab|paper trad|trading report|trading dashboard|how('s| is) the trading)")
 
+_EMERGENCY = re.compile(r"(?i)\b(emergency stop|kill switch|stop all trading|stop trading now|panic stop)\b")
+_DISARM = re.compile(r"(?i)\b(disarm|disable live trading|turn off live trading|switch off live trading)\b")
+_START_LIVE = re.compile(r"(?i)\b(start|run|launch)\b.*\b(live trader|live trading engine)\b")
+_EXPLAIN = re.compile(r"(?i)(what (strategy|are you running|is live)|which strategy|have you traded|did you trade|any trades?|why (no|didn.t|haven.t).*trade|challenger|promotion status|trading status|live status|how is the live)")
+_TYPED = re.compile(r"^\s*(PROMOTE\s+S-\d+\s+V\d+\s+REVIEW\s+\d+|ENABLE LIVE TRADING\s+S-\d+\s+V\d+\s+WITH\s+[\d.]+\s+USDT|ROLLBACK TO\s+S-\d+\s+V\d+|RETIRE LIVE STRATEGY|CLEAR EMERGENCY STOP|CLEAR RISK HALT)\s*$", re.I)
+
 _lock = threading.Lock()
 _cache = {"at": 0.0, "value": None}
 _proc = {"p": None}
@@ -35,9 +44,9 @@ PID_FILE = os.path.join(A.LAB_DIR, "daemon.pid")
 STOP_FLAG = os.path.join(A.LAB_DIR, "STOP_RESEARCH")
 BATCH_STATUS = os.path.join(A.LAB_DIR, "batch_status.json")
 
-REFUSAL = ("Live trading and real money are not enabled, sir, and I won't switch them on. The lab is research and "
-           "paper-trading only: no exchange keys, no leverage. If a strategy ever survives every test and a long paper run, "
-           "going live is a decision for you and a separately reviewed module, not something I do by myself.")
+REFUSAL = ("Live trading is built but DISABLED, sir, and I won't switch it on from a casual request. It takes two explicit steps from you: "
+           "approve a strategy that has earned promotion (you type its confirmation phrase), then arm live trading with a stated capital "
+           "(you type a second phrase). Ask 'trading status' to see exactly what is blocking it now.")
 
 
 def _read_json(path):
@@ -46,6 +55,70 @@ def _read_json(path):
             return json.load(f)
     except Exception:
         return None
+
+
+def product(max_age=10):
+    """Everything the Trading section shows about the live / paper / research system (read-only)."""
+    reg = R.Registry()
+    view = LSTATUS.build(reg)
+    view["explain"] = LSTATUS.explain(reg, view)
+    view["research_summary"] = summary()
+    return view
+
+
+def emergency_stop_request():
+    LPATHS.ensure_dirs()
+    with open(LPATHS.EMERGENCY_FILE, "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    return "Emergency stop requested. A running live trader closes everything within seconds and latches until you clear it."
+
+
+def disarm_request():
+    was = LAP.disarm(R.Registry(), "disarmed from Jarvis")
+    return "Live trading is disarmed." if was else "Live trading was not armed."
+
+
+def start_live_trader():
+    """Launches the live trader process. It refuses to do anything unless armed and every precondition holds."""
+    if not os.path.exists(A.FT_VENV_PY):
+        return False, "The Freqtrade environment isn't installed."
+    flags = 0x00000200 if sys.platform == "win32" else 0
+    os.makedirs(LPATHS.LOG_DIR, exist_ok=True)
+    log = open(os.path.join(LPATHS.LOG_DIR, "trader_cli.log"), "ab")
+    subprocess.Popen([A.FT_VENV_PY, "-u", "-m", "jarvis_trading.live.cli", "start"], cwd=os.path.dirname(A.LAB_DIR), stdout=log, stderr=log,
+                     creationflags=flags)
+    return True, "Starting the live trader. It will refuse to run unless live trading is armed and every safety check passes; ask for the trading status in a moment."
+
+
+def typed_control(text):
+    """Executes a typed approval/arming/clear phrase. The phrase must match exactly what the system displayed."""
+    reg = R.Registry()
+    t = text.strip()
+    try:
+        m = re.match(r"(?i)PROMOTE\s+S-\d+\s+V\d+\s+REVIEW\s+(\d+)", t)
+        if m:
+            r = LAP.approve_promotion(reg, int(m.group(1)), t)
+            return f"Approved. {r['strategy_id']} v{r['version']} is now the LIVE strategy (frozen). {r['note']}"
+        if re.match(r"(?i)ENABLE LIVE TRADING", t):
+            r = LAP.arm(reg, t)
+            return (f"Live trading is ARMED for {r['strategy_id']} v{r['version']} with {r['capital_limit']:g} USDT until {r['expires_at']}. "
+                    "Say 'start the live trader' to begin; it will still only trade when a valid signal passes the Risk Engine.")
+        m = re.match(r"(?i)ROLLBACK TO\s+(S-\d+)\s+V(\d+)", t)
+        if m:
+            r = LAP.rollback(reg, m.group(1).upper(), int(m.group(2)), t)
+            return f"Rolled back to {r['strategy_id']} v{r['version']}. Live trading is disarmed; arm it again when ready."
+        if re.match(r"(?i)RETIRE LIVE STRATEGY", t):
+            LAP.retire_live_strategy(reg, t)
+            return "The live strategy is retired and live trading is disarmed."
+        if re.match(r"(?i)CLEAR EMERGENCY STOP", t):
+            LAP.clear_emergency(reg, t)
+            return "Emergency stop cleared. Live trading is disarmed and must be armed again."
+        if re.match(r"(?i)CLEAR RISK HALT", t):
+            LAP.clear_halt(reg, t)
+            return "Risk halt cleared."
+    except LAP.ApprovalError as error:
+        return str(error)
+    return None
 
 
 def research_running():
@@ -147,6 +220,16 @@ def _leaderboard_text():
 def chat_reply(command):
     """Returns the text Jarvis should say, or None when the command isn't about trading."""
     text = command.strip()
+    if _TYPED.match(text):
+        return typed_control(text)
+    if _EMERGENCY.search(text):
+        return emergency_stop_request()
+    if _DISARM.search(text) and re.search(r"(?i)live|trad", text):
+        return disarm_request()
+    if _START_LIVE.search(text):
+        return start_live_trader()[1]
+    if _EXPLAIN.search(text):
+        return " ".join(LSTATUS.explain(R.Registry()))
     if _READY.search(text):  # a question about readiness gets the honest checklist, not a refusal
         return _readiness_text()
     if _LIVE_REQUEST.search(text) and (re.search(r"(?i)trad|money|leverage|binance|exchange|bot|strateg", text) or len(text.split()) <= 4):
