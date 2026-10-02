@@ -4,6 +4,8 @@ import jarvis_business as jbiz
 import jarvis_blog
 import jarvis_analytics
 import jarvis_business_context as jbctx
+import jarvis_browser
+import jarvis_agent
 import re
 import requests
 import subprocess
@@ -10328,6 +10330,9 @@ def run_local_command_flow(command, user_message):
     # First, not last: these phrases ("open fiverr", "check fiverr") are
     # specific enough not to hijack anything, but the generic web/program
     # handlers further down would otherwise try to treat them as app names.
+    if handle_agent_command(command):
+        return True
+
     if handle_business_channel_command(command):
         return True
 
@@ -11686,6 +11691,41 @@ def _read_screen_best_effort(question):
     return None
 
 
+_AGENT_CMD_RE = re.compile(r"^(?:jarvis[, ]+|jay[, ]+)?(?:agent|browse|browser)(?P<hard> hard)?\s*[:,]\s*(?P<task>.+)$", re.IGNORECASE | re.DOTALL)
+_OPEN_BROWSER_RE = re.compile(r"^(?:please )?open (?:the |my )?jarvis browser[.!]?$", re.IGNORECASE)
+
+
+def handle_agent_command(command):
+    """
+    "agent: <task>" runs the tool-using browser agent (jarvis_agent) on a real
+    task; "agent hard: <task>" prefers a paid API brain if one is configured.
+    "open the jarvis browser" opens the dedicated Edge window Danny logs into once.
+    The colon is required on purpose so ordinary sentences are never hijacked.
+    """
+    text = command.strip()
+    if _OPEN_BROWSER_RE.match(text):
+        ok, message = jarvis_browser.launch_browser("https://www.fiverr.com/login")
+        say(message + (" Sign in to Fiverr there once and I'll stay signed in, sir." if ok else ""))
+        return True
+
+    match = _AGENT_CMD_RE.match(text)
+    if not match:
+        return False
+    task = match.group("task").strip()
+    hard = bool(match.group("hard"))
+    say("On it, sir.")
+    jbiz.log_decision("agent", f"Agent task from Danny ({'hard' if hard else 'normal'}): {task[:200]}")
+    result = jarvis_agent.run_agent(task, hard=hard)
+    final_text = result["answer"]
+    jbiz.log_decision("agent", f"Agent finished via {result['brain']} brain in {result['steps']} step(s): {final_text[:200]}")
+    try:
+        add_to_memory("jarvis", final_text)
+    except Exception:
+        pass
+    say(final_text)
+    return True
+
+
 def handle_business_channel_command(command):
     """
     'check fiverr', 'open fiverr orders', 'open redbubble', "what's set up"...
@@ -11713,8 +11753,32 @@ def handle_business_channel_command(command):
         return True
 
     if kind == "check_fiverr":
-        say("Opening your Fiverr orders and messages now, sir. Give me a moment to read them.")
-        jbiz.log_decision("monitor", "Danny asked Jarvis to check Fiverr; opening orders and inbox and reading the screen.")
+        say("Checking your Fiverr now, sir.")
+        jbiz.log_decision("monitor", "Danny asked Jarvis to check Fiverr.")
+        # Fast, exact path first: the Jarvis browser reads the page TEXT (seconds).
+        try:
+            status = jarvis_browser.fiverr_status()
+            if status.get("logged_in") and not status.get("error"):
+                final_text = jarvis_browser.describe_fiverr_status(status)
+                try:
+                    add_to_memory("jarvis", final_text)
+                except Exception:
+                    pass
+                say(final_text)
+                return True
+            if not status.get("logged_in"):
+                final_text = jarvis_browser.describe_fiverr_status(status)
+                try:
+                    jarvis_browser.goto("https://www.fiverr.com/login")
+                    add_to_memory("jarvis", final_text)
+                except Exception:
+                    pass
+                say(final_text)
+                return True
+            print("Fiverr fast path error:", status.get("error"))
+        except Exception as error:
+            print("Fiverr fast path unavailable, falling back to screen reading:", error)
+        # Fallback: open the pages in the normal browser and read the screen with vision (slow).
         reports = []
         for label, channel_key, question in (
             ("orders", "fiverr_orders",

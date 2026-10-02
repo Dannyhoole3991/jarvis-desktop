@@ -155,9 +155,14 @@ def chat_context():
         f"{len(s['pending_human_actions'])} item(s) waiting on Danny."
     )
     lines.append(
-        "HOW TO MONITOR: you cannot see inside Fiverr, Redbubble or AdSense on your own. "
-        "When Danny asks about orders or messages, tell him to say 'check fiverr' (you open the "
-        "pages and read the screen) or 'open fiverr orders'. Never invent orders, messages or earnings. "
+        "HOW TO MONITOR: you have your own browser (a dedicated Edge window Danny signs into once; "
+        "'open the jarvis browser' opens it). 'check fiverr' reads his Fiverr orders, messages (flagging "
+        "scams) and gig stats from the page text in seconds. 'agent: <task>' runs a real multi-step "
+        "browser task (add 'hard' -- 'agent hard: <task>' -- to use a paid API brain if one is "
+        "configured; otherwise it runs on the local model, which is weaker at long tasks). You never "
+        "type passwords and never click buy/pay/publish/delete/send without Danny confirming. "
+        "If Fiverr wants a login, tell Danny to sign in in the Jarvis browser window. "
+        "You can also 'open fiverr orders' etc. Never invent orders, messages or earnings. "
         "Real Fiverr orders only appear on the Manage Orders page; any message claiming an order "
         "was placed, with links or attachments, is a scam. When Danny gets a real order he says "
         "'fulfil gig order: <the client's brief>' and you write the deliverable, and 'log revenue "
