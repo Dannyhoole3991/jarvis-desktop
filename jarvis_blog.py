@@ -70,8 +70,19 @@ def _analytics_snippet():
     )
 
 
+# Search Console "HTML tag" verification code (the content="..." value Google
+# gives you). Empty until Danny verifies the site in Search Console.
+GOOGLE_SITE_VERIFICATION = ""
+
+
+def _verification_snippet():
+    if not GOOGLE_SITE_VERIFICATION:
+        return ""
+    return f'<meta name="google-site-verification" content="{GOOGLE_SITE_VERIFICATION}">\n'
+
+
 def _head_extras():
-    return _adsense_snippet() + _analytics_snippet()
+    return _verification_snippet() + _adsense_snippet() + _analytics_snippet()
 
 
 PAGE_TEMPLATE = """<!doctype html>
@@ -223,6 +234,23 @@ def rebuild_and_publish():
     index_html = INDEX_TEMPLATE.format(items="\n".join(index_items), head_extras=_head_extras())
     with open(os.path.join(BLOG_REPO_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
+
+    # Cloudflare Pages answers every unknown path with the index page, so
+    # without real files here crawlers get HTML for /sitemap.xml and
+    # /robots.txt -- which is why Search Console couldn't use the site yet.
+    today = datetime.date.today().isoformat()
+    sitemap_urls = [f"  <url><loc>{SITE_BASE_URL}/</loc><lastmod>{today}</lastmod></url>"]
+    for url in article_urls.values():
+        sitemap_urls.append(f"  <url><loc>{url}</loc><lastmod>{today}</lastmod></url>")
+    sitemap_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(sitemap_urls) + "\n</urlset>\n"
+    )
+    with open(os.path.join(BLOG_REPO_DIR, "sitemap.xml"), "w", encoding="utf-8") as f:
+        f.write(sitemap_xml)
+    with open(os.path.join(BLOG_REPO_DIR, "robots.txt"), "w", encoding="utf-8") as f:
+        f.write(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_BASE_URL}/sitemap.xml\n")
 
     code, out, err = _run_git("add", "-A")
     if code != 0:
