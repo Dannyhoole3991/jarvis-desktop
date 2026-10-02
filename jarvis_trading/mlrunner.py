@@ -149,13 +149,14 @@ def walk_forward_predictions(frames, params, seed=1):
 
 
 # ----------------------------------------------------------------- simulation
-def simulate(frames, preds, params, start_epoch=None, end_epoch=None):
+def simulate(frames, preds, params, start_epoch=None, end_epoch=None, starting_balance=1000.0):
     """Long-only trades from predictions: enter at the NEXT bar's open, hold `horizon` bars or until the stop, costs on both sides."""
     h, thr, sl = int(params["horizon"]), float(params["threshold"]), float(params["stoploss"])
     arr = {p: {"idx": df.index, "o": df["open"].to_numpy(), "h": df["high"].to_numpy(), "l": df["low"].to_numpy()} for p, df in frames.items()}
     sig = preds[preds["prob"] >= thr].sort_values(["ts", "prob"], ascending=[True, False], kind="stable")
     open_positions = {}   # pair -> exit epoch
     trades = []
+    pending = []          # (close_ts, profit_abs) of trades not yet realised at the time being considered
     for ts, pair, prob in zip(sig["ts"], sig["pair"], sig["prob"]):
         a = arr[pair]
         pos = a["idx"].get_loc(ts)
@@ -168,6 +169,10 @@ def simulate(frames, preds, params, start_epoch=None, end_epoch=None):
         for p in [p for p, t in open_positions.items() if t <= entry_ts]:
             del open_positions[p]
         if pair in open_positions or len(open_positions) >= MAX_OPEN:
+            continue
+        # Like Freqtrade's dry-run wallet: no new trade unless the account actually has the stake free
+        realised = sum(t["profit_abs"] for t in trades if t["close_ts"] <= entry_ts)
+        if starting_balance + realised - STAKE * len(open_positions) < STAKE:
             continue
         entry = a["o"][j0]
         stop = entry * (1 - sl)

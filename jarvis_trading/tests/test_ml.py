@@ -154,6 +154,17 @@ class SimulationTests(unittest.TestCase):
         preds = pd.DataFrame({"ts": [idx[10], idx[11]], "pair": ["AAA/USDT", "AAA/USDT"], "prob": [0.9, 0.9]})
         self.assertEqual(len(ML.simulate(frames, preds, self.params())), 1)  # second signal ignored while in the trade
 
+    def test_trading_stops_when_the_wallet_cannot_fund_a_stake(self):
+        idx = pd.date_range("2022-01-01", periods=400, freq="4h", tz="UTC")
+        price = np.full(400, 100.0)
+        df = pd.DataFrame({"open": price, "high": price, "low": price * 0.5, "close": price, "volume": 1.0}, index=idx)  # every trade stops out
+        frames = {"AAA/USDT": df}
+        preds = pd.DataFrame({"ts": idx[:-10], "pair": ["AAA/USDT"] * (len(idx) - 10), "prob": 0.9})
+        trades = ML.simulate(frames, preds, self.params(horizon=1, stoploss=0.08), starting_balance=300.0)
+        total_loss = -sum(t["profit_abs"] for t in trades)
+        self.assertLess(total_loss, 300.0 + 1e-6)          # can never lose more than the account held
+        self.assertGreater(len(trades), 0)
+
     def test_timerange_filter_uses_entry_time(self):
         frames = self.flat_frames()
         idx = frames["AAA/USDT"].index
