@@ -11704,7 +11704,9 @@ def handle_agent_command(command):
     """
     text = command.strip()
     if _OPEN_BROWSER_RE.match(text):
-        ok, message = jarvis_browser.launch_browser("https://www.fiverr.com/login")
+        ok, message = jarvis_browser.launch_browser("https://www.fiverr.com/login", visible=True)
+        if ok:
+            jarvis_browser.show_window("Fiverr")
         say(message + (" Sign in to Fiverr there once and I'll stay signed in, sir." if ok else ""))
         return True
 
@@ -11759,8 +11761,9 @@ def handle_business_channel_command(command):
         try:
             status = jarvis_browser.fiverr_status()
             if status.get("blocked"):
+                jarvis_browser.show_window("Fiverr")
                 say("Fiverr is showing a human check to my own browser, sir, and I won't try to get past it. "
-                    "I'll read your normal browser instead.")
+                    "I've raised that window so you can complete it; meanwhile I'll read your normal browser instead.")
             elif status.get("logged_in") and not status.get("error"):
                 final_text = jarvis_browser.describe_fiverr_status(status)
                 try:
@@ -11773,6 +11776,7 @@ def handle_business_channel_command(command):
                 final_text = jarvis_browser.describe_fiverr_status(status)
                 try:
                     jarvis_browser.goto("https://www.fiverr.com/login")
+                    jarvis_browser.show_window("Fiverr")
                     add_to_memory("jarvis", final_text)
                 except Exception:
                     pass

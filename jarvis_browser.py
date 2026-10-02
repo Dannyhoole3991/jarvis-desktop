@@ -84,18 +84,38 @@ def _port_open():
         return False
 
 
-def launch_browser(start_url="about:blank"):
-    """Starts the dedicated Edge window if it isn't already running. Returns (ok, message)."""
+def show_window(title_hint="Fiverr"):
+    """Raises the Jarvis browser window (e.g. when Danny has to log in or pass a human check)."""
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(New-Object -ComObject WScript.Shell).AppActivate('{title_hint}') | Out-Null"],
+            timeout=10, capture_output=True,
+        )
+    except Exception:
+        pass
+
+
+def launch_browser(start_url="about:blank", visible=False):
+    """
+    Starts the dedicated Edge window if it isn't already running. Returns (ok, message).
+    Minimized unless visible=True, so background checks never throw a window
+    at Danny; show_window() raises it only when he has to do something there.
+    """
     if _port_open():
         return True, "The Jarvis browser is already open."
     edge = find_edge()
     if not edge:
         return False, "Microsoft Edge isn't installed where I expected."
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    subprocess.Popen([
+    args = [
         edge, f"--remote-debugging-port={DEBUG_PORT}", f"--user-data-dir={PROFILE_DIR}",
-        "--no-first-run", "--no-default-browser-check", start_url,
-    ])
+        "--no-first-run", "--no-default-browser-check",
+    ]
+    if not visible:
+        args.append("--start-minimized")
+    args.append(start_url)
+    subprocess.Popen(args)
     for _ in range(40):
         if _port_open():
             return True, "Opened the Jarvis browser."
@@ -146,16 +166,19 @@ class _Worker:
             if not ok:
                 raise RuntimeError(message)
         self._ensure_thread()
-        result_q = queue.Queue(maxsize=1)
-        self._queue.put((lambda: action(self._page_obj()), result_q))
-        try:
-            status, value = result_q.get(timeout=timeout)
-        except queue.Empty:
-            raise TimeoutError("The browser took too long to respond.")
-        if status == "err":
+        for attempt in (1, 2):
+            result_q = queue.Queue(maxsize=1)
+            self._queue.put((lambda: action(self._page_obj()), result_q))
+            try:
+                status, value = result_q.get(timeout=timeout)
+            except queue.Empty:
+                raise TimeoutError("The browser took too long to respond.")
+            if status == "ok":
+                return value
+            # A crashed/closed tab or stale connection: reconnect once and retry.
             self._page = None
-            raise value
-        return value
+            if attempt == 2:
+                raise value
 
 
 _worker = _Worker()
@@ -276,23 +299,48 @@ def fiverr_status():
             return result
         inbox = inbox_raw.split("Pick up where you left off")[0]
         lines = [ln.strip() for ln in inbox.splitlines() if ln.strip()]
-        convo = None
-        for ln in lines:
-            if re.fullmatch(r"[A-Za-z]", ln):
-                convo = {"sender": None, "preview": "", "when": "", "unread": 0}
-                continue
-            if convo is None:
-                continue
-            if convo["sender"] is None:
-                convo["sender"] = ln
-            elif _TIME_RE.match(ln):
-                convo["when"] = ln
+        start = next((i for i, ln in enumerate(lines) if ln == "All messages"), 0)
+        i = start + 1
+        while i < len(lines):
+            if re.fullmatch(r"[A-Za-z]", lines[i]) and i + 2 < len(lines) and _TIME_RE.match(lines[i + 2]):
+                convo = {"sender": lines[i + 1], "preview": "", "when": lines[i + 2], "unread": 0}
+                i += 3
+                if i < len(lines) and lines[i].isdigit():
+                    convo["unread"] = int(lines[i])
+                    i += 1
                 result["messages"].append(convo)
-                convo = None
             else:
-                convo["preview"] = (convo["preview"] + " " + ln).strip()
-        for message in result["messages"]:
-            message["suspicious"] = bool(_SUSPICIOUS_RE.search(message["preview"]))
+                i += 1
+
+        # The list view shows no previews, so open each thread (most recent 8) and read it.
+        for convo in result["messages"][:8]:
+            try:
+                goto(f"https://www.fiverr.com/inbox/{convo['sender']}", settle=3.0)
+                thread = read_text(6000)
+                if _looks_blocked(thread):
+                    result["blocked"] = True
+                    return result
+                convo["removed"] = "can no longer be contacted" in thread
+                if convo["removed"]:
+                    convo["preview"] = "(account removed by Fiverr)"
+                    convo["suspicious"] = True
+                    continue
+                marker = thread.find("Learn more")
+                body = thread[marker + len("Learn more"):] if marker != -1 else thread
+                body = re.split(r"\nCreate an offer|\nAbout\n", body)[0]
+                text_lines = [ln.strip() for ln in body.splitlines()
+                              if ln.strip() and ln.strip() not in ("Fiverr", "Only visible to you")]
+                convo["preview"] = " ".join(text_lines)[:300]
+                convo["suspicious"] = bool(_SUSPICIOUS_RE.search(" ".join(text_lines)))
+                convo["read"] = bool(text_lines)
+            except Exception:
+                convo["preview"] = ""
+                convo["suspicious"] = False
+                convo["read"] = False
+        for convo in result["messages"]:
+            convo.setdefault("suspicious", False)
+            convo.setdefault("removed", False)
+            convo.setdefault("read", True)
 
         goto("https://www.fiverr.com/users/danielhoole/manage_gigs?current_filter=active", settle=3.0)
         gigs_raw = read_text(8000)
@@ -300,10 +348,10 @@ def fiverr_status():
             result["blocked"] = True
             return result
         gig_lines = [ln.strip() for ln in gigs_raw.splitlines() if ln.strip()]
-        for i, ln in enumerate(gig_lines[:-1]):
-            match = re.fullmatch(r"(\d+) (\d+) (\d+) (\d+) ?%?", gig_lines[i + 1])
-            if match and len(ln) > 15:
-                result["gigs"].append({"title": ln, "impressions": int(match.group(1)),
+        for i in range(1, len(gig_lines)):
+            match = re.fullmatch(r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*%?", gig_lines[i])
+            if match and len(gig_lines[i - 1]) > 15 and gig_lines[i - 1] != "GIG":
+                result["gigs"].append({"title": gig_lines[i - 1], "impressions": int(match.group(1)),
                                        "clicks": int(match.group(2)), "orders": int(match.group(3))})
     except Exception as error:
         result["error"] = str(error)
@@ -329,12 +377,20 @@ def describe_fiverr_status(status):
         parts.append(f"{len(status['gigs'])} gigs live with {impressions} impressions and {clicks} clicks.")
     msgs = status["messages"]
     if msgs:
-        scams = [m for m in msgs if m["suspicious"]]
-        parts.append(f"{len(msgs)} message threads, {len(scams)} of them look like scams"
-                     + (": " + ", ".join(m["sender"] for m in scams) if scams else "."))
-        clean = [m for m in msgs if not m["suspicious"]]
-        for m in clean[:3]:
-            parts.append(f"{m['sender']} says: {m['preview'][:100]}")
+        removed = [m for m in msgs if m.get("removed")]
+        scams = [m for m in msgs if m["suspicious"] and not m.get("removed")]
+        unreadable = [m for m in msgs if not m.get("removed") and not m.get("read", True)]
+        genuine = [m for m in msgs if not m["suspicious"] and m.get("read", True)]
+        parts.append(f"{len(msgs)} message threads.")
+        if removed:
+            parts.append(f"{len(removed)} are from accounts Fiverr has already removed ({', '.join(m['sender'] for m in removed)}) -- the scam pattern.")
+        if scams:
+            parts.append(f"{len(scams)} look like scams and should be ignored: {', '.join(m['sender'] for m in scams)}.")
+        if unreadable:
+            parts.append(f"I couldn't read the text of {len(unreadable)} thread(s) ({', '.join(m['sender'] for m in unreadable)}), "
+                         "so I can't vouch for them -- look yourself and treat any 'order placed' plus a link or file as a scam.")
+        for m in genuine[:3]:
+            parts.append(f"{m['sender']} says: {m['preview'][:140]}")
     else:
         parts.append("No messages.")
     return " ".join(parts)
