@@ -60,6 +60,14 @@ def sign_flip_p_value(trade_ratios, n_perm=10000, seed=1):
     One-sided test of 'the true mean trade return is not above zero'.
     Under that null each trade's sign is arbitrary, so randomly flipping
     signs gives the distribution of the mean produced by luck alone.
+
+    Resolution matters: a Monte Carlo estimate can never report a p-value below
+    1/(n_perm+1), yet the multiple-testing bar gets far smaller than that once
+    many strategies have been tried. When fewer than 20 permutations reach the
+    observed mean the tail is beyond Monte Carlo resolution, so Hoeffding's
+    inequality is used: P(sum >= t) <= exp(-t^2 / (2 * sum(r^2))). It is a
+    rigorous upper bound on the permutation p-value (so it can only be more
+    conservative than the truth), valid for any number of trades.
     """
     n = len(trade_ratios)
     if n < 2:
@@ -74,7 +82,19 @@ def sign_flip_p_value(trade_ratios, n_perm=10000, seed=1):
             total += mag if rng.random() < 0.5 else -mag
         if total / n >= observed:
             at_least += 1
-    return (at_least + 1) / (n_perm + 1)
+    p_mc = (at_least + 1) / (n_perm + 1)
+    if at_least >= 20:
+        return p_mc
+    return min(p_mc, sign_flip_p_bound(trade_ratios))
+
+
+def sign_flip_p_bound(trade_ratios):
+    """Hoeffding upper bound on the one-sided sign-flip p-value (1.0 when there is no positive evidence)."""
+    sum_sq = sum(r * r for r in trade_ratios)
+    total = sum(trade_ratios)
+    if sum_sq == 0 or total <= 0:
+        return 1.0
+    return min(1.0, math.exp(-(total * total) / (2.0 * sum_sq)))
 
 
 def noise_sharpe_benchmark(n_strategies, n_days):

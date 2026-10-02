@@ -123,5 +123,33 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(again.status(self.sid, 1), "generated")
 
 
+def _worker_create(args):
+    db, i = args
+    reg = Registry(db)
+    sid, version, created = reg.create_strategy(f"h{i}", "template:x", "m", "1h", {"i": i}, f"code{i}")
+    return sid
+
+
+class ConcurrencyTests(unittest.TestCase):
+    def test_parallel_processes_get_unique_strategy_ids(self):
+        import multiprocessing
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "c.db")
+            Registry(db)
+            with multiprocessing.get_context("spawn").Pool(4) as pool:
+                ids = pool.map(_worker_create, [(db, i) for i in range(24)])
+            self.assertEqual(len(set(ids)), 24)
+            self.assertEqual(len(Registry(db).list_versions()), 24)
+
+    def test_count_trials_counts_strategies_and_their_neighbours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = Registry(os.path.join(tmp, "t.db"))
+            sid, v, _ = reg.create_strategy("h", "s", "m", "1h", {}, "c")
+            self.assertEqual(reg.count_trials(), 0)
+            reg.record_experiment(sid, v, "backtest_training", {})
+            reg.record_experiment(sid, v, "robustness", {"neighbours_tested": 6})
+            self.assertEqual(reg.count_trials(), 7)
+
+
 if __name__ == "__main__":
     unittest.main()

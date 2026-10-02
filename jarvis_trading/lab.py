@@ -23,9 +23,11 @@ import csv
 import os
 
 from . import criteria as C
+from . import lint as LINT
 from . import metrics as M
 from . import stats as ST
 from . import strategies as S
+from . import universe as U
 
 PERIODS = {
     "training": "20190101-20221231",
@@ -34,6 +36,8 @@ PERIODS = {
 }
 LOOKAHEAD_WINDOW = "20230101-20230630"
 STARTING_BALANCE = 1000.0
+DEDUP_OVERLAP = 0.80     # Jaccard overlap of (pair, entry day, size tag) at or above which two strategies are "the same"
+DEDUP_MIN_TRADES = 20    # below this there is too little behaviour to compare
 
 
 def _ts(date_str):
@@ -74,14 +78,17 @@ def neighbour_params(params, factor=0.25):
 
 
 class Lab:
-    def __init__(self, registry, runner, daily_closes=None, criteria=None, pairs=None, seed=1, mc_sims=3000):
+    def __init__(self, registry, runner, daily_closes=None, criteria=None, pairs=None, seed=1, mc_sims=3000, concurrency=1):
         self.registry = registry
         self.runner = runner
         self.daily_closes = daily_closes
         self.criteria = criteria or C.ResearchCriteria()
-        self.pairs = pairs or ["BTC/USDT", "ETH/USDT"]
+        self.pairs = pairs or list(U.UNIVERSE)
         self.seed = seed
         self.mc_sims = mc_sims
+        # Other workers may be mid-run and not yet counted in the trial total; assume each adds a trial,
+        # which can only make the significance bar stricter.
+        self.concurrency = max(1, int(concurrency))
 
     # ------------------------------------------------------------------ helpers
     def _backtest(self, name, params, timerange, kind, sid, version, base_params=None):
@@ -96,17 +103,29 @@ class Lab:
 
     def trials_so_far(self):
         """
-        Every parameter set the lab has ever backtested, including the neighbours
-        tried for robustness. This is the multiple-testing count: the more things
-        tried, the stricter the significance bar for the next one.
+        Every parameter set the lab has ever backtested, including the neighbours tried for robustness.
+        This is the multiple-testing count: the more things tried, the stricter the significance bar.
         """
-        trials = 0
-        for v in self.registry.list_versions():
-            if self.registry.experiments(v["strategy_id"], v["version"], "backtest_training"):
-                trials += 1
-            for r in self.registry.experiments(v["strategy_id"], v["version"], "robustness"):
-                trials += int(r["metrics"].get("neighbours_tested") or 0)
-        return max(1, trials)
+        return max(1, self.registry.count_trials() + self.concurrency - 1)
+
+    def _signature(self, trades):
+        return sorted({f"{t['pair']}|{int(M.to_epoch(t.get('open_ts') or t['close_ts']) // 86400)}|{t.get('tag') or ''}" for t in trades})
+
+    def _near_duplicate_of(self, signature, sid, version):
+        """Returns (other_strategy_id, overlap) if this strategy enters (nearly) the same trades as an earlier one."""
+        if len(signature) < DEDUP_MIN_TRADES:
+            return None
+        mine = set(signature)
+        for row in self.registry.all_experiments("signature"):
+            if (row["strategy_id"], row["version"]) == (sid, version):
+                continue
+            other = set(row["metrics"].get("entries", []))
+            if not other:
+                continue
+            overlap = len(mine & other) / len(mine | other)
+            if overlap >= DEDUP_OVERLAP:
+                return row["strategy_id"], overlap
+        return None
 
     def _data_hash(self, timeframe):
         try:
@@ -142,7 +161,15 @@ class Lab:
                     "codes": [], "evidence": {}}
         evidence = {"leverage": 1.0}
 
-        # 2. leakage
+        # 2a. static leakage lint (catches what the dynamic detector cannot see, e.g. informative-timeframe leaks)
+        findings = LINT.future_reference_findings(source)
+        self.registry.record_experiment(sid, version, "static_lint", {"findings": findings}, passed=not findings)
+        if findings:
+            verdict = C.Verdict("REJECTED", [("LOOKAHEAD_BIAS", "static check found forward-looking code: " + "; ".join(findings[:3]))],
+                                self.criteria.fingerprint())
+            return self._reject(sid, version, verdict, evidence)
+
+        # 2b. dynamic leakage detector
         look = self.runner.run_lookahead_analysis(name, LOOKAHEAD_WINDOW, params["timeframe"], pairs=self.pairs)
         evidence["lookahead_clean"] = look["clean"] is True
         self.registry.record_experiment(sid, version, "lookahead", {"clean": look["clean"], "tail": look["raw"][-400:]},
@@ -163,6 +190,16 @@ class Lab:
                                                   _range_epochs(PERIODS["training"])[0], _range_epochs(PERIODS["validation"])[1])
         self.registry.set_status(sid, version, "backtested", "Training and validation backtests complete.")
 
+        # 3b. behavioural de-duplication: skip strategies that trade (almost) exactly like one already tested
+        signature = self._signature(train_trades)
+        self.registry.record_experiment(sid, version, "signature", {"entries": signature})
+        duplicate = self._near_duplicate_of(signature, sid, version)
+        if duplicate:
+            other, overlap = duplicate
+            verdict = C.Verdict("REJECTED", [("NEAR_DUPLICATE", f"enters {overlap:.0%} of the same trades as {other}; not a distinct strategy")],
+                                self.criteria.fingerprint())
+            return self._reject(sid, version, verdict, evidence, "Near-duplicate of an earlier strategy; not tested further.")
+
         early = []
         if train_m["total_return"] <= 0:
             early.append(("LOSING_IN_TRAINING", f"lost money in the training period ({train_m['total_return']:.1%})"))
@@ -172,11 +209,19 @@ class Lab:
             verdict = C.Verdict("REJECTED", early, self.criteria.fingerprint())
             return self._reject(sid, version, verdict, evidence, "Rejected before the held-out test period was used.")
 
+        # 3c. cheap in-sample gates before the expensive robustness sweep (trade count, drawdown, costs, implausible results)
+        pre = C.evaluate_backtest({"in_sample": evidence["in_sample"], "lookahead_clean": True, "leverage": 1.0}, self.criteria)
+        if pre.status == "REJECTED":
+            return self._reject(sid, version, pre, evidence, "Rejected on in-sample evidence before the robustness sweep.")
+
         # 4. robustness (development period only)
         dev_range = "20190101-20240630"
         fails, total = 0, 0
         for neighbour in neighbour_params(params):
-            n_name, n_source, _ = S.generate(template, neighbour)
+            try:
+                n_name, n_source, _ = S.generate(template, neighbour)
+            except ValueError:
+                continue  # neighbour is not a valid parameter combination for this family
             self.runner.write_strategy(n_name, n_source)
             try:
                 res = self.runner.run_backtest(n_name, dev_range, neighbour["timeframe"], pairs=self.pairs)
@@ -198,6 +243,12 @@ class Lab:
         if evidence["regimes"] is not None:
             self.registry.record_experiment(sid, version, "regimes", {k: {"total_return": v["total_return"], "n_trades": v["n_trades"]} for k, v in evidence["regimes"].items()})
 
+        # 5b. development-stage verdict: a strategy that already fails here never touches the held-out test period
+        dev = C.evaluate_backtest({"in_sample": evidence["in_sample"], "lookahead_clean": True, "leverage": 1.0,
+                                   "robustness": evidence["robustness"], "regimes": evidence["regimes"]}, self.criteria)
+        if dev.status == "REJECTED":
+            return self._reject(sid, version, dev, evidence, "Rejected on development-period evidence; held-out test period not used.")
+
         # 6. held-out test: ONCE per version
         if self.registry.experiments(sid, version, "backtest_test"):
             raise RuntimeError("The held-out test period was already used for this strategy version.")
@@ -206,10 +257,18 @@ class Lab:
 
         # 7. statistics on the held-out trades
         ratios = [t["profit_ratio"] for t in test_trades]
-        p_value = ST.sign_flip_p_value(ratios, n_perm=4000, seed=self.seed)
+        p_trade = ST.sign_flip_p_value(ratios, n_perm=4000, seed=self.seed)
+        # Trades in different pairs overlap in time and are correlated, so a per-trade test overstates the effective
+        # sample. Also test per-DAY aggregated profit and keep the more conservative (larger) p-value.
+        by_day = {}
+        for t in test_trades:
+            day = int(M.to_epoch(t["close_ts"]) // 86400)
+            by_day[day] = by_day.get(day, 0.0) + t["profit_abs"]
+        p_day = ST.sign_flip_p_value([v / STARTING_BALANCE for v in by_day.values()], n_perm=4000, seed=self.seed)
+        p_value = None if p_trade is None or p_day is None else max(p_trade, p_day)
         mc = ST.monte_carlo([t["profit_ratio"] for t in in_sample_trades + test_trades], stake_fraction=0.10,
                             n_sims=self.mc_sims, seed=self.seed)
-        evidence["monte_carlo"] = {"p_value": p_value, "ruin_probability": (mc or {}).get("ruin_probability", 1.0), "mc": mc}
+        evidence["monte_carlo"] = {"p_value": p_value, "p_value_per_trade": p_trade, "p_value_per_day": p_day, "ruin_probability": (mc or {}).get("ruin_probability", 1.0), "mc": mc}
         self.registry.record_experiment(sid, version, "monte_carlo", evidence["monte_carlo"], seed=self.seed)
 
         # 8. judgement

@@ -19,7 +19,10 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import sys
+import uuid
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -119,7 +122,24 @@ def write_strategy(name, source):
 
 
 def _run(args, timeout=1800):
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=LAB_DIR)
+    # Lower priority on Windows so batch research never starves the PC's normal use.
+    flags = 0x00004000 if sys.platform == "win32" else 0  # BELOW_NORMAL_PRIORITY_CLASS
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=LAB_DIR, creationflags=flags)
+
+
+def _private_run_dir():
+    """Each run gets its own config and results directory, so many can run in parallel without colliding."""
+    path = os.path.join(USER_DIR, "runs", uuid.uuid4().hex[:12])
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _write_private_config(run_dir, cfg):
+    assert_safe_config(cfg)
+    path = os.path.join(run_dir, "config.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, sort_keys=True)
+    return path
 
 
 def _latest_result_file():
@@ -140,43 +160,52 @@ def _trades_from_zip(path, strategy_name):
         trades.append({
             "pair": t["pair"], "open_ts": t["open_timestamp"] / 1000.0, "close_ts": t["close_timestamp"] / 1000.0,
             "profit_ratio": float(t["profit_ratio"]), "profit_abs": float(t["profit_abs"]),
-            "stake": stake, "fee_paid": fees, "exit_reason": t.get("exit_reason"),
+            "stake": stake, "fee_paid": fees, "exit_reason": t.get("exit_reason"), "tag": t.get("enter_tag"),
         })
     return trades, strat
 
 
 def run_backtest(strategy_name, timerange, timeframe, pairs=None, fee=EXCHANGE_FEE, slippage=SLIPPAGE_ASSUMPTION,
-                 starting_balance=1000.0, stake_amount=100.0, max_open_trades=2):
+                 starting_balance=1000.0, stake_amount=100.0, max_open_trades=5):
     """
     Runs one Freqtrade backtest and returns {"trades": [...], "command": str, "per_side_cost": float, ...}.
     Per-side cost = fee + slippage (Freqtrade itself assumes zero slippage).
     """
     pairs = pairs or DEFAULT_PAIRS
-    cfg_path = write_config("config_backtest", build_config(pairs, timeframe, starting_balance, stake_amount, max_open_trades))
-    per_side = fee + slippage
-    before = set(glob.glob(os.path.join(RESULTS_DIR, "backtest-result-*.zip")))
-    args = [FT_EXE, "backtesting", "--config", cfg_path, "--userdir", USER_DIR, "--strategy", strategy_name,
-            "--strategy-path", STRATEGY_DIR, "--timerange", timerange, "--timeframe", timeframe,
-            "--fee", str(per_side), "--export", "trades", "--cache", "none", "--breakdown", "month"]
-    result = _run(args)
-    after = set(glob.glob(os.path.join(RESULTS_DIR, "backtest-result-*.zip")))
-    new = sorted(after - before, key=os.path.getmtime)
-    if result.returncode != 0 or not new:
-        raise RuntimeError(f"Backtest failed (exit {result.returncode}): {(result.stdout + result.stderr)[-1500:]}")
-    trades, strat = _trades_from_zip(new[-1], strategy_name)
+    run_dir = _private_run_dir()
+    try:
+        cfg_path = _write_private_config(run_dir, build_config(pairs, timeframe, starting_balance, stake_amount, max_open_trades))
+        per_side = fee + slippage
+        results_dir = run_dir  # Freqtrade writes results-<timestamp>.zip here
+        args = [FT_EXE, "backtesting", "--config", cfg_path, "--userdir", USER_DIR, "--strategy", strategy_name,
+                "--strategy-path", STRATEGY_DIR, "--timerange", timerange, "--timeframe", timeframe,
+                "--fee", str(per_side), "--export", "trades", "--backtest-directory", results_dir,
+                "--cache", "none", "--breakdown", "month"]
+        result = _run(args)
+        new = sorted(glob.glob(os.path.join(results_dir, "*.zip")), key=os.path.getmtime)
+        if result.returncode != 0 or not new:
+            raise RuntimeError(f"Backtest failed (exit {result.returncode}): {(result.stdout + result.stderr)[-1500:]}")
+        trades, strat = _trades_from_zip(new[-1], strategy_name)
+        result_name = os.path.basename(new[-1])
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
     return {"trades": trades, "command": " ".join(str(a) for a in args), "per_side_cost": per_side,
-            "result_file": os.path.basename(new[-1]), "starting_balance": starting_balance,
+            "result_file": result_name, "starting_balance": starting_balance,
             "freqtrade_summary": {k: strat.get(k) for k in ("total_trades", "profit_total", "max_drawdown_account", "sharpe", "sortino", "calmar", "profit_factor")}}
 
 
 def run_lookahead_analysis(strategy_name, timerange, timeframe, pairs=None, minimum_trades=10):
     """Returns {"clean": bool|None, "raw": str}. None means the tool could not give a verdict."""
     pairs = pairs or DEFAULT_PAIRS
-    cfg_path = write_config("config_backtest", build_config(pairs, timeframe))
-    args = [FT_EXE, "lookahead-analysis", "--config", cfg_path, "--userdir", USER_DIR, "--strategy", strategy_name,
-            "--strategy-path", STRATEGY_DIR, "--timerange", timerange, "--timeframe", timeframe,
-            "--minimum-trade-amount", str(minimum_trades), "--targeted-trade-amount", str(max(minimum_trades, 20))]
-    result = _run(args, timeout=3600)
+    run_dir = _private_run_dir()
+    try:
+        cfg_path = _write_private_config(run_dir, build_config(pairs, timeframe))
+        args = [FT_EXE, "lookahead-analysis", "--config", cfg_path, "--userdir", USER_DIR, "--strategy", strategy_name,
+                "--strategy-path", STRATEGY_DIR, "--timerange", timerange, "--timeframe", timeframe,
+                "--minimum-trade-amount", str(minimum_trades), "--targeted-trade-amount", str(max(minimum_trades, 20))]
+        result = _run(args, timeout=3600)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
     text = result.stdout + result.stderr
     verdict = None  # None = the tool gave no verdict; callers must treat that as NOT clean
     for line in text.splitlines():

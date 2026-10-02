@@ -58,6 +58,23 @@ class SignFlipTests(unittest.TestCase):
         # about 5% expected by construction; allow generous slack, but nowhere near "most"
         self.assertLessEqual(significant, 8)
 
+    def test_can_report_p_values_below_monte_carlo_resolution(self):
+        # strong edge: the permutation test alone could never go below 1/(n_perm+1)
+        data = [0.01 + 0.002 * (i % 3) for i in range(200)]
+        p = S.sign_flip_p_value(data, n_perm=500)
+        self.assertLess(p, 1.0 / 501)
+
+    def test_bound_is_a_valid_upper_bound_on_the_permutation_estimate(self):
+        rng = random.Random(4)
+        for mean in (0.0, 0.003, 0.006):
+            data = [rng.gauss(mean, 0.03) for _ in range(150)]
+            mc = S.sign_flip_p_value(data, n_perm=20000, seed=2)
+            self.assertGreaterEqual(S.sign_flip_p_bound(data) + 1e-9, mc * 0.9)
+
+    def test_bound_is_one_without_positive_evidence(self):
+        self.assertEqual(S.sign_flip_p_bound([0.0] * 50), 1.0)
+        self.assertEqual(S.sign_flip_p_bound([-0.01] * 50), 1.0)
+
     def test_too_few_trades(self):
         self.assertIsNone(S.sign_flip_p_value([0.01]))
 

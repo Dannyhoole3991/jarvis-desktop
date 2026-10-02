@@ -133,6 +133,7 @@ class Registry:
         periods = {"training": training_period, "validation": validation_period, "test": test_period}
         digest = content_hash(code, parameters, market, timeframe, periods)
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")  # serialise id allocation across worker processes
             existing = conn.execute(
                 "SELECT v.strategy_id, v.version FROM strategy_versions v WHERE v.content_hash = ?", (digest,)
             ).fetchone()
@@ -161,6 +162,7 @@ class Registry:
         periods = {"training": training_period, "validation": validation_period, "test": test_period}
         digest = content_hash(code, parameters, base["market"], base["timeframe"], periods)
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             same = conn.execute("SELECT version FROM strategy_versions WHERE content_hash = ?", (digest,)).fetchone()
             if same:
                 return same["version"], False
@@ -225,6 +227,34 @@ class Registry:
         for r in rows:
             r["metrics"] = json.loads(r["metrics_json"])
         return rows
+
+    def known_parameter_sets(self):
+        """[(template, market, canonical_params_json)] for every registered version (to avoid re-testing)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT s.source, s.market, v.parameters_json FROM strategy_versions v JOIN strategies s ON s.strategy_id=v.strategy_id").fetchall()
+        return [(r["source"].split(":", 1)[-1], r["market"], r["parameters_json"]) for r in rows]
+
+    def all_experiments(self, kind):
+        """Every experiment of one kind across all strategies (for cross-strategy checks such as near-duplicate detection)."""
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT id, strategy_id, version, metrics_json FROM experiments WHERE kind=? ORDER BY id", (kind,)).fetchall()]
+        for r in rows:
+            r["metrics"] = json.loads(r["metrics_json"])
+        return rows
+
+    def count_trials(self):
+        """
+        Parameter sets ever backtested: one per strategy version that reached its training backtest, plus the
+        neighbours tried for robustness. This is the multiple-testing count.
+        """
+        with self._connect() as conn:
+            own = conn.execute("SELECT COUNT(*) AS n FROM experiments WHERE kind='backtest_training'").fetchone()["n"]
+            neighbours = conn.execute(
+                "SELECT COALESCE(SUM(json_extract(metrics_json, '$.neighbours_tested')), 0) AS n FROM experiments WHERE kind='robustness'"
+            ).fetchone()["n"]
+        return int(own) + int(neighbours or 0)
 
     def log_decision(self, category, detail, strategy_id=None, version=None):
         with self._lock, self._connect() as conn:
