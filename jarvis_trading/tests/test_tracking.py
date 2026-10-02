@@ -60,6 +60,18 @@ class TrackingTests(unittest.TestCase):
         self.assertIn("fees_pct_of_gross_profit", row["out_of_sample"])
         self.assertLess(row["confidence"]["p_value"], row["confidence"]["required_p"])
 
+    def test_passive_benchmark_comparison_is_informational(self):
+        self.run_lab()
+        path = os.path.join(self.tmp.name, "bench.json")
+        with open(path, "w") as f:
+            f.write('{"results": {"test": {"universe_equal_weight": {"sharpe": 0.7, "total_return": 0.7, "max_drawdown": 0.6}}}}')
+        with_bench = T.build(self.reg, benchmark_path=path)
+        without = T.build(self.reg, benchmark_path=os.path.join(self.tmp.name, "missing.json"))
+        row = next(r for r in with_bench["rows"] if r["out_of_sample"])
+        self.assertAlmostEqual(row["vs_passive_sharpe"], row["out_of_sample"]["sharpe"] - 0.7)
+        self.assertIsNone(without["benchmark"])
+        self.assertEqual([r["status"] for r in with_bench["rows"]], [r["status"] for r in without["rows"]])  # never changes outcomes
+
     def test_empty_registry(self):
         t = T.build(self.reg)
         self.assertEqual(t["n_versions"], 0)

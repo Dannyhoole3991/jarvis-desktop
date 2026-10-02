@@ -105,14 +105,20 @@ def render_html(snap):
 
     out.append(f"<h2>Leaderboard (risk-adjusted, not raw profit)</h2><p><small>{esc(t['ranking_note'])}</small></p>"
                "<table><tr><th>ID</th><th>Family</th><th>Status</th><th>Score</th><th>OOS Sharpe</th><th>OOS Calmar</th><th>OOS drawdown</th>"
-               "<th>Fees % of gross profit</th><th>Param instability</th><th>p-value (needs &lt;)</th></tr>")
+               "<th>Fees % of gross profit</th><th>Param instability</th><th>Sharpe vs buy-and-hold</th><th>p-value (needs &lt;)</th></tr>")
     for r in t["leaderboard"][:15]:
         o, s, c = r["out_of_sample"] or {}, r["stability"] or {}, r["confidence"] or {}
         out.append(f"<tr><td>{esc(r['strategy_id'])}</td><td>{esc(r['template'])}</td><td class={esc(r['status'])}>{esc(r['status'])}</td><td>{_fmt(r['score'])}</td>"
                    f"<td>{_fmt(o.get('sharpe'))}</td><td>{_fmt(o.get('calmar'))}</td><td>{_fmt(o.get('max_drawdown'), True)}</td>"
                    f"<td>{_fmt(o.get('fees_pct_of_gross_profit'), True)}</td><td>{_fmt(s.get('neighbour_fail_fraction'), True)}</td>"
+                   f"<td>{_fmt(r.get('vs_passive_sharpe'))}</td>"
                    f"<td>{c.get('p_value') if c.get('p_value') is None else format(c['p_value'], '.2g')} ({c.get('required_p', 0):.1e})</td></tr>")
     out.append("</table>")
+    if t.get("benchmark"):
+        b = t["benchmark"]
+        out.append(f"<p><small>Passive benchmark over the held-out window (equal-weight universe, buy-and-hold): Sharpe {_fmt(b.get('sharpe'))}, "
+                   f"return {_fmt(b.get('total_return'), True)}, max drawdown {_fmt(b.get('max_drawdown'), True)}. All strategies are long-only, so "
+                   "an out-of-sample Sharpe near this number is market exposure, not edge.</small></p>")
 
     live = [r for r in t["rows"] if r["status"] in ("candidate", "paper", "retired") or r["paper"]]
     out.append("<h2>Candidates: backtest vs out-of-sample vs paper</h2><table><tr><th>ID</th><th>Status</th><th>Development</th><th>Out-of-sample</th><th>Paper</th></tr>")

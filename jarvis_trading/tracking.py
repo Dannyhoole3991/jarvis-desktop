@@ -14,8 +14,22 @@ number of days (Bailey / Lopez de Prado). A score near or below zero means the
 strategy is indistinguishable from the best of many random ones.
 """
 
+import json
+import os
+
 from . import criteria as C
 from . import stats as ST
+
+BENCHMARK_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "trading_lab", "reports", "benchmark.json")
+
+
+def load_benchmark(path=None):
+    """Passive buy-and-hold results (see benchmark.py), or None if not computed yet."""
+    try:
+        with open(path or BENCHMARK_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 # Funnel stages in pipeline order. "reached" counts versions whose evidence shows they got that far.
 STAGES = [
@@ -87,8 +101,10 @@ def _row(version, exps, n_trials, criteria):
     }
 
 
-def build(registry, criteria=None):
+def build(registry, criteria=None, benchmark_path=None):
     criteria = criteria or C.ResearchCriteria()
+    bench = load_benchmark(benchmark_path)
+    passive = ((bench or {}).get("results", {}).get("test", {}).get("universe_equal_weight") or {})
     versions = registry.list_versions()
     meta = {}
     grouped = registry.all_experiments_grouped()
@@ -101,7 +117,10 @@ def build(registry, criteria=None):
         full["source"] = meta[v["strategy_id"]]["source"]
         pv = registry.get_version(v["strategy_id"], v["version"])
         full["parameters"] = pv["parameters"] if pv else None
-        rows.append(_row(full, grouped.get((v["strategy_id"], v["version"]), {}), n_trials, criteria))
+        row = _row(full, grouped.get((v["strategy_id"], v["version"]), {}), n_trials, criteria)
+        oos_sharpe = (row["out_of_sample"] or {}).get("sharpe")
+        row["vs_passive_sharpe"] = None if oos_sharpe is None or passive.get("sharpe") is None else oos_sharpe - passive["sharpe"]
+        rows.append(row)
 
     funnel = [{"stage": key, "label": label, "count": sum(1 for r in rows if r["reached"][key])} for key, label in STAGES]
     reasons, by_family = {}, {}
@@ -123,7 +142,7 @@ def build(registry, criteria=None):
     return {
         "n_versions": len(rows), "n_trials": n_trials, "funnel": funnel,
         "rejection_reasons": sorted(reasons.items(), key=lambda kv: -kv[1]),
-        "by_family": by_family, "leaderboard": leaderboard[:25], "rows": rows,
+        "by_family": by_family, "leaderboard": leaderboard[:25], "rows": rows, "benchmark": passive or None,
         "near_misses": [{"strategy_id": r["strategy_id"], "template": r["template"], "oos_sharpe": (r["out_of_sample"] or {}).get("sharpe"),
                          "p_value": (r["confidence"] or {}).get("p_value")} for r in near_misses[:20]],
         "power": {"oos_days": oos_days, "min_detectable_sharpe": ST.min_detectable_sharpe(n_trials, oos_days, criteria.alpha),

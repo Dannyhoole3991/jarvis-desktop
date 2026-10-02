@@ -72,7 +72,8 @@ def summary(max_age=20):
                   "oos_sharpe": (r["out_of_sample"] or {}).get("sharpe"), "oos_dd": (r["out_of_sample"] or {}).get("max_drawdown"),
                   "oos_calmar": (r["out_of_sample"] or {}).get("calmar"), "fees_share": (r["out_of_sample"] or {}).get("fees_pct_of_gross_profit"),
                   "p": (r["confidence"] or {}).get("p_value"), "required_p": (r["confidence"] or {}).get("required_p"),
-                  "stability_fail": (r["stability"] or {}).get("neighbour_fail_fraction")} for r in track["leaderboard"][:10]]
+                  "stability_fail": (r["stability"] or {}).get("neighbour_fail_fraction"),
+                  "vs_passive": r.get("vs_passive_sharpe")} for r in track["leaderboard"][:10]]
         readiness = LR.assess(reg, os.path.join(A.LAB_DIR, "paper"))
         value = {
             "counts": {s: sum(1 for r in track["rows"] if r["status"] == s) for s in sorted({r["status"] for r in track["rows"]})},
@@ -81,7 +82,7 @@ def summary(max_age=20):
             "strategies": slim_rows, "decisions": reg.recent_decisions(15), "running": research_running(),
             "batch": _read_json(BATCH_STATUS), "paper": _read_json(SUP.STATUS_FILE),
             "mode": "research+paper only (live trading disabled)", "ranking_note": track["ranking_note"],
-            "luck_benchmark_sharpe": track["luck_benchmark_sharpe"], "power": track["power"], "near_misses": track["near_misses"],
+            "luck_benchmark_sharpe": track["luck_benchmark_sharpe"], "power": track["power"], "near_misses": track["near_misses"], "benchmark": track["benchmark"],
             "readiness": {"ready_for_review": readiness["ready_for_review"],
                           "items": [{"key": i.key, "ok": i.ok, "detail": i.detail, "kind": i.kind} for i in readiness["items"]]},
             "claim": ((P.snapshot(reg)["claim"] or {}).get("summary_3pct", []))[:3],
