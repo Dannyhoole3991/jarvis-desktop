@@ -23,6 +23,7 @@
 !jarvis_business.py
 !jarvis_blog.py
 !jarvis_analytics.py
+!jarvis_business_context.py
 
 # jarvis_business.db (the real business brain -- opportunities, experiments,
 # money) and generated_articles/ (its content output) are deliberately left

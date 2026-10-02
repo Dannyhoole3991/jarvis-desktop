@@ -3,6 +3,7 @@ from openai import OpenAI
 import jarvis_business as jbiz
 import jarvis_blog
 import jarvis_analytics
+import jarvis_business_context as jbctx
 import re
 import requests
 import subprocess
@@ -673,6 +674,13 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, status=500)
             return
 
+        if self.path == "/business/channels":
+            if not self._action_authorized():
+                self._send_json({"error": "unauthorized"}, status=401)
+                return
+            self._send_json({"channels": jbctx.CHANNELS, "facts_as_of": jbctx.FACTS_AS_OF})
+            return
+
         if self.path == "/business/opportunities":
             if not self._action_authorized():
                 self._send_json({"error": "unauthorized"}, status=401)
@@ -712,8 +720,21 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
+            return
+
+        if self.path == "/business/open":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                url = jbctx.channel_url(str(payload.get("key", "")).strip())
+                if not url:
+                    raise ValueError("Unknown channel")
+                open_url(url)
+                self._send_json({"ok": True})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
             return
 
         if self.path == "/business/run_cycle":
@@ -5146,6 +5167,9 @@ questions when the user is asking what you remember, rather than as an instructi
 to create a reminder. If memories conflict, state the conflict clearly instead of
 inventing a resolution.
 
+THE BUSINESS (money-making setup you and Danny are building together)
+{business_context}
+
 HONESTY ABOUT ACTIONS
 You are the conversational brain. Do not claim that you opened, closed, changed,
 deleted, or otherwise performed a computer action unless the local Python command
@@ -5155,6 +5179,11 @@ briefly rather than pretending or inventing results.
 """
 
     instructions = instructions.replace("{machine_context}", JARVIS_MACHINE_CONTEXT)
+    try:
+        business_text = jbctx.chat_context()
+    except Exception as error:
+        business_text = f"(Business details are unavailable right now: {error})"
+    instructions = instructions.replace("{business_context}", business_text)
 
     user_content = f"""RECENT CONVERSATION:
 {conversation_context}
@@ -10296,6 +10325,12 @@ def run_local_command_flow(command, user_message):
     Run the existing, proven Jarvis command handlers.
     Returns True when one of them handled the request.
     """
+    # First, not last: these phrases ("open fiverr", "check fiverr") are
+    # specific enough not to hijack anything, but the generic web/program
+    # handlers further down would otherwise try to treat them as app names.
+    if handle_business_channel_command(command):
+        return True
+
     if handle_display_resolution_command(command):
         return True
 
@@ -11619,6 +11654,93 @@ def _business_cycle_loop():
             run_business_cycle()
         except Exception as error:
             print("Business cycle loop error:", error)
+
+
+def _read_screen_best_effort(question):
+    """
+    Reads whatever is on the screen right now and answers one question
+    about it: local Ollama vision first (free, works with no OpenAI
+    credit), then OpenAI vision. Returns None if neither could answer --
+    callers must then say they couldn't read it, never guess.
+    """
+    try:
+        data_url = capture_screen_for_vision()
+    except Exception as error:
+        print("Screen read: capture failed:", error)
+        return None
+    prompt = (
+        "You are looking at a screenshot of the user's screen. " + question +
+        " Describe only what is actually visible. If it is not visible or unreadable, say exactly that."
+    )
+    try:
+        text = ask_ollama_vision(prompt, data_url, timeout=90)
+        if text:
+            return text
+    except Exception as error:
+        print("Screen read: local vision failed:", error)
+    if online_available():
+        try:
+            return ask_vision_about_screen(question)
+        except Exception as error:
+            print("Screen read: OpenAI vision failed:", error)
+    return None
+
+
+def handle_business_channel_command(command):
+    """
+    'check fiverr', 'open fiverr orders', 'open redbubble', "what's set up"...
+    Jarvis cannot see inside Fiverr/Redbubble by himself, so "check" means:
+    really open the page, wait for it to load, and read the screen -- and
+    say plainly when he couldn't read it rather than inventing an answer.
+    """
+    try:
+        parsed = jbctx.parse_channel_request(command)
+    except Exception:
+        return False
+    if not parsed:
+        return False
+    kind, key = parsed
+
+    if kind == "list":
+        say(jbctx.list_summary())
+        return True
+
+    if kind == "open":
+        url = jbctx.channel_url(key)
+        name = next((c["name"] for c in jbctx.CHANNELS if c["key"] == key), key)
+        open_url(url)
+        say(f"Opening {name}, sir.")
+        return True
+
+    if kind == "check_fiverr":
+        say("Opening your Fiverr orders and messages now, sir. Give me a moment to read them.")
+        jbiz.log_decision("monitor", "Danny asked Jarvis to check Fiverr; opening orders and inbox and reading the screen.")
+        reports = []
+        for label, channel_key, question in (
+            ("orders", "fiverr_orders",
+             "This should be the Fiverr Manage Orders page. How many orders does it show in each status "
+             "(Priority, Active, Late, Delivered, Completed)? Does it say there are no orders?"),
+            ("messages", "fiverr_inbox",
+             "This should be the Fiverr inbox. List the sender names and the first few words of each message."),
+        ):
+            open_url(jbctx.channel_url(channel_key))
+            time.sleep(9)
+            reports.append((label, _read_screen_best_effort(question)))
+
+        spoken = []
+        for label, text in reports:
+            if text:
+                spoken.append(f"Your Fiverr {label}: {text[:450]}")
+        if not spoken:
+            say("I opened both pages, sir, but I couldn't read them from here. Please look at the Orders page: "
+                "real orders only ever appear there.")
+        else:
+            say(" ".join(spoken))
+        say("One reminder, sir: a message that says an order has been placed, with a link or an attachment, "
+            "is a scam. Real orders show on the Orders page and nowhere else.")
+        return True
+
+    return False
 
 
 def handle_business_command(command):

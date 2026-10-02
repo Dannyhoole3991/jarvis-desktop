@@ -347,6 +347,10 @@
   <h2>Today</h2>
   <div class="panel-card" id="businessTodayCard"></div>
 
+  <h2>Where we're selling <span class="panel-hint" style="font-weight:400;">(tap to open)</span></h2>
+  <div class="panel-card" id="businessChannelsCard"></div>
+  <div class="panel-hint" style="margin:6px 0 4px 0;">Say "check fiverr" and Jarvis opens your orders and messages and reads them.</div>
+
   <h2>Active experiments</h2>
   <div class="panel-card" id="businessExperimentsCard"></div>
 
@@ -1224,6 +1228,26 @@ async function refreshBusinessPanel() {
             <div>&pound;${(e.cost_spent||0).toFixed(2)} spent</div>
           </div>`).join("")
       : `<div class="files-empty">Nothing active right now.</div>`;
+
+    try {
+      const chRes = await fetch(BASE + "/business/channels", { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+      const ch = await chRes.json();
+      const chCard = document.getElementById("businessChannelsCard");
+      chCard.innerHTML = (ch.channels || []).map(c => `
+          <div class="panel-row">
+            <div>${escapeHtml(c.name)}<div class="panel-hint">${escapeHtml(c.what)}</div></div>
+            <div><button class="panel-btn" data-open-channel="${escapeHtml(c.key)}">Open</button></div>
+          </div>`).join("") + `<div class="panel-hint" style="margin-top:6px;">Snapshot as of ${escapeHtml(ch.facts_as_of || "")} &mdash; open the page for live numbers.</div>`;
+      chCard.querySelectorAll("[data-open-channel]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          try {
+            await fetch(BASE + "/business/open", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ key: btn.dataset.openChannel }) });
+          } catch (err) {}
+        });
+      });
+    } catch (err) {
+      document.getElementById("businessChannelsCard").innerHTML = `<div class="files-empty">Couldn't load the channel list.</div>`;
+    }
 
     const actionsCard = document.getElementById("businessActionsCard");
     actionsCard.innerHTML = s.pending_human_actions.length
