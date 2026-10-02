@@ -235,6 +235,14 @@ _TIME_RE = re.compile(r"^\d+\s+(?:minute|minutes|hour|hours|day|days|week|weeks|
 _SUSPICIOUS_RE = re.compile(r"https?://|www\.|\.html|\.exe|\.zip|already (?:placed|proceeded|ordered)|order .*placed|review the (?:project|document)|awaiting your approval", re.I)
 
 
+_BLOCKED_RE = re.compile(r"needs a human touch|are you a robot|are you human|verify you are (?:a )?human|press (?:&|and) hold|captcha|unusual traffic", re.I)
+
+
+def _looks_blocked(text):
+    """True when the site is showing a human-verification page instead of content."""
+    return bool(_BLOCKED_RE.search(text[:1200]))
+
+
 def _looks_logged_out(url, text):
     return "/login" in url or "/join" in url or ("Sign in" in text[:400] and "Join" in text[:400] and "Manage" not in text[:800])
 
@@ -245,17 +253,28 @@ def fiverr_status():
     from the page text. Returns a dict; 'logged_in' False means Danny needs
     to sign in once in the Jarvis browser window.
     """
-    result = {"logged_in": True, "orders": {}, "messages": [], "gigs": [], "error": None}
+    result = {"logged_in": True, "blocked": False, "orders": {}, "messages": [], "gigs": [], "error": None}
     try:
         info = goto("https://www.fiverr.com/users/danielhoole/manage_orders", settle=3.0)
         text = read_text(8000)
+        if _looks_blocked(text):
+            result["blocked"] = True
+            return result
         if _looks_logged_out(info["url"], text):
             result["logged_in"] = False
             return result
         result["orders"] = {name: int(n) for name, n in _STATUS_RE.findall(text)}
+        if not result["orders"]:
+            # Never report "0 orders" for a page we couldn't actually read.
+            result["error"] = "I couldn't read the order counts on that page."
+            return result
 
         goto("https://www.fiverr.com/inbox", settle=4.0)
-        inbox = read_text(8000).split("Pick up where you left off")[0]
+        inbox_raw = read_text(8000)
+        if _looks_blocked(inbox_raw):
+            result["blocked"] = True
+            return result
+        inbox = inbox_raw.split("Pick up where you left off")[0]
         lines = [ln.strip() for ln in inbox.splitlines() if ln.strip()]
         convo = None
         for ln in lines:
@@ -276,7 +295,11 @@ def fiverr_status():
             message["suspicious"] = bool(_SUSPICIOUS_RE.search(message["preview"]))
 
         goto("https://www.fiverr.com/users/danielhoole/manage_gigs?current_filter=active", settle=3.0)
-        gig_lines = [ln.strip() for ln in read_text(8000).splitlines() if ln.strip()]
+        gigs_raw = read_text(8000)
+        if _looks_blocked(gigs_raw):
+            result["blocked"] = True
+            return result
+        gig_lines = [ln.strip() for ln in gigs_raw.splitlines() if ln.strip()]
         for i, ln in enumerate(gig_lines[:-1]):
             match = re.fullmatch(r"(\d+) (\d+) (\d+) (\d+) ?%?", gig_lines[i + 1])
             if match and len(ln) > 15:
@@ -289,6 +312,9 @@ def fiverr_status():
 
 def describe_fiverr_status(status):
     """Spoken-style summary of fiverr_status()."""
+    if status.get("blocked"):
+        return ("Fiverr is showing a human-verification page to the Jarvis browser, sir, and I won't try to get "
+                "past that. You can complete the check yourself in that window, or I'll read your normal browser instead.")
     if status.get("error"):
         return f"I couldn't read Fiverr, sir: {status['error']}"
     if not status.get("logged_in"):

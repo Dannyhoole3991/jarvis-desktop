@@ -11758,7 +11758,10 @@ def handle_business_channel_command(command):
         # Fast, exact path first: the Jarvis browser reads the page TEXT (seconds).
         try:
             status = jarvis_browser.fiverr_status()
-            if status.get("logged_in") and not status.get("error"):
+            if status.get("blocked"):
+                say("Fiverr is showing a human check to my own browser, sir, and I won't try to get past it. "
+                    "I'll read your normal browser instead.")
+            elif status.get("logged_in") and not status.get("error"):
                 final_text = jarvis_browser.describe_fiverr_status(status)
                 try:
                     add_to_memory("jarvis", final_text)
