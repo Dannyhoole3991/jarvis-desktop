@@ -1427,7 +1427,7 @@ async function refreshTradingPanel() {
       <div class="panel-row"><div>Mode</div><div>${escapeHtml(s.mode)}</div></div>
       <div class="panel-row"><div>Strategy versions</div><div>${counts}</div></div>
       <div class="panel-row"><div>Parameter sets tried</div><div>${s.n_trials} <span class="panel-hint">(each one raises the bar for the next)</span></div></div>
-      <div class="panel-row"><div>Research daemon</div><div>${s.running ? "running " + escapeHtml(progress) : "stopped"}</div></div>`;
+      <div class="panel-row"><div>Research daemon</div><div>${!s.running ? "stopped" : ((s.daemon || {}).mode === "searching" ? "searching " + escapeHtml(progress) : ((s.daemon || {}).mode === "budget_reached" || (s.daemon || {}).mode === "supervising") ? "running, strategy search stopped (trial budget reached); supervising forward trial and paper runs" : (s.daemon || {}).mode === "exhausted" ? "running, search space exhausted" : "running " + escapeHtml(progress))}</div></div>`;
     document.getElementById("tradingFunnelCard").innerHTML = (s.funnel || []).map(f =>
       `<div class="panel-row"><div>${escapeHtml(f.label)}</div><div>${f.count}</div></div>`).join("");
     document.getElementById("tradingReasonsCard").innerHTML = (s.rejection_reasons || []).length

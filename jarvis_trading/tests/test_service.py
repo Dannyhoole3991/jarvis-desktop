@@ -56,6 +56,28 @@ class ChatTests(unittest.TestCase):
         with mock.patch.object(V, "start_live_trader", return_value=(True, "Starting.")):
             self.assertEqual(V.chat_reply("start the live trader"), "Starting.")
 
+    def _revive(self, running_trials, daemon_up=False, stop=False):
+        import tempfile
+        from jarvis_trading import registry as R
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = R.Registry(os.path.join(tmp, "x.db"))
+            real = R.Registry
+            for i in range(running_trials):
+                reg.create_forward_trial("S", f"S-{i}", 1, "h", "s", {}, 1.0, {}, "f", {})
+                reg.log_forward(i + 1, "status", {"status": "RUNNING"})
+            flag = os.path.join(tmp, "STOP")
+            if stop:
+                open(flag, "w").close()
+            with mock.patch.object(V.R, "Registry", lambda: real(os.path.join(tmp, "x.db"))), mock.patch.object(V, "research_running", return_value=daemon_up),                     mock.patch.object(V, "STOP_FLAG", flag), mock.patch.object(V, "start_research", return_value=(True, "started")) as start:
+                result = V.revive_background_services(delay=0)
+            return result, start.called
+
+    def test_engine_start_revives_the_daemon_only_when_trials_are_running_and_it_is_down(self):
+        self.assertEqual(self._revive(2), ("started", True))
+        self.assertEqual(self._revive(0), ("no forward trials running; nothing to revive", False))
+        self.assertEqual(self._revive(2, daemon_up=True), ("research daemon already running", False))
+        self.assertEqual(self._revive(2, stop=True), ("a stop was requested; not reviving", False))
+
     def test_unrelated_commands_pass_through(self):
         for phrase in ("open fiverr", "what time is it", "check my messages", "run a business cycle", "when will my fiverr gig go live on the site"):
             self.assertIsNone(V.chat_reply(phrase), phrase)

@@ -15,6 +15,7 @@ Run under the Freqtrade venv's Python:
 """
 
 import argparse
+import json
 import multiprocessing
 import os
 import sys
@@ -32,7 +33,20 @@ from jarvis_trading import registry as R  # noqa: E402
 from jarvis_trading import supervisor as SUP  # noqa: E402
 
 PID_FILE = os.path.join(A.LAB_DIR, "daemon.pid")
+STATE_FILE = os.path.join(A.LAB_DIR, "daemon_state.json")
 DEFAULT_MAX_TRIALS = 6000
+
+
+def write_state(mode, **extra):
+    """What the daemon is doing right now, for the HUD: 'searching', 'budget_reached', 'exhausted' or 'supervising'."""
+    state = {"mode": mode, "ts": time.time(), "pid": os.getpid(), **extra}
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
 
 
 def _refresh_regime(registry, previous):
@@ -78,20 +92,26 @@ def run(per_family=15, workers=B.DEFAULT_WORKERS, max_trials=DEFAULT_MAX_TRIALS,
         while not os.path.exists(B.STOP_FLAG):
             trials = registry.count_trials()
             if trials >= max_trials:
-                log(f"Trial budget reached ({trials} >= {max_trials}); stopping search. Paper trading continues.")
+                log(f"Trial budget reached ({trials} >= {max_trials}); stopping search. Paper and forward-trial supervision continue.")
+                write_state("budget_reached", trials=trials, max_trials=max_trials)
                 break
             plan = B.plan_batch(registry, families, per_family, seed)
             if not plan:
                 seed += 1
                 if seed > 50:
                     log("Search space exhausted for the configured families.")
+                    write_state("exhausted", trials=trials, max_trials=max_trials)
                     break
                 continue
             log(f"Seed {seed}: {len(plan)} new strategies, {trials} trials so far")
+            write_state("searching", trials=trials, max_trials=max_trials, seed=seed, planned=len(plan))
             B.run_batch(plan, workers, log=log)
             seed += 1
         # search is finished (or stopped): keep supervising paper trading until told to stop
+        last = None
         while not os.path.exists(B.STOP_FLAG):
+            last = last or {"trials": registry.count_trials(), "max_trials": max_trials}
+            write_state("supervising", **last)
             time.sleep(30)
     finally:
         stop.set()

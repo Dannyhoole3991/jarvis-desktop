@@ -79,5 +79,28 @@ class RegimeTests(unittest.TestCase):
         self.assertEqual(RG.performance_by_regime(trades[:3], h, min_trades=10), {})
 
 
+class RegimeRunTests(unittest.TestCase):
+    def rows(self, n=400):
+        closes, volumes = series(n=n)
+        return [[c[0] * 1000, 0, 0, 0, c[1], v[1]] for c, v in zip(closes, volumes)]
+
+    def test_run_uses_fresh_exchange_candles_and_says_so(self):
+        import json
+        import tempfile
+        rows = self.rows()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = RG.run(out_dir=tmp, fetcher=lambda pair, since: rows)
+            data = json.load(open(os.path.join(tmp, "regime.json")))
+        self.assertEqual(data["data_source"], "exchange (live)")
+        self.assertEqual(data["asof_day"], int(rows[-1][0] // 1000 // DAY))
+        self.assertIn("label", state)
+
+    def test_unavailable_or_short_data_returns_none_so_the_caller_can_fall_back(self):
+        def offline(pair, since):
+            raise RuntimeError("offline")
+        self.assertIsNone(RG.fetch_btc_daily(offline))
+        self.assertIsNone(RG.fetch_btc_daily(lambda pair, since: self.rows(50)))
+
+
 if __name__ == "__main__":
     unittest.main()

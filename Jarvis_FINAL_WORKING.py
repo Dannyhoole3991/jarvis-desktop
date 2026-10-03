@@ -14053,6 +14053,8 @@ if _pending_crash_summary:
 _reconcile_phone_conversations()
 threading.Thread(target=_reconcile_phone_conversations_loop, daemon=True).start()
 threading.Thread(target=_business_cycle_loop, daemon=True).start()
+# After a reboot, bring the research daemon (and through it the forward paper trials) back if they were running.
+threading.Thread(target=jtrading.revive_background_services, daemon=True).start()
 
 # Confirmed live: start_mobile_server() used to run near the top of the
 # file (right after start_voice_listener()), which starts a real

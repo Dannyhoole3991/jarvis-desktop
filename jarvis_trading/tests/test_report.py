@@ -34,6 +34,14 @@ class ReportTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", page)
         self.assertIn("No real money", page)
 
+    def test_chat_summary_does_not_build_the_heavy_snapshot(self):
+        # at ~1,600 strategy versions the full snapshot took ~10s and made the HUD time out; the chat path must stay cheap
+        from unittest import mock
+        name, source, params = S.generate("sma_cross")
+        self.reg.create_strategy("h", "template:sma_cross", "m", "1h", params, source)
+        with mock.patch.object(P, "snapshot", side_effect=AssertionError("snapshot must not be used")):
+            self.assertIn("1 strategy versions tested", P.chat_summary(self.reg))
+
     def test_candidate_is_labelled_candidate_not_proven(self):
         name, source, params = S.generate("sma_cross")
         sid, ver, _ = self.reg.create_strategy("h", "template:sma_cross", "m", "1h", params, source)

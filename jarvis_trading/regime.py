@@ -119,19 +119,43 @@ def performance_by_regime(trades, history, starting_balance=1000.0, min_trades=1
     return {k: M.compute_metrics(v, starting_balance) for k, v in groups.items() if len(v) >= min_trades}
 
 
-def run(data_dir=None, out_dir=None):
-    import pandas as pd
+def fetch_btc_daily(fetcher=None, days=520):
+    """Fresh BTC/USDT daily candles from the exchange's public API (no key). Returns (closes, volumes) or None if unavailable."""
+    import time
+    try:
+        if fetcher is None:
+            import ccxt
+            fetcher = lambda pair, since: ccxt.binance({"enableRateLimit": True}).fetch_ohlcv(pair, "1d", since=since, limit=1000)
+        rows = fetcher("BTC/USDT", int((time.time() - days * 86400) * 1000))
+        if not rows or len(rows) < 200:
+            return None
+        return [(r[0] / 1000.0, float(r[4])) for r in rows], [(int(r[0] // 1000 // 86400), float(r[5])) for r in rows]
+    except Exception:
+        return None
+
+
+def run(data_dir=None, out_dir=None, fetcher=None, use_network=True):
+    """
+    Recomputes the market regime and writes reports/regime.json. Prefers FRESH exchange candles so the 'current' regime is
+    current; falls back to the downloaded research files (which end at the last data download) and says which it used.
+    """
     from . import freqtrade_adapter as A
-    data_dir = data_dir or A.DATA_DIR
     out_dir = out_dir or os.path.join(A.LAB_DIR, "reports")
-    df = pd.read_feather(os.path.join(data_dir, "BTC_USDT-1d.feather"))
-    closes = [(r.date.timestamp(), float(r.close)) for r in df.itertuples()]
-    volumes = [(int(r.date.timestamp() // 86400), float(r.volume)) for r in df.itertuples()]
-    history = classify(closes, [(d, v) for d, v in volumes])
+    fetched = fetch_btc_daily(fetcher) if use_network else None
+    if fetched:
+        closes, volumes, source = fetched[0], fetched[1], "exchange (live)"
+    else:
+        import pandas as pd
+        data_dir = data_dir or A.DATA_DIR
+        df = pd.read_feather(os.path.join(data_dir, "BTC_USDT-1d.feather"))
+        closes = [(r.date.timestamp(), float(r.close)) for r in df.itertuples()]
+        volumes = [(int(r.date.timestamp() // 86400), float(r.volume)) for r in df.itertuples()]
+        source = "downloaded research files (may be stale)"
+    history = classify(closes, volumes)
     state = current_state(history)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "regime.json"), "w", encoding="utf-8") as f:
-        json.dump({"asof_day": history[-1]["day"] if history else None, "state": state, "market": "BTC/USDT daily",
+        json.dump({"asof_day": history[-1]["day"] if history else None, "state": state, "market": "BTC/USDT daily", "data_source": source,
                    "note": "Informational only. Regimes are never used to tune or filter the live strategy."}, f, indent=2)
     return state
 

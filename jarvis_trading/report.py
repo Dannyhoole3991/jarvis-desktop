@@ -31,32 +31,40 @@ def snapshot(registry):
     by_status = {}
     for r in rows:
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
-    claim = None
-    path = os.path.join(REPORT_DIR, "claim_experiment.json")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            claim = json.load(f)
+    claim = load_claim()
     return {"generated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), "counts": by_status, "rows": rows, "tracking": track,
             "decisions": registry.recent_decisions(40), "claim": claim,
             "risk_limits": RK.RiskLimits().__dict__, "risk_fingerprint": RK.RiskLimits().fingerprint(),
             "criteria": C.ResearchCriteria().__dict__, "criteria_fingerprint": C.ResearchCriteria().fingerprint()}
 
 
+def load_claim():
+    """The 3-10%/day claim experiment results, or None. A plain file read (cheap)."""
+    path = os.path.join(REPORT_DIR, "claim_experiment.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def chat_summary(registry):
-    snap = snapshot(registry)
-    counts = snap["counts"]
-    total = sum(counts.values())
+    """Short plain-text status. Uses ONE bulk query (the full snapshot opens thousands of connections at this registry size)."""
+    versions = registry.list_versions()
+    counts = {}
+    for v in versions:
+        counts[v["status"]] = counts.get(v["status"], 0) + 1
+    total = len(versions)
     if not total:
         return "The trading research lab has no strategies yet. It is research and paper trading only; no real money is involved."
     lines = [f"Trading research lab (research and paper only, no real money): {total} strategy versions tested - "
              + ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) + "."]
-    cands = [r for r in snap["rows"] if r["status"] in ("candidate", "paper")]
-    if cands:
-        lines.append("Surviving: " + "; ".join(f"{r['strategy_id']} ({r['source'].split(':')[-1]}, {r['status']})" for r in cands))
+    survivors = [v for v in versions if v["status"] in ("candidate", "paper", "live")]
+    if survivors:
+        lines.append("Surviving: " + "; ".join(f"{v['strategy_id']} ({registry.get(v['strategy_id'])['source'].split(':')[-1]}, {v['status']})" for v in survivors))
     else:
         lines.append("No strategy has survived the research gates, so nothing is being paper traded and no edge has been found.")
-    for r in [r for r in snap["rows"] if r["status"] == "rejected"][:3]:
-        lines.append(f"{r['strategy_id']} {r['source'].split(':')[-1]}: {r['reason']}")
+    for v in [v for v in versions if v["status"] == "rejected"][-3:]:
+        lines.append(f"{v['strategy_id']} {registry.get(v['strategy_id'])['source'].split(':')[-1]}: {v['reason']}")
     return "\n".join(lines)
 
 

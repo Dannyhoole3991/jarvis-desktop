@@ -174,12 +174,12 @@ def summary(max_age=20):
             "n_versions": track["n_versions"], "n_trials": track["n_trials"], "funnel": track["funnel"],
             "rejection_reasons": track["rejection_reasons"][:12], "by_family": track["by_family"], "leaderboard": board,
             "strategies": slim_rows, "decisions": reg.recent_decisions(15), "running": research_running(),
-            "batch": _read_json(BATCH_STATUS), "paper": _read_json(SUP.STATUS_FILE),
+            "batch": _read_json(BATCH_STATUS), "daemon": _read_json(os.path.join(A.LAB_DIR, "daemon_state.json")), "paper": _read_json(SUP.STATUS_FILE),
             "mode": "research+paper only (live trading disabled)", "ranking_note": track["ranking_note"],
             "luck_benchmark_sharpe": track["luck_benchmark_sharpe"], "power": track["power"], "near_misses": track["near_misses"], "benchmark": track["benchmark"],
             "readiness": {"ready_for_review": readiness["ready_for_review"],
                           "items": [{"key": i.key, "ok": i.ok, "detail": i.detail, "kind": i.kind} for i in readiness["items"]]},
-            "claim": ((P.snapshot(reg)["claim"] or {}).get("summary_3pct", []))[:3],
+            "claim": ((P.load_claim() or {}).get("summary_3pct", []))[:3],
             "text": P.chat_summary(reg),
         }
         _cache.update(at=time.time(), value=value)
@@ -201,6 +201,31 @@ def start_research(templates=None, per_family=15):
         _proc["p"] = subprocess.Popen([A.FT_VENV_PY, "-u", "-m", "jarvis_trading.daemon", "--per-family", str(per_family)],
                                       cwd=os.path.dirname(A.LAB_DIR), stdout=log, stderr=log, creationflags=flags)
         return True, "Research daemon started: it will keep testing new strategies in parallel and keep any survivor paper trading."
+
+
+def revive_background_services(delay=60):
+    """
+    Called once when the Jarvis engine starts. After a Windows reboot nothing else restarts the research daemon, and the
+    daemon is what supervises the forward trials. If forward trials are RUNNING and the daemon is down (and nobody asked it
+    to stop), start it; it relaunches the trial processes from their persisted state. Research/paper only; never touches live.
+    Returns a short string describing what it did (also recorded in the audit log).
+    """
+    time.sleep(delay)
+    try:
+        reg = R.Registry()
+        running = [t for t in reg.forward_trials() if reg.forward_status(t["trial_id"]) == "RUNNING"]
+        if not running:
+            return "no forward trials running; nothing to revive"
+        if os.path.exists(STOP_FLAG):
+            return "a stop was requested; not reviving"
+        if research_running():
+            return "research daemon already running"
+        ok, message = start_research()
+        reg.log_decision("operations", f"Jarvis engine started and found {len(running)} forward trial(s) RUNNING with the research daemon down; "
+                         f"{'restarted the daemon' if ok else 'could not restart it: ' + message}.")
+        return message
+    except Exception as error:
+        return f"revive failed: {error}"
 
 
 def stop_research():
