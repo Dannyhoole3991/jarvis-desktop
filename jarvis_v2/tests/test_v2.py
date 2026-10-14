@@ -319,3 +319,55 @@ class FallbackBrainTests(TempDataMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuickVoiceTests(TempDataMixin, unittest.TestCase):
+    """Haiku answers small talk; real jobs go to the full brain, with a heads-up spoken at once."""
+
+    def make(self, quick, claude, clock=None):
+        r = R.Router([FakeBrain("claude", claude), FakeBrain("openai", ["openai"]), FakeBrain("local", ["local"])],
+                     clock=clock or Clock(), state_path=config.BRAIN_STATE_FILE, quick=FakeBrain("quick", quick))
+        r.spoken = []
+        r.on_handoff = r.spoken.append
+        return r
+
+    def test_small_talk_is_answered_by_the_quick_voice(self):
+        r = self.make(["Very well, sir."], [])
+        reply = r.ask("how are you")
+        self.assertEqual((reply.brain, reply.text), ("quick", "Very well, sir."))
+        self.assertEqual(r.brains["claude"].calls, [])
+
+    def test_obvious_jobs_skip_the_quick_voice(self):
+        r = self.make([], ["No orders yet, sir."])
+        self.assertEqual(r.ask("have we had any orders").brain, "claude")
+        self.assertEqual(r.quick.calls, [])
+
+    def test_handoff_speaks_the_heads_up_and_the_full_brain_does_it(self):
+        r = self.make(["HANDOFF: On it, sir."], ["Done, sir."])
+        reply = r.ask("what's the best thing to do next")
+        self.assertEqual((reply.brain, reply.text), ("claude", "Done, sir."))
+        self.assertEqual(r.spoken, ["On it, sir."])
+        self.assertIn("already been told", r.brains["claude"].calls[0]["preamble"])
+
+    def test_each_voice_hears_what_the_other_said(self):
+        r = self.make(["Very well, sir.", "Glad to hear it."], ["No orders yet, sir."])
+        r.ask("how are you")
+        r.ask("any orders on the store")
+        self.assertIn("Very well, sir.", r.brains["claude"].calls[0]["preamble"])
+        r.ask("great thanks")
+        self.assertIn("No orders yet, sir.", r.quick.calls[1]["preamble"])
+
+    def test_quick_voice_out_of_allowance_blocks_claude_and_falls_back(self):
+        clock = Clock()
+        r = self.make([BrainUnavailable("usage_limit", clock.t + 600)], ["never"], clock)
+        reply = r.ask("hello")
+        self.assertEqual(reply.brain, "openai")
+        self.assertEqual(r.brains["claude"].calls, [], "same allowance: don't try the full Claude brain either")
+        self.assertEqual(r.ask("hello again").brain, "openai")
+        self.assertEqual(len(r.quick.calls), 1, "no quick voice while Claude is blocked")
+
+    def test_forced_brain_skips_the_quick_voice(self):
+        r = self.make(["quick"], [])
+        r.force("local")
+        self.assertEqual(r.ask("hi").brain, "local")
+        self.assertEqual(r.quick.calls, [])

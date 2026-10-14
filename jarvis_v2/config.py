@@ -32,6 +32,7 @@ def find_claude_exe():
 
 CLAUDE_CONTEXT_FILE = os.path.join(DATA_DIR, "claude_context.md")
 CLAUDE_MODEL = os.environ.get("JARVIS_CLAUDE_MODEL", "sonnet")
+QUICK_MODEL = os.environ.get("JARVIS_QUICK_MODEL", "haiku")      # the quick voice for small talk
 CLAUDE_TURN_TIMEOUT = float(os.environ.get("JARVIS_CLAUDE_TURN_TIMEOUT", "180"))
 # A rate-limit block without a usable reset time is retried after this long (never "forever").
 CLAUDE_DEFAULT_BLOCK_SECONDS = 300

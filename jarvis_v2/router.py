@@ -14,6 +14,7 @@ The brain router: Claude first, always; OpenAI, then the local AI, only while Cl
 import datetime
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -22,7 +23,14 @@ from . import config
 from .brains import BrainUnavailable
 
 ORDER = ("claude", "openai", "local")
-LABELS = {"claude": "Claude", "openai": "OpenAI", "local": "my local AI"}
+LABELS = {"claude": "Claude", "openai": "OpenAI", "local": "my local AI", "quick": "Claude (quick)"}
+
+# Clearly a job or a question about Danny's own things: straight to the full brain, no quick-voice hop.
+TASK_RE = re.compile(
+    r"(?i)\b(check|post|upload|open|launch|start|run|build|make|create|fix|install|search|look up|find|show|read|send|"
+    r"remember|recall|note|order|orders|sales|money|earn|earned|store|shop|shopify|product|products|tiktok|views|"
+    r"advert|adverts|ads|trading|trade|fiverr|redbubble|blog|adsense|session|sessions|screen|file|files|folder|"
+    r"weather|news|price|email|calendar|spec|project|code)\b")
 REASONS = {"usage_limit": "my Claude allowance is used up", "no_credit": "OpenAI has no credit",
            "auth": "it needs logging in again", "offline": "it isn't reachable", "error": "it hit an error"}
 
@@ -80,8 +88,11 @@ def status_text(now=None, state_path=None, usage_path=None):
 
 
 class Router:
-    def __init__(self, brains, clock=time.time, state_path=None):
+    def __init__(self, brains, clock=time.time, state_path=None, quick=None):
         self.brains = {b.name: b for b in brains}
+        self.quick = quick         # Haiku: small talk first, hands real jobs to the brains above
+        self.on_handoff = None     # called with the quick voice's heads-up ("On it, sir.") so it's spoken at once
+        self.quick_missed = []     # exchanges the quick voice hasn't seen (answered by the full brain)
         self.clock = clock
         self.state_path = state_path or config.BRAIN_STATE_FILE
         self.state = load_state(self.state_path)
@@ -117,43 +128,91 @@ class Router:
 
     def ask(self, text):
         with self.lock:
-            notes, previous = [], self.state.get("active")
-            for name in self._order():
-                until = self.blocked_until(name)
-                if until and not self.state.get("forced"):
-                    continue
-                brain = self.brains[name]
-                self.state["answering"] = name   # so brain_status is right DURING the turn, not only after it
+            heads_up = ""
+            if self._quick_allowed(text):
+                reply, heads_up = self._ask_quick(text)
+                if reply:
+                    return reply
+            return self._ask_full(text, heads_up)
+
+    def _quick_allowed(self, text):
+        return (self.quick is not None and not self.state.get("forced") and not self.blocked_until("claude")
+                and not TASK_RE.search(text))
+
+    def _ask_quick(self, text):
+        """(Reply, "") when the quick voice answered; (None, heads_up) when it handed over or couldn't answer."""
+        lines = [f"Danny: {e['user']}\nJarvis: {e['jarvis']}" for e in self.quick_missed[-config.HANDOVER_TURNS:]]
+        preamble = ("[Context, not a question: your full self handled these exchanges with Danny since you last "
+                    "spoke. Carry on from them naturally.]\n" + "\n\n".join(lines)) if lines else ""
+        try:
+            answer = self.quick.ask(text, self.history, preamble=preamble)
+        except BrainUnavailable as e:
+            if e.reason == "usage_limit":          # same Claude allowance as the full brain
+                self.state["blocked"]["claude"] = {"until": e.retry_at or (self.clock() + config.CLAUDE_DEFAULT_BLOCK_SECONDS),
+                                                   "reason": e.reason, "detail": e.detail}
                 self._save()
-                preamble = self._handover() if name == "claude" and self.away else ""
+            return None, ""
+        self.quick_missed = []
+        answer = (answer or "").strip()
+        if not answer or answer.upper().startswith("HANDOFF"):
+            heads_up = answer.split(":", 1)[1].strip().strip('"') if ":" in answer else ""
+            if heads_up and self.on_handoff:
                 try:
-                    answer = brain.ask(text, self.history, preamble=preamble) if name == "claude" else brain.ask(text, self.history)
-                except BrainUnavailable as e:
-                    retry = e.retry_at or (self.clock() + config.CLAUDE_DEFAULT_BLOCK_SECONDS)
-                    self.state["blocked"][name] = {"until": retry, "reason": e.reason, "detail": e.detail}
-                    self._save()
-                    notes.append((name, e.reason, retry))
-                    continue
-                self.state["blocked"].pop(name, None)
-                self.state["active"] = name
-                self.state.pop("answering", None)
+                    self.on_handoff(heads_up)
+                except Exception:
+                    pass
+            return None, heads_up
+        previous = self.state.get("active")
+        self.state["active"] = "claude"
+        self._save()
+        entry = {"user": text, "jarvis": answer, "brain": "quick"}
+        self.history = (self.history + [entry])[-50:]
+        self.away.append(entry)                    # so the full brain knows what was said
+        return Reply(answer, "quick", self._announce(previous, "claude", [])), ""
+
+    def _ask_full(self, text, heads_up=""):
+        notes, previous = [], self.state.get("active")
+        for name in self._order():
+            until = self.blocked_until(name)
+            if until and not self.state.get("forced"):
+                continue
+            brain = self.brains[name]
+            self.state["answering"] = name   # so brain_status is right DURING the turn, not only after it
+            self._save()
+            preamble = self._handover() if name == "claude" and self.away else ""
+            if name == "claude" and heads_up:
+                preamble = (preamble + "\n\n" if preamble else "") + \
+                    f"[Danny has already been told \"{heads_up}\", so don't give another heads-up; just do it.]"
+            try:
+                answer = brain.ask(text, self.history, preamble=preamble) if name == "claude" else brain.ask(text, self.history)
+            except BrainUnavailable as e:
+                retry = e.retry_at or (self.clock() + config.CLAUDE_DEFAULT_BLOCK_SECONDS)
+                self.state["blocked"][name] = {"until": retry, "reason": e.reason, "detail": e.detail}
                 self._save()
-                announcement = self._announce(previous, name, notes)
-                entry = {"user": text, "jarvis": answer, "brain": name}
-                self.history = (self.history + [entry])[-50:]
-                if name == "claude":
-                    self.away = []
-                else:
-                    self.away.append(entry)
-                return Reply(answer, name, announcement, list(getattr(brain, "last_tools", []) or []))
+                notes.append((name, e.reason, retry))
+                continue
+            self.state["blocked"].pop(name, None)
+            self.state["active"] = name
             self.state.pop("answering", None)
             self._save()
-            return Reply("None of my brains can answer right now, sir. " + (status_text(self.clock(), self.state_path)), "none")
+            announcement = self._announce(previous, name, notes)
+            entry = {"user": text, "jarvis": answer, "brain": name}
+            self.history = (self.history + [entry])[-50:]
+            self.quick_missed = (self.quick_missed + [entry])[-config.HANDOVER_TURNS:]
+            if name == "claude":
+                self.away = []
+            else:
+                self.away.append(entry)
+            return Reply(answer, name, announcement, list(getattr(brain, "last_tools", []) or []))
+        self.state.pop("answering", None)
+        self._save()
+        return Reply("None of my brains can answer right now, sir. " + (status_text(self.clock(), self.state_path)), "none")
 
     def _handover(self):
         lines = [f"Danny: {e['user']}\nJarvis ({LABELS[e['brain']]}): {e['jarvis']}" for e in self.away[-config.HANDOVER_TURNS:]]
-        return ("[Context, not a question: while you (Claude) were unavailable, a fallback brain handled these "
-                "exchanges with Danny. Carry on from them naturally.]\n" + "\n\n".join(lines))
+        return ("[Context, not a question: since your last turn, Jarvis's other voices (a fallback brain while you were "
+                "unavailable, or his quick voice for small talk) handled these exchanges with Danny. Carry on from them "
+                "naturally.]\n" + "\n\n".join(lines))
 
     def _announce(self, previous, now_on, notes):
         if previous == now_on and not notes:
@@ -178,4 +237,5 @@ def default_router():
     from .brains.local import LocalBrain
     from .brains.openai_brain import OpenAIBrain
     config.ensure_dirs()
-    return Router([ClaudeBrain(), OpenAIBrain(), LocalBrain()])
+    from .brains.quick import QuickBrain
+    return Router([ClaudeBrain(), OpenAIBrain(), LocalBrain()], quick=QuickBrain())

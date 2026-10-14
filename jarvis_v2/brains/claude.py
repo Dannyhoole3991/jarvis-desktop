@@ -78,6 +78,7 @@ class ClaudeBrain:
         self.session_id = None
         self.lock = threading.Lock()
         self.last_tools = []
+        self.home = None             # the folder Claude Code runs in (default: Jarvis's home)
 
     # ------------------------------------------------------------ process
     def command(self):
@@ -97,7 +98,7 @@ class ClaudeBrain:
     def _start(self):
         persona.write_claude_home()
         flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
-        self.proc = self.popen(self.command(), cwd=config.HOME_DIR, env=child_env(), stdin=subprocess.PIPE,
+        self.proc = self.popen(self.command(), cwd=self.home or config.HOME_DIR, env=child_env(), stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
                                bufsize=1, creationflags=flags)
         self.events = queue.Queue()

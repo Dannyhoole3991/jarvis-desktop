@@ -630,6 +630,7 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     state = State(router or R.default_router(), executor)
     state.announcer = announcer
     announcer.thinking = lambda: state.thinking
+    state.router.on_handoff = announcer.urgent          # the quick voice's "On it, sir" is spoken at once
     should_watch = real if watch is None else watch
     if should_watch:
         state.watcher = alerts.Watcher(announcer, proposals=selfimprove.listing).start()
@@ -648,6 +649,6 @@ def stop(server, state):
         state.executor.stop()
         server.shutdown()
     finally:
-        claude = state.router.brains.get("claude")
-        if claude is not None:
-            claude.stop()
+        for brain in (state.router.brains.get("claude"), getattr(state.router, "quick", None)):
+            if brain is not None:
+                brain.stop()
