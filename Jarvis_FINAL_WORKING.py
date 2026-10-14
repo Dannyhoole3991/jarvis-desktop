@@ -4819,7 +4819,9 @@ VISION_MODEL = os.environ.get("JARVIS_VISION_MODEL", OPENAI_MODEL)
 # tools, verification/state management, and (when configured) experience
 # learning. Jarvis performs a short online research pass first so the
 # executor receives current, task-specific knowledge rather than guessing.
-AUTONOMOUS_V58_ENABLED = os.environ.get("JARVIS_AUTONOMOUS_V58", "1") != "0"
+# PARKED (Danny, 2026-10-14): the v58 "figure out a new task, learn it, save it" pipeline kept
+# mixing up tasks. Off by default; set JARVIS_AUTONOMOUS_V58=1 to bring it back.
+AUTONOMOUS_V58_ENABLED = os.environ.get("JARVIS_AUTONOMOUS_V58", "0") == "1"
 # Prefer the verified UFO² v2.0.0 installation. Keep an environment override
 # for portability, and only fall back to the older folder if it actually exists.
 _default_ufo2 = os.path.join(os.path.expanduser("~"), "Jarvis", "UFO2_v2.0.0")
@@ -9787,6 +9789,8 @@ def handle_v58_autonomous_commands(command, force=False):
     requests worded unexpectedly (e.g. "settings and go to display").
     The safety gate below (_v58_dangerous_task) still always applies.
     """
+    if not AUTONOMOUS_V58_ENABLED:          # parked: see AUTONOMOUS_V58_ENABLED
+        return False
     if not force and not _v58_is_autonomous_request(command):
         return False
 
