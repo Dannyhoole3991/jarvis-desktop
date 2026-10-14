@@ -525,7 +525,7 @@ def _start_post(state, item_id):
 
     def work():
         try:
-            result = posting.post(item_id)
+            result = posting.post(item_id, progress=state.announcer.urgent if state.announcer else None)
             if state.announcer and result:
                 if result["status"] == "posted":
                     state.announcer.urgent(f"Your {result['title'].replace('Christmas: ', '')} video is live on TikTok, sir.")
@@ -540,6 +540,14 @@ def _start_post(state, item_id):
 def api_post(state, path, body, from_ui=False):
     ex = state.executor
     parts = path.strip("/").split("/")
+    if path == "/api/say":
+        # The brain's "say it now" (e.g. "On it, sir") before a job that takes a while.
+        text = str(body.get("text", "")).strip()[:300]
+        if not text:
+            raise ValueError("Nothing to say.")
+        if state.announcer:
+            state.announcer.urgent(text)
+        return {"ok": True}
     if path == "/api/runs":
         project = P.find(str(body.get("project", "")))
         if not project:

@@ -241,3 +241,54 @@ class PostingServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeakingTests(unittest.TestCase):
+    """Jarvis says what he's doing, and restarts a voice engine that's running old code."""
+
+    def test_posting_reports_each_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(tmp, "generated_videos")
+            os.makedirs(os.path.join(root, "christmas", "TIKTOK"))
+            open(os.path.join(root, "christmas", "TIKTOK", "1_bow.mp4"), "wb").close()
+            with open(os.path.join(root, "christmas", "CHRISTMAS_TIKTOK_CAPTIONS.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Velvet Bow\n```\nThe finishing touch\n#christmastree #collective\n```\n")
+            with mock.patch.object(PO, "QUEUE_FILE", os.path.join(tmp, "q.json")), mock.patch.object(PO, "VIDEO_ROOT", root):
+                item = PO.seed_christmas()[0]
+                said = []
+                result = PO.post(item["id"], browser=FakeBrowser(FakePage(known_tags=("#collective",))),
+                                 sleep=lambda s: None, progress=said.append)
+        self.assertEqual(result["status"], "posted")
+        self.assertEqual(said[0], "Uploading the Velvet Bow video to TikTok now, sir.")
+        self.assertTrue(any("christmastree" in s and "left it out" in s for s in said))
+        self.assertEqual(said[-1], "Caption checked word for word. Posting it now.")
+
+    def test_say_now_speaks_at_once(self):
+        from jarvis_v2 import server, tools
+        state = mock.Mock()
+        self.assertEqual(server.api_post(state, "/api/say", {"text": "On it, sir."}), {"ok": True})
+        state.announcer.urgent.assert_called_once_with("On it, sir.")
+        with self.assertRaises(ValueError):
+            server.api_post(state, "/api/say", {"text": "  "})
+        self.assertIn("say_now", tools.TOOLS)
+
+    def test_stale_engine_is_shut_down_for_a_restart(self):
+        from jarvis_v2 import desktop
+        sent, running = [], [True]
+
+        def send(text):
+            sent.append(text)
+            running[0] = False
+        busy = iter([True, True, False])
+        out = desktop.ensure_fresh_engine(started_at=lambda: 100, changed_at=lambda: 200, alive=lambda: running[0],
+                                          busy=lambda: next(busy), send=send, sleep=lambda s: None)
+        self.assertEqual((out, sent), ("restarted", ["shut down jarvis"]))
+
+    def test_up_to_date_or_absent_engine_is_left_alone(self):
+        from jarvis_v2 import desktop
+        send = mock.Mock()
+        self.assertEqual(desktop.ensure_fresh_engine(started_at=lambda: 300, changed_at=lambda: 200, alive=lambda: True,
+                                                     busy=lambda: False, send=send, sleep=lambda s: None), "up to date")
+        self.assertEqual(desktop.ensure_fresh_engine(started_at=lambda: None, changed_at=lambda: 200, alive=lambda: False,
+                                                     busy=lambda: False, send=send, sleep=lambda s: None), "not running")
+        send.assert_not_called()

@@ -289,6 +289,11 @@ def queue_tiktok_video(video, caption, title):
     return f"Added '{item['title']}' to the Ready to post list. Danny posts it with the button in the Advertising tab."
 
 
+def say_now(text):
+    out = _server("/api/say", {"text": text}, timeout=15)
+    return "Said." if out.get("ok") else out.get("error", "Couldn't say that.")
+
+
 def what_is_on_screen():
     from . import screen
     return screen.describe_windows()
@@ -374,6 +379,9 @@ TOOLS = {
     "queue_tiktok_video": (queue_tiktok_video, "Add a video Jarvis made (from generated_videos) with its caption to the Ready to post list. "
                            "It is NOT posted: only Danny can post it, with the button in the Advertising tab. Captions must be honest (no fake reviews or discounts).",
                            _schema({"video": _S, "caption": _S, "title": _S}, ["video", "caption", "title"])),
+    "say_now": (say_now, "Say one short sentence out loud to Danny RIGHT NOW, before you carry on working (e.g. 'On it, sir, "
+                "checking the store now.'). Use it first when a job will take more than a few seconds; not for quick answers.",
+                _schema({"text": _S}, ["text"])),
     "what_is_on_screen": (what_is_on_screen, "Which app is in front and which windows are open, by name. No picture: use this first.", _schema()),
     "look_at_screen": (look_at_screen, "Take ONE screenshot of Danny's screen, only when he asks you to look at it. Returns the image file to Read.", _schema()),
 }

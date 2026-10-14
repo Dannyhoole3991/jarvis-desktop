@@ -126,8 +126,16 @@ def _norm(s):
     return " ".join((s or "").split())
 
 
-def post(item_id, browser=None, sleep=time.sleep):
-    """DANNY ONLY (the window's Post button). Posts one queued video and verifies it. Returns the item."""
+def post(item_id, browser=None, sleep=time.sleep, progress=None):
+    """DANNY ONLY (the window's Post button). Posts one queued video and verifies it. Returns the item.
+
+    progress(sentence) is called at each stage so Jarvis can say what he's doing."""
+    def tell(sentence):
+        if progress:
+            try:
+                progress(sentence)
+            except Exception:
+                pass
     item = get(item_id)
     if not item:
         raise ValueError("No such video in the list.")
@@ -135,6 +143,8 @@ def post(item_id, browser=None, sleep=time.sleep):
         raise ValueError(f"That video is {item['status'].replace('_', ' ')}.")
     video = _safe_video(item["video"])
     _update(item["id"], status="posting", error=None, note=None, started_at=time.time())
+    name = item["title"].replace("Christmas: ", "")
+    tell(f"Uploading the {name} video to TikTok now, sir.")
     jb = browser
     if jb is None:
         import jarvis_browser as jb
@@ -158,6 +168,7 @@ def post(item_id, browser=None, sleep=time.sleep):
         else:
             raise RuntimeError("The upload didn't finish within 5 minutes.")
 
+        tell("Upload done. Adding the caption and the tags, one at a time.")
         body, tags = split_caption(item["caption"])
 
         def fill(page):
@@ -213,6 +224,8 @@ def post(item_id, browser=None, sleep=time.sleep):
             raise RuntimeError("The caption didn't go in exactly as written, so I didn't post it.")
         if got["missing"]:
             _update(item["id"], note="TikTok didn't offer these tags, so they were left out: " + " ".join(got["missing"]))
+            tell("TikTok wouldn't take " + " and ".join(t.lstrip("#") for t in got["missing"]) + " as a tag, so I left it out.")
+        tell("Caption checked word for word. Posting it now.")
 
         def press_post(page):
             page.locator('[data-e2e="post_video_button"]').first.click()

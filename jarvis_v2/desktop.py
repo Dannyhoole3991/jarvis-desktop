@@ -21,9 +21,77 @@ def _start_engine():
     try:
         sys.path.insert(0, config.REPO_DIR)
         import Jarvis_Desktop_HUD as hud
+        ensure_fresh_engine()
         hud.launch_jarvis_hidden()
     except Exception as error:
         print(f"Couldn't start the voice engine: {error}")
+
+
+def _engine_started_at():
+    """When the process listening on the engine's port started (epoch seconds), or None if nothing is."""
+    import subprocess
+    port = config.ENGINE_URL.rsplit(":", 1)[1].strip("/")
+    script = (f"$c = Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; "
+              "if ($c) { ([DateTimeOffset](Get-Process -Id $c.OwningProcess).StartTime).ToUnixTimeSeconds() }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,
+                             timeout=20, creationflags=0x08000000).stdout.strip()
+        return float(out) if out else None
+    except Exception:
+        return None
+
+
+def _engine_code_changed_at():
+    """Newest change to the voice engine's code (its main file and the jarvis_*.py modules it imports)."""
+    import glob
+    files = [os.path.join(config.REPO_DIR, "Jarvis_FINAL_WORKING.py")] + glob.glob(os.path.join(config.REPO_DIR, "jarvis_*.py"))
+    return max((os.path.getmtime(f) for f in files if os.path.exists(f)), default=0)
+
+
+def _engine_alive():
+    try:
+        server._engine("/status", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+def _engine_busy():
+    try:
+        s = server._engine("/status", timeout=2)
+        return bool(s.get("speaking") or s.get("processing"))
+    except Exception:
+        return False
+
+
+def ensure_fresh_engine(started_at=_engine_started_at, changed_at=_engine_code_changed_at, alive=_engine_alive,
+                        busy=_engine_busy, send=lambda text: server._engine("/command", {"text": text}, timeout=8),
+                        sleep=None):
+    """
+    If the voice engine still running was started BEFORE its code last changed, it's running old code
+    (no /speak for announcements, old slow routing). Shut it down the normal way ("shut down jarvis",
+    once it isn't mid-sentence) so the launcher starts the current code. Returns what it did.
+    """
+    import time
+    sleep = sleep or time.sleep
+    began = started_at()
+    if began is None or not alive():
+        return "not running"
+    if began >= changed_at():
+        return "up to date"
+    for _ in range(30):                       # let it finish what it's saying (up to a minute)
+        if not busy():
+            break
+        sleep(2)
+    try:
+        send("shut down jarvis")
+    except Exception:
+        pass                                  # it may close before replying
+    for _ in range(30):
+        if not alive():
+            return "restarted"
+        sleep(1)
+    return "still running"
 
 
 class WindowApi:
