@@ -27,6 +27,20 @@
 !jarvis_browser.py
 !jarvis_agent.py
 
+# Jarvis v2 (Claude Code brain, window, runs, self-improvement) and its companions.
+# Its data/ folder (memory, run history, tokens, browser profile) and the generated
+# home/ folder are runtime state, never source -- re-ignored below.
+!jarvis_v2/
+!jarvis_v2/**
+jarvis_v2/data/
+jarvis_v2/home/
+!jarvis_money.py
+!START_JARVIS_V2.bat
+!LATER_JOBS.md
+!docs/
+!docs/JARVIS_V2_PLAN.md
+**/__pycache__/
+
 # jarvis_business.db (the real business brain -- opportunities, experiments,
 # money) and generated_articles/ (its content output) are deliberately left
 # ignored by the blanket "*" above -- this is Danny's live, growing business
@@ -49,3 +63,10 @@ jarvis_trading/**/*.pyc
 !trading_lab/
 trading_lab/*
 !trading_lab/DESIGN.md
+
+# Store control (Shopify drafts + CJ research). store_data/ (audit log) stays ignored.
+!jarvis_store/
+!jarvis_store/**
+jarvis_store/**/__pycache__/
+!jarvis_christmas_video.py
+!jarvis_video.py

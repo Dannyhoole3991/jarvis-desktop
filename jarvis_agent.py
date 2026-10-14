@@ -52,6 +52,8 @@ Hard rules:
 - A tool result starting with BLOCKED means a human must confirm: stop and tell Danny exactly what you
   wanted to do and why. Never look for a way around it.
 - Never invent results. If you could not do or read something, say so plainly.
+- Danny's Shopify store (Collective, collectivefinds.co.uk) is handled ONLY through the store_* tools. Never use
+  the browser on the Shopify admin. The store tools can only create DRAFT products; publishing is Danny's job.
 - Be brief. When you have the answer, reply in plain sentences with no tool call."""
 
 TOOLS = [
@@ -70,6 +72,14 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "fiverr_status", "description": "Fast, exact read of Danny's Fiverr: orders, messages (flagging scams) and gig stats.",
      "parameters": {"type": "object", "properties": {}}},
+    {"name": "money_check", "description": "Real earnings/orders across ALL of Danny's businesses (Shopify store, Fiverr, Redbubble, blog AdSense), read from the live pages. Use for any 'have we made money / any orders / any sales' question. Report exactly what it returns; if it couldn't read a site, say so.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "store_status", "description": "Collective Shopify store: connection, live product count, Jarvis drafts waiting for review.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "store_add_draft_product", "description": "Research ONE everyday product on CJdropshipping (real UK shipping cost, honest copy, ~GBP 5 profit) and add it to the Shopify store as a hidden DRAFT with a TikTok video, for Danny to review. Optional keyword, e.g. 'drawer organizer'. Set christmas=true for a Christmas decoration (~GBP 2 profit, tagged christmas).",
+     "parameters": {"type": "object", "properties": {"keyword": {"type": "string"}, "christmas": {"type": "boolean"}}}},
+    {"name": "store_list_drafts", "description": "List Jarvis's draft products waiting for Danny's review.",
+     "parameters": {"type": "object", "properties": {}}},
     {"name": "business_status", "description": "Danny's business numbers: revenue, costs, experiments, items waiting on him.",
      "parameters": {"type": "object", "properties": {}}},
 ]
@@ -78,6 +88,8 @@ TOOLS = [
 def _run_tool(name, args):
     try:
         if name == "browser_goto":
+            if "admin.shopify.com" in str(args.get("url", "")) or "myshopify.com/admin" in str(args.get("url", "")):
+                return "BLOCKED: the Shopify admin is only changed through the store_* tools."
             info = browser.goto(str(args.get("url", "")))
             return f"Opened {info['url']} -- title: {info['title']}"
         if name == "browser_read":
@@ -93,6 +105,21 @@ def _run_tool(name, args):
         if name == "fiverr_status":
             status = browser.fiverr_status()
             return browser.describe_fiverr_status(status) + "\n" + json.dumps(status)[:3000]
+        if name == "money_check":
+            import jarvis_money
+            return jarvis_money.describe(jarvis_money.money_status())
+        if name == "store_status":
+            from jarvis_store.__main__ import status_text
+            return status_text()
+        if name == "store_list_drafts":
+            from jarvis_store.__main__ import drafts_text
+            return drafts_text()
+        if name == "store_add_draft_product":
+            from jarvis_store.pipeline import add_product
+            notes = []
+            result = add_product(str(args.get("keyword") or "").strip() or None,
+                                 kind="christmas" if args.get("christmas") else "everyday", log=notes.append)
+            return json.dumps({"result": result, "notes": notes[-12:]}, default=str)[:MAX_TOOL_OUTPUT]
         if name == "business_status":
             s = jbiz.summary()
             return json.dumps({

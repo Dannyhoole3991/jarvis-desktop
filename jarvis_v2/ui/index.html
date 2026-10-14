@@ -1,0 +1,891 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis</title>
+<style>
+  :root {
+    --bg: #050508;
+    --panel: rgba(255, 179, 71, 0.04);
+    --border: rgba(255, 179, 71, 0.16);
+    --gold: #ffb347;
+    --gold-bright: #ffe0a3;
+    --text: #fff3e0;
+    --dim: rgba(255, 230, 200, 0.58);
+    --dimmer: rgba(255, 230, 200, 0.34);
+    --green: #35e08a;
+    --red: #ff6a6a;
+    --blue: #6cb8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", -apple-system, sans-serif; overflow: hidden; }
+  button { font-family: inherit; }
+
+  .app { display: grid; grid-template-columns: minmax(320px, 40%) 1fr; height: 100vh; }
+
+  /* ---------------- left: orb + conversation ---------------- */
+  .left { display: flex; flex-direction: column; align-items: center; padding: 10px 16px 12px;
+    border-right: 1px solid var(--border); min-height: 0; height: 100vh; }
+  .topline { width: 100%; display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; color: var(--dim); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.25); margin-right: 6px; }
+  .dot.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
+  /* The orb draws at 360px internally and is scaled by CSS to fit: never more than
+     ~40% of the window height, so the chat and input always stay on screen. */
+  #orbCanvas { display: block; margin-top: 2px; flex-shrink: 0; width: min(360px, 40vh, 90%); height: auto; aspect-ratio: 1 / 1; }
+  .status-text { font-size: 13px; letter-spacing: .5px; color: var(--dim); min-height: 18px; }
+  .brain-badge { font-size: 11px; padding: 2px 9px; border-radius: 10px; border: 1px solid var(--border); color: var(--gold-bright); }
+  .brain-badge.fallback { border-color: rgba(108,184,255,.45); color: var(--blue); }
+  .chat { flex: 1; width: 100%; overflow-y: auto; margin: 10px 0; padding-right: 4px; min-height: 0;
+    display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4;
+    white-space: pre-wrap; word-wrap: break-word; user-select: text; }
+  .msg.user { align-self: flex-end; background: rgba(255,179,71,0.13); }
+  .msg.jarvis { align-self: flex-start; background: rgba(255,255,255,0.05); border: 1px solid var(--border); }
+  .msg .meta { display: block; font-size: 10px; color: var(--dimmer); margin-top: 3px; }
+  .input-row { width: 100%; display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border); border-radius: 24px; padding: 5px 5px 5px 16px; }
+  .input-row input { flex: 1; background: transparent; border: none; outline: none; color: var(--text); font-size: 15px; padding: 9px 2px; min-width: 0; }
+  .input-row input::placeholder { color: var(--dimmer); }
+  .round { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border); background: rgba(255,179,71,0.14);
+    color: var(--gold); cursor: pointer; font-size: 15px; flex-shrink: 0; }
+  .round.stop { background: rgba(255,106,106,0.14); border-color: rgba(255,106,106,.3); color: var(--red); }
+
+  /* ---------------- right: needs you + tabs ---------------- */
+  .right { display: flex; flex-direction: column; min-height: 0; height: 100vh; padding: 10px 16px; gap: 10px; }
+  .needs { border: 1px solid rgba(255,106,106,.35); background: rgba(255,106,106,.06); border-radius: 12px; padding: 10px 14px; flex-shrink: 0; }
+  .needs h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--red); display: flex; justify-content: space-between; cursor: pointer; }
+  .needs .body { font-size: 13px; line-height: 1.45; max-height: 26vh; overflow-y: auto; white-space: pre-wrap; user-select: text; }
+  .fs-btn { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px; font-size: 11px; padding: 2px 8px; cursor: pointer; margin-left: 8px; }
+  .needs.collapsed .body { display: none; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .tab { background: none; border: none; color: var(--dim); padding: 7px 11px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; }
+  .item { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; border: 1px solid transparent; }
+  .item:hover { background: rgba(255,179,71,0.06); border-color: var(--border); }
+  .item .sub { color: var(--dimmer); font-size: 11px; }
+  .item .main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; flex-shrink: 0; }
+  .pill.good { color: var(--green); border-color: rgba(53,224,138,.4); }
+  .pill.bad { color: var(--red); border-color: rgba(255,106,106,.4); }
+  .pill.busy { color: var(--blue); border-color: rgba(108,184,255,.45); }
+  .attention { border-color: rgba(255,106,106,.35); }
+  .detail { border-color: var(--gold); }
+  .kv { font-size: 12px; color: var(--dim); margin: 2px 0; }
+  .kv b { color: var(--text); font-weight: 500; }
+  .transcript { font-family: Consolas, monospace; font-size: 12px; line-height: 1.45; background: rgba(0,0,0,0.35); border-radius: 8px;
+    padding: 10px; max-height: 40vh; overflow-y: auto; white-space: pre-wrap; user-select: text; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .btn.danger { color: var(--red); border-color: rgba(255,106,106,.35); }
+  .btn.go { color: var(--green); border-color: rgba(53,224,138,.4); }
+  .progress { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.07); overflow: hidden; margin-top: 4px; }
+  .progress > div { height: 100%; background: var(--green); }
+  .row-input { display: flex; gap: 8px; }
+  .row-input input { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 7px 10px; font-size: 13px; outline: none; }
+  .tab.active { color: var(--gold-bright); border-bottom-color: var(--gold); }
+  .pane { flex: 1; overflow-y: auto; min-height: 0; display: none; }
+  .pane.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .text-block { font-size: 13px; line-height: 1.5; white-space: pre-wrap; user-select: text; }
+  .hint { font-size: 11px; color: var(--dimmer); }
+  a { color: var(--gold-bright); }
+  code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .btn { background: rgba(255,179,71,0.12); border: 1px solid var(--border); color: var(--gold-bright); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 12px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.on { background: rgba(255,179,71,0.3); }
+
+  .gauge { margin-bottom: 14px; }
+  .gauge .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+  .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,0.07); overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--gold), #ff8c3d); transition: width .6s; }
+  .bar.hot > div { background: linear-gradient(90deg, #ff8c3d, var(--red)); }
+  .brains { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .brain { border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 12px; }
+  .brain b { display: block; font-size: 13px; margin-bottom: 3px; color: var(--text); }
+  .brain.active { border-color: var(--green); box-shadow: 0 0 0 1px rgba(53,224,138,.25) inset; }
+  .brain.blocked { opacity: .55; }
+  .brain .state { color: var(--dim); }
+  .brain.active .state { color: var(--green); }
+  .pick { display: flex; gap: 6px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <section class="left">
+    <div class="topline">
+      <span><span class="dot" id="engineDot"></span><span id="engineText">Connecting…</span></span>
+      <span><span class="brain-badge" id="brainBadge">brain: …</span><button class="fs-btn" id="fsBtn" title="Fullscreen (F11)">&#x26F6; Fullscreen</button></span>
+    </div>
+    <canvas id="orbCanvas" width="360" height="360"></canvas>
+    <div class="status-text" id="statusText">Standing by</div>
+    <div class="chat" id="chat"></div>
+    <div class="input-row">
+      <input id="input" type="text" placeholder="Tell Jarvis…" autocomplete="off" />
+      <button class="round" id="send" title="Send">&#10148;</button>
+      <button class="round stop" id="stop" title="Stop talking">&#9632;</button>
+    </div>
+  </section>
+
+  <section class="right">
+    <div class="needs" id="needs">
+      <h2 id="needsHead"><span>&#9888; Needs you</span><span class="hint" id="needsToggle">hide</span></h2>
+      <div class="body" id="needsBody">Loading…</div>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-pane="usage">Usage</button>
+      <button class="tab" data-pane="money">Money</button>
+      <button class="tab" data-pane="store">Store</button>
+      <button class="tab" data-pane="business">Business</button>
+      <button class="tab" data-pane="trading">Trading</button>
+      <button class="tab" data-pane="runs">Runs</button>
+      <button class="tab" data-pane="projects">Projects</button>
+      <button class="tab" data-pane="specs">Specs</button>
+      <button class="tab" data-pane="memory">Memory</button>
+      <button class="tab" data-pane="changes">Changes</button>
+    </nav>
+
+    <div class="pane active" id="pane-usage">
+      <div class="card">
+        <h3>Brain</h3>
+        <div class="brains" id="brains"></div>
+        <div class="pick" id="pick">
+          <button class="btn" data-use="auto">Automatic</button>
+          <button class="btn" data-use="claude">Claude only</button>
+          <button class="btn" data-use="openai">OpenAI only</button>
+          <button class="btn" data-use="local">Local only</button>
+        </div>
+        <p class="hint">Automatic = Claude first. If Claude's allowance runs out he uses OpenAI, then the local AI, and switches back to Claude as soon as it renews.</p>
+      </div>
+      <div class="card">
+        <h3>Claude subscription usage</h3>
+        <div id="gauges"><p class="hint">No reading yet: these fill in after Jarvis's first Claude reply.</p></div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-money">
+      <div class="card">
+        <h3>Have we made any money?</h3>
+        <div class="text-block" id="money-text">Not checked yet.</div>
+        <p class="hint" id="money-at"></p>
+        <button class="btn" id="money-refresh">Check all four now (about a minute)</button>
+      </div>
+    </div>
+    <div class="pane" id="pane-store"><div class="card"><h3>Collective store</h3><div class="text-block" id="store-text">Loading…</div><p class="hint" id="store-at"></p><button class="btn" data-refresh="store">Refresh</button></div></div>
+    <div class="pane" id="pane-business"><div class="card"><h3>Business tracker</h3><div class="text-block" id="business-text">Loading…</div><p class="hint" id="business-at"></p><button class="btn" data-refresh="business">Refresh</button></div></div>
+    <div class="pane" id="pane-trading"><div class="card"><h3>Trading lab (read-only)</h3><div class="text-block" id="trading-text">Loading…</div><p class="hint" id="trading-at"></p><button class="btn" data-refresh="trading">Refresh</button></div></div>
+
+    <div class="pane" id="pane-runs">
+      <div id="runDetail"></div>
+      <div class="card attention" id="runsAttentionCard" style="display:none"><h3>Needs attention</h3><div id="runsAttention"></div></div>
+      <div class="card"><h3>Active</h3><div id="runsActive"><p class="hint">Nothing running.</p></div></div>
+      <div class="card"><h3>History</h3><div id="runsHistory"><p class="hint">No runs yet. Ask Jarvis to do some work in a project.</p></div></div>
+    </div>
+
+    <div class="pane" id="pane-projects">
+      <div id="projectDetail"></div>
+      <div class="card"><h3>Projects</h3><div id="projectsList">Loading…</div></div>
+    </div>
+
+    <div class="pane" id="pane-specs">
+      <div id="docView"></div>
+      <div class="card"><h3>Builds</h3><div id="buildsList"><p class="hint">No builds yet.</p></div></div>
+      <div class="card"><h3>Specs &amp; plans</h3><div id="docsList">Loading…</div></div>
+    </div>
+
+    <div class="pane" id="pane-memory">
+      <div id="memoryView"></div>
+      <div class="card"><h3>What Jarvis remembers</h3><div class="text-block" id="memoryIndex">Loading…</div></div>
+      <div class="card"><h3>Memory files</h3><div id="memoryFiles"></div><p class="hint">Plain Markdown files in jarvis_v2\data\memory: you can edit or delete any of them by hand.</p></div>
+    </div>
+
+    <div class="pane" id="pane-changes">
+      <div id="changeDetail"></div>
+      <div class="card">
+        <h3>Ask Jarvis to change himself</h3>
+        <div class="row-input"><input id="improveInput" placeholder="e.g. make the money check also show Etsy" /><button class="btn" id="improveBtn">Start</button></div>
+        <p class="hint">He works on a separate copy and runs the tests. Nothing changes until you press Apply below. Every applied change can be undone.</p>
+      </div>
+      <div class="card"><h3>Jarvis's changes to himself</h3><div id="changesList"><p class="hint">None yet.</p></div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+// ============================================================
+// The orb: a rotating holographic wireframe globe (meridians,
+// parallels, and scattered "data light" points), drawn on canvas so
+// it's genuinely animating, not a static image -- Danny's reference
+// was Tony Stark's globe hologram. Warm gold/amber on purpose: blue
+// read as "too Ultron."
+// ============================================================
+const canvas = document.getElementById("orbCanvas");
+const ctx = canvas.getContext("2d");
+const SIZE = 360;
+
+// Three nested spheres, same shape/style, alternating spin direction --
+// outer clockwise, middle anticlockwise, inner clockwise again. Danny's
+// call after testing the single- and double-orb versions live.
+const R1 = 128;
+const R2 = R1 * 0.70;
+const R3 = R1 * 0.40;
+
+let rotY1 = 0, rotX1 = 0.15;
+let rotY2 = 0, rotX2 = 0.15;
+let rotY3 = 0, rotX3 = 0.15;
+let orbState = "idle"; // idle | thinking | speaking
+
+function project(x, y, z) {
+  // Simple orthographic-ish projection with a touch of perspective.
+  const scale = 300 / (300 - z);
+  return { x: SIZE / 2 + x * scale, y: SIZE / 2 + y * scale, scale };
+}
+
+function rotateWith(p, rY, rX) {
+  // Rotate around Y then X.
+  let { x, y, z } = p;
+  let cosY = Math.cos(rY), sinY = Math.sin(rY);
+  let x1 = x * cosY - z * sinY;
+  let z1 = x * sinY + z * cosY;
+  let cosX = Math.cos(rX), sinX = Math.sin(rX);
+  let y1 = y * cosX - z1 * sinX;
+  let z2 = y * sinX + z1 * cosX;
+  return { x: x1, y: y1, z: z2 };
+}
+function rotatePoint1(p) { return rotateWith(p, rotY1, rotX1); }
+function rotatePoint2(p) { return rotateWith(p, rotY2, rotX2); }
+function rotatePoint3(p) { return rotateWith(p, rotY3, rotX3); }
+
+// Danny's note: it doesn't need to be a perfect sphere -- the
+// reference is lumpy/irregular, not a uniform globe. This distorts
+// radius as a function of direction (several overlapping sine waves,
+// a cheap stand-in for real 3D noise) so it bulges and dents
+// organically. Applied everywhere a point is placed, so the grid,
+// arcs, and lights all deform together instead of looking like
+// mismatched layers. Shared by all three spheres (just a different
+// base radius) so each one reads as the same shape, scaled down.
+function bulge(ux, uy, uz, radius) {
+  const n = Math.sin(ux * 3.4 + uy * 2.1) * 0.5
+          + Math.sin(uy * 2.6 - uz * 3.7 + 1.3) * 0.35
+          + Math.sin(uz * 4.8 + ux * 1.6 - 0.7) * 0.3
+          + Math.sin((ux + uy + uz) * 5.5) * 0.18;
+  return radius * (1 + n * 0.16);
+}
+
+// Meridians (longitude lines) and parallels (latitude lines), each as
+// an array of 3D points around the (bulged, not perfect) sphere.
+function buildGrid(radius, meridianCount, parallelCount, segs) {
+  const lines = [];
+  for (let m = 0; m < meridianCount; m++) {
+    const lon = (m / meridianCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.06;
+    const pts = [];
+    for (let s = 0; s <= segs; s++) {
+      const lat = (s / segs) * Math.PI - Math.PI / 2;
+      const ux = Math.cos(lat) * Math.cos(lon), uy = Math.sin(lat), uz = Math.cos(lat) * Math.sin(lon);
+      const rad = bulge(ux, uy, uz, radius);
+      pts.push({ x: rad * ux, y: rad * uy, z: rad * uz });
+    }
+    lines.push(pts);
+  }
+  for (let p = 1; p < parallelCount; p++) {
+    const lat = (p / parallelCount) * Math.PI - Math.PI / 2 + (Math.random() - 0.5) * 0.03;
+    const pts = [];
+    for (let s = 0; s <= segs; s++) {
+      const lon = (s / segs) * Math.PI * 2;
+      const ux = Math.cos(lat) * Math.cos(lon), uy = Math.sin(lat), uz = Math.cos(lat) * Math.sin(lon);
+      const rad = bulge(ux, uy, uz, radius);
+      pts.push({ x: rad * ux, y: rad * uy, z: rad * uz });
+    }
+    lines.push(pts);
+  }
+  return lines;
+}
+
+// Scattered "city light" data points -- Fibonacci sphere distribution
+// for even base coverage, then bulged and jittered off-surface a
+// little for the messier, less-uniform cluster look in the reference.
+function buildLights(count, radius) {
+  const pts = [];
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < count; i++) {
+    const yFrac = 1 - (i / (count - 1)) * 2;
+    const radiusAtY = Math.sqrt(1 - yFrac * yFrac);
+    const theta = golden * i;
+    const ux = Math.cos(theta) * radiusAtY, uy = yFrac, uz = Math.sin(theta) * radiusAtY;
+    const rad = bulge(ux, uy, uz, radius) * (0.94 + Math.random() * 0.12);
+    pts.push({ x: rad * ux, y: rad * uy, z: rad * uz, twinkle: Math.random() * Math.PI * 2 });
+  }
+  return pts;
+}
+
+// Chaotic long arcs crossing the sphere at random angles, for the
+// tangled-thread texture in the reference beyond a plain grid globe --
+// also bulged per-point rather than sitting on a perfect sphere.
+function buildChaosArcs(count, segs, radius) {
+  segs = segs || 40;
+  const arcs = [];
+  for (let i = 0; i < count; i++) {
+    const a1 = Math.random() * Math.PI * 2, a2 = Math.random() * Math.PI - Math.PI / 2;
+    const b1 = Math.random() * Math.PI * 2, b2 = Math.random() * Math.PI - Math.PI / 2;
+    const start = { x: Math.cos(a2) * Math.cos(a1), y: Math.sin(a2), z: Math.cos(a2) * Math.sin(a1) };
+    const end = { x: Math.cos(b2) * Math.cos(b1), y: Math.sin(b2), z: Math.cos(b2) * Math.sin(b1) };
+    const pts = [];
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs;
+      // Slerp-ish interpolation then renormalize to a unit direction.
+      let x = start.x + (end.x - start.x) * t;
+      let y = start.y + (end.y - start.y) * t;
+      let z = start.z + (end.z - start.z) * t;
+      const len = Math.sqrt(x * x + y * y + z * z) || 1;
+      const ux = x / len, uy = y / len, uz = z / len;
+      const rad = bulge(ux, uy, uz, radius);
+      pts.push({ x: rad * ux, y: rad * uy, z: rad * uz });
+    }
+    arcs.push(pts);
+  }
+  return arcs;
+}
+
+// Lines from the glowing core out to the shell -- the reference's
+// most distinctive feature, which the surface-only grid/arcs above
+// don't produce on their own. Always reaches the OUTERMOST shell (R1),
+// rotating with it -- with the other two spheres nested inside that
+// same radius, they read as energy connecting all three.
+function buildSpokes(count) {
+  const spokes = [];
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < count; i++) {
+    const yFrac = 1 - (i / (count - 1)) * 2;
+    const radiusAtY = Math.sqrt(1 - yFrac * yFrac);
+    const theta = golden * i + (Math.random() - 0.5) * 0.4;
+    const ux = Math.cos(theta) * radiusAtY, uy = yFrac, uz = Math.sin(theta) * radiusAtY;
+    const rad = bulge(ux, uy, uz, R1) * (0.9 + Math.random() * 0.2);
+
+    // Two axes perpendicular to the spoke's main direction, so it can
+    // wobble sideways rather than being a perfectly straight ray.
+    let px = -uz, py = 0, pz = ux;
+    const plen = Math.sqrt(px * px + py * py + pz * pz) || 1;
+    px /= plen; py /= plen; pz /= plen;
+    const qx = uy * pz - uz * py, qy = uz * px - ux * pz, qz = ux * py - uy * px;
+
+    const wobbleAmp = R1 * (0.05 + Math.random() * 0.14);
+    const freq = 1 + Math.random() * 2.5;
+    const phase1 = Math.random() * Math.PI * 2;
+    const phase2 = Math.random() * Math.PI * 2;
+
+    const segs = 18;
+    const pts = [];
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs;
+      // Zero wobble right at the core, growing toward the shell --
+      // random per spoke so they don't all curve the same way.
+      const w1 = Math.sin(t * Math.PI * freq + phase1) * wobbleAmp * t;
+      const w2 = Math.cos(t * Math.PI * freq + phase2) * wobbleAmp * t * 0.7;
+      pts.push({
+        x: rad * ux * t + px * w1 + qx * w2,
+        y: rad * uy * t + py * w1 + qy * w2,
+        z: rad * uz * t + pz * w1 + qz * w2,
+      });
+    }
+    spokes.push(pts);
+  }
+  return spokes;
+}
+
+const gridLines1 = buildGrid(R1, 26, 15, 64);
+const lights1 = buildLights(320, R1);
+const chaosArcs1 = buildChaosArcs(85, 60, R1);
+const spokes = buildSpokes(70);
+
+const gridLines2 = buildGrid(R2, 22, 12, 54);
+const lights2 = buildLights(240, R2);
+const chaosArcs2 = buildChaosArcs(65, 50, R2);
+
+const gridLines3 = buildGrid(R3, 16, 9, 38);
+const lights3 = buildLights(140, R3);
+const chaosArcs3 = buildChaosArcs(35, 28, R3);
+
+function colorForState() {
+  if (orbState === "thinking") return { line: "255,163,71", light: "255,224,163", glow: 22 };
+  if (orbState === "speaking") return { line: "255,140,61", light: "255,200,140", glow: 26 };
+  return { line: "255,179,71", light: "255,224,163", glow: 14 };
+}
+
+function drawLine(pts, color, baseAlpha, radius, rotateFn) {
+  ctx.beginPath();
+  let started = false;
+  for (const raw of pts) {
+    const r = rotateFn(raw);
+    if (r.z < -radius * 0.85) { started = false; continue; } // hide far-side clutter a touch
+    const proj = project(r.x, r.y, r.z);
+    if (!started) {
+      ctx.moveTo(proj.x, proj.y);
+      started = true;
+    } else {
+      ctx.lineTo(proj.x, proj.y);
+    }
+  }
+  ctx.strokeStyle = `rgba(${color},${baseAlpha})`;
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+}
+
+function drawSpoke(pts, color) {
+  // Bright at the core, fading out toward the shell -- a gradient
+  // along screen-space endpoints rather than a flat alpha, so it
+  // actually reads as energy radiating outward. Tied to the outer
+  // sphere's rotation, same as buildSpokes targeting R1.
+  const r0 = rotatePoint1(pts[0]);
+  const first = project(r0.x, r0.y, r0.z);
+  const r1 = rotatePoint1(pts[pts.length - 1]);
+  const lastProj = project(r1.x, r1.y, r1.z);
+  const grad = ctx.createLinearGradient(first.x, first.y, lastProj.x, lastProj.y);
+  grad.addColorStop(0, `rgba(${color},0.55)`);
+  grad.addColorStop(1, `rgba(${color},0.02)`);
+  ctx.beginPath();
+  ctx.moveTo(first.x, first.y);
+  ctx.lineTo(lastProj.x, lastProj.y);
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+}
+
+function drawLights(lightSet, radius, rotateFn, lightColor) {
+  const now = performance.now() / 500;
+  for (const p of lightSet) {
+    const r = rotateFn(p);
+    if (r.z < -radius * 0.4) continue;
+    const proj = project(r.x, r.y, r.z);
+    const twinkle = 0.5 + 0.5 * Math.sin(now + p.twinkle);
+    const depthAlpha = Math.max(0.15, (r.z + radius) / (2 * radius));
+    const radiusPx = 0.6 + 1.1 * depthAlpha * twinkle;
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, radiusPx, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${lightColor},${(0.35 + 0.5 * twinkle) * depthAlpha})`;
+    ctx.shadowColor = `rgba(${lightColor},0.9)`;
+    ctx.shadowBlur = 6;
+    ctx.fill();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, SIZE, SIZE);
+  const c = colorForState();
+
+  ctx.save();
+  ctx.shadowColor = `rgba(${c.line},0.9)`;
+  ctx.shadowBlur = c.glow * 0.4;
+  for (const line of gridLines1) drawLine(line, c.line, 0.13, R1, rotatePoint1);
+  for (const arc of chaosArcs1) drawLine(arc, c.line, 0.05, R1, rotatePoint1);
+  for (const spoke of spokes) drawSpoke(spoke, c.line);
+  for (const line of gridLines2) drawLine(line, c.line, 0.15, R2, rotatePoint2);
+  for (const arc of chaosArcs2) drawLine(arc, c.line, 0.06, R2, rotatePoint2);
+  for (const line of gridLines3) drawLine(line, c.line, 0.18, R3, rotatePoint3);
+  for (const arc of chaosArcs3) drawLine(arc, c.line, 0.08, R3, rotatePoint3);
+  ctx.restore();
+
+  // Bright core glow behind everything at center.
+  const core = ctx.createRadialGradient(SIZE / 2, SIZE / 2, 3, SIZE / 2, SIZE / 2, R3 * 0.6);
+  core.addColorStop(0, `rgba(${c.light},0.35)`);
+  core.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  // Data-light points on top, twinkling -- outer sphere through inner.
+  drawLights(lights1, R1, rotatePoint1, c.light);
+  drawLights(lights2, R2, rotatePoint2, c.light);
+  drawLights(lights3, R3, rotatePoint3, c.light);
+
+  const speed = orbState === "thinking" ? 0.014 : orbState === "speaking" ? 0.009 : 0.004;
+
+  // Outer: clockwise. Middle: anticlockwise. Inner: clockwise again.
+  rotY1 += speed;
+  rotX1 = 0.15 + Math.sin(performance.now() / 4000) * 0.05;
+
+  rotY2 -= speed * 1.1;
+  rotX2 = 0.15 + Math.cos(performance.now() / 3600) * 0.055;
+
+  rotY3 += speed * 1.35;
+  rotX3 = 0.15 + Math.sin(performance.now() / 3000) * 0.06;
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+function setOrbState(state) {
+  orbState = state;
+  const labels = { thinking: "Thinking...", speaking: "Speaking...", idle: "Standing by" };
+  document.getElementById("statusText").textContent = labels[state] || "Standing by";
+}
+
+// ============================================================
+// Jarvis v2 window: talks only to the local v2 server (same origin).
+// ============================================================
+const TOKEN = "__JARVIS_TOKEN__";
+const UI_TOKEN = "__JARVIS_UI_TOKEN__";   // only this page has it: needed to apply/reject/undo Jarvis's own changes
+const LABELS = { claude: "Claude", openai: "OpenAI", local: "Local AI" };
+
+async function api(path, body) {
+  const opts = { headers: { "X-Jarvis-Token": TOKEN, "X-Jarvis-UI": UI_TOKEN } };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  return res.json();
+}
+
+function el(id) { return document.getElementById(id); }
+function ago(epoch) {
+  if (!epoch) return "";
+  const s = Math.round(Date.now() / 1000 - epoch);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+function clock(epoch) {
+  if (!epoch) return "";
+  const d = new Date(epoch * 1000), today = new Date();
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === today.toDateString() ? t : d.toLocaleDateString([], { weekday: "short" }) + " " + t;
+}
+function pct(u) { return typeof u === "number" ? (u <= 1 ? u * 100 : u) : null; }
+
+// Light Markdown -> safe HTML: escape everything first, then only bold, checkboxes, bullets, code and links.
+function md(text) {
+  let h = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  h = h.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+       .replace(/`([^`]+)`/g, "<code>$1</code>")
+       .replace(/^(\s*)- \[ \] /gm, "$1☐ ")
+       .replace(/^(\s*)- \[x\] /gim, "$1☑ ")
+       .replace(/^(\s*)[-*] /gm, "$1• ")
+       .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return h;
+}
+
+// ------------------------------------------------------------ chat
+const shown = [];
+function addMsg(role, text, meta) {
+  text = (text || "").trim();
+  if (!text) return;
+  const key = role + "|" + text;
+  const now = Date.now();
+  if (shown.some(s => s.key === key && now - s.at < 120000)) return;   // same line from two feeds
+  shown.push({ key, at: now });
+  if (shown.length > 200) shown.shift();
+  const div = document.createElement("div");
+  div.className = "msg " + (role === "user" ? "user" : "jarvis");
+  if (role === "user") div.textContent = text; else div.innerHTML = md(text);
+  if (meta) { const m = document.createElement("span"); m.className = "meta"; m.textContent = meta; div.appendChild(m); }
+  el("chat").appendChild(div);
+  el("chat").scrollTop = el("chat").scrollHeight;
+}
+
+let lastConvId = 0, firstPoll = true;
+async function pollConversation() {
+  try {
+    const data = await api("/api/conversation?since=" + lastConvId);
+    const msgs = data.messages || [];
+    // On first load show only the recent past, not the whole day.
+    for (const m of (firstPoll ? msgs.slice(-12) : msgs)) addMsg(m.role, m.message);
+    for (const m of msgs) lastConvId = Math.max(lastConvId, m.id || 0);
+    firstPoll = false;
+  } catch (e) {}
+}
+
+async function send() {
+  const text = el("input").value.trim();
+  if (!text) return;
+  el("input").value = "";
+  addMsg("user", text);
+  setOrbState("thinking");
+  try {
+    const r = await api("/api/command", { text });
+    if (r.text) addMsg("jarvis", r.text, r.via && r.via !== "engine" ? r.via : "");
+  } catch (e) {
+    addMsg("jarvis", "I couldn't reach my server, sir.");
+  }
+}
+el("send").addEventListener("click", send);
+el("input").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+el("stop").addEventListener("click", () => api("/api/stop", {}));
+
+// ------------------------------------------------------- state / usage
+async function pollState() {
+  let s;
+  try { s = await api("/api/state"); } catch (e) { return; }
+  const eng = s.engine || {};
+  el("engineDot").classList.toggle("on", !!eng.online);
+  el("engineText").textContent = eng.online ? "Voice engine online" : "Voice engine offline (typing still works)";
+  const active = s.active;
+  const badge = el("brainBadge");
+  badge.textContent = "brain: " + (LABELS[active] || "none yet") + (s.forced ? " (fixed)" : "");
+  badge.classList.toggle("fallback", !!active && active !== "claude");
+
+  if (eng.speaking) setOrbState("speaking");
+  else if (s.thinking || eng.processing) setOrbState("thinking");
+  else setOrbState("idle");
+
+  // brain cards
+  const cards = ["claude", "openai", "local"].map(name => {
+    const b = (s.blocked || {})[name];
+    const isActive = name === active;
+    const stateText = isActive ? "In use" : b ? "Unavailable until " + clock(b.until) + (b.reason === "usage_limit" ? " (allowance used)" : b.reason === "no_credit" ? " (no credit)" : "")
+      : "Standing by";
+    return `<div class="brain ${isActive ? "active" : ""} ${b ? "blocked" : ""}"><b>${LABELS[name]}</b><span class="state">${stateText}</span></div>`;
+  });
+  el("brains").innerHTML = cards.join("");
+  document.querySelectorAll("#pick .btn").forEach(btn => btn.classList.toggle("on", (s.forced || "auto") === btn.dataset.use));
+
+  // usage gauges
+  const windows = (s.usage && s.usage.windows) || {};
+  const names = { five_hour: "5-hour session", seven_day: "7-day week", seven_day_opus: "7-day Opus" };
+  const keys = Object.keys(windows);
+  if (keys.length) {
+    el("gauges").innerHTML = keys.map(k => {
+      const w = windows[k], p = pct(w.utilization);
+      const label = p === null ? "unknown" : Math.round(p) + "% used";
+      const width = p === null ? 0 : Math.min(100, p);
+      return `<div class="gauge"><div class="row"><span>${names[k] || k}</span><span>${label}${w.resets_at ? " · resets " + clock(w.resets_at) : ""}</span></div>
+              <div class="bar ${p !== null && p >= 85 ? "hot" : ""}"><div style="width:${width}%"></div></div></div>`;
+    }).join("") + `<p class="hint">Measured ${ago(s.usage.observed_at)}. Updates whenever Claude answers.</p>`;
+  }
+}
+document.querySelectorAll("#pick .btn").forEach(btn => btn.addEventListener("click", async () => {
+  const r = await api("/api/brain", { use: btn.dataset.use });
+  if (r.text) addMsg("jarvis", r.text);
+  pollState();
+}));
+
+// ------------------------------------------------------------ panels
+async function loadPanel(name, refresh) {
+  const p = await api("/api/panel/" + name + (refresh ? "/refresh" : ""), refresh ? {} : undefined);
+  const textEl = el(name === "needs_you" ? "needsBody" : name + "-text");
+  if (p.text) textEl.innerHTML = md(p.text);
+  else if (p.running) textEl.textContent = "Checking…";
+  const at = el(name + "-at");
+  if (at) at.textContent = p.running ? "Updating…" : p.at ? "Updated " + ago(p.at) : "";
+  if (name === "money") el("money-refresh").disabled = !!p.running;
+  if (p.running) setTimeout(() => loadPanel(name), 2000);   // show the result as soon as it's ready
+  return p;
+}
+el("money-refresh").addEventListener("click", () => loadPanel("money", true));
+document.querySelectorAll("[data-refresh]").forEach(b => b.addEventListener("click", () => loadPanel(b.dataset.refresh, true)));
+
+// ------------------------------------------- runs / projects / specs / memory / changes
+function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function dur(a, b) { if (!a) return ""; const s = Math.round(((b || Date.now() / 1000) - a)); return s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h"; }
+const STATUS_CLASS = { succeeded: "good", applied: "good", ready_for_review: "busy", finished: "good", running: "busy", queued: "busy",
+  waiting_for_claude: "busy", working: "busy", building: "busy", failed: "bad", timed_out: "bad", tests_failed: "bad", blocked: "bad", run_failed: "bad" };
+function pill(status) { return `<span class="pill ${STATUS_CLASS[status] || ""}">${esc(String(status).replace(/_/g, " "))}</span>`; }
+async function act(path, body, confirmText) {
+  if (confirmText && !confirm(confirmText)) return null;
+  const r = await api(path, body || {});
+  if (r.text || r.error) addMsg("jarvis", r.error ? "⚠ " + r.error : r.text);
+  return r;
+}
+
+let openRun = null;
+function runRow(r) {
+  return `<div class="item" data-run="${r.id}"><span class="main">#${r.id} · <b>${esc(r.project)}</b> · ${esc(r.prompt_short)}</span>
+          <span class="sub">${dur(r.started_at, r.finished_at)} ${r.output_tokens ? "· " + r.output_tokens + " tok" : ""}</span>${pill(r.status)}</div>`;
+}
+async function renderRuns() {
+  const data = await api("/api/runs");
+  const all = data.runs || [];
+  const active = all.filter(r => ["queued", "waiting_for_claude", "running"].includes(r.status));
+  const dayAgo = Date.now() / 1000 - 86400;
+  const attention = all.filter(r => ["failed", "timed_out"].includes(r.status) && (r.finished_at || 0) > dayAgo);
+  el("runsAttentionCard").style.display = attention.length ? "" : "none";
+  el("runsAttention").innerHTML = attention.map(r => runRow(r) + `<div class="hint" style="margin:-4px 10px 8px">${esc((r.error || "").slice(0, 200))}</div>`).join("");
+  el("runsActive").innerHTML = active.length ? active.map(runRow).join("") : '<p class="hint">Nothing running.</p>';
+  const history = all.filter(r => !active.includes(r));
+  el("runsHistory").innerHTML = history.length ? history.map(runRow).join("") : '<p class="hint">No runs yet. Ask Jarvis to do some work in a project.</p>';
+  if (openRun) renderRunDetail(openRun);
+}
+async function renderRunDetail(id) {
+  openRun = id;
+  const r = await api("/api/runs/" + id);
+  if (r.error) { el("runDetail").innerHTML = ""; openRun = null; return; }
+  const live = ["queued", "waiting_for_claude", "running"].includes(r.status);
+  const box = el("runDetail");
+  const wasAtBottom = (() => { const t = box.querySelector(".transcript"); return !t || t.scrollTop + t.clientHeight >= t.scrollHeight - 20; })();
+  box.innerHTML = `<div class="card detail"><h3>Run #${r.id} ${pill(r.status)} <button class="btn" style="float:right" data-close="runDetail">Close</button></h3>
+    <div class="kv">Project <b>${esc(r.project)}</b> · ${esc(r.kind)} · ${r.started_at ? "took " + dur(r.started_at, r.finished_at) : "not started"}
+      · ${r.input_tokens + r.output_tokens} tokens${r.cost_usd ? " · ~$" + r.cost_usd.toFixed(2) + " of allowance" : ""}</div>
+    <div class="kv">Instruction:</div><div class="text-block" style="max-height:14vh;overflow:auto">${md(r.prompt)}</div>
+    ${r.error ? `<div class="kv" style="color:var(--red)">${esc(r.error)}</div>` : ""}
+    <div class="kv" style="margin-top:8px">What it did:</div>
+    <div class="transcript">${(r.transcript || []).map(l => esc(l.text)).join("\n\n") || "Nothing yet."}</div>
+    <div class="actions">${live ? `<button class="btn danger" data-cancel="${r.id}">Stop it</button>` : ""}
+      ${!live && r.status !== "succeeded" ? `<button class="btn" data-retry="${r.id}">Try again</button>` : ""}</div></div>`;
+  const t = box.querySelector(".transcript");
+  if (t && wasAtBottom) t.scrollTop = t.scrollHeight;
+}
+
+let openProject = null;
+async function renderProjects() {
+  const data = await api("/api/projects");
+  el("projectsList").innerHTML = (data.projects || []).map(p =>
+    `<div class="item" data-project="${esc(p.name)}"><span class="main"><b>${esc(p.name)}</b> <span class="sub">${esc(p.path)}</span></span>
+     <span class="sub">${p.runs} runs · ${esc(p.source)}</span></div>`).join("") || '<p class="hint">No projects found.</p>';
+}
+async function renderProjectDetail(name) {
+  openProject = name;
+  const p = await api("/api/projects/" + encodeURIComponent(name));
+  if (p.error) return;
+  el("projectDetail").innerHTML = `<div class="card detail"><h3>${esc(p.name)} <button class="btn" style="float:right" data-close="projectDetail">Close</button></h3>
+    <div class="kv">Folder <b>${esc(p.path)}</b></div>
+    <div class="kv">Branch <b>${esc(p.branch || "no git")}</b> · last commit <b>${esc(p.last_commit || "—")}</b> · unsaved changes <b>${p.uncommitted_changes}</b></div>
+    ${p.readme_start ? `<div class="text-block" style="max-height:12vh;overflow:auto;margin-top:6px">${md(p.readme_start)}</div>` : ""}
+    <div class="actions"><button class="btn" data-open="${esc(p.name)}" data-what="editor">Open in VS Code</button>
+      <button class="btn" data-open="${esc(p.name)}" data-what="terminal">Open terminal</button></div>
+    ${(p.docs || []).length ? `<div class="kv" style="margin-top:10px">Specs & plans</div>` + p.docs.map(d => `<div class="item" data-doc="${esc(d)}" data-docproject="${esc(p.name)}"><span class="main">${esc(d)}</span></div>`).join("") : ""}
+    ${(p.recent_runs || []).length ? `<div class="kv" style="margin-top:10px">Recent runs</div>` + p.recent_runs.map(runRow).join("") : ""}</div>`;
+}
+
+async function renderSpecs() {
+  const data = await api("/api/docs");
+  el("buildsList").innerHTML = (data.builds || []).map(b => `<div class="item" data-doc="${esc(b.status === "awaiting_approval" ? b.spec : b.plan)}" data-docproject="${esc(b.project)}">
+      <span class="main"><b>${esc(b.title)}</b> <span class="sub">${esc(b.project)}</span>
+      ${b.total ? `<div class="progress"><div style="width:${Math.round(100 * b.done / b.total)}%"></div></div>` : ""}</span>
+      <span class="sub">${b.total ? b.done + "/" + b.total + " tasks" : ""}</span>${pill(b.status)}</div>`).join("") || '<p class="hint">No builds yet. Talk a project through with Jarvis and he will write the spec.</p>';
+  el("docsList").innerHTML = (data.documents || []).map(d => `<div class="item" data-doc="${esc(d.doc)}" data-docproject="${esc(d.project)}">
+      <span class="main"><b>${esc(d.project)}</b> · ${esc(d.doc)}</span><span class="sub">${d.total ? d.done + "/" + d.total : ""}</span>
+      ${d.approved ? pill("approved") : ""}</div>`).join("") || '<p class="hint">No specs or plans found in your projects.</p>';
+}
+async function renderDoc(project, doc) {
+  const d = await api("/api/doc?project=" + encodeURIComponent(project) + "&doc=" + encodeURIComponent(doc));
+  if (d.error) { addMsg("jarvis", "⚠ " + d.error); return; }
+  const approved = d.text.includes("_Approved by");
+  activateTab("specs");
+  el("docView").innerHTML = `<div class="card detail"><h3>${esc(project)} · ${esc(doc)} <button class="btn" style="float:right" data-close="docView">Close</button></h3>
+    <div class="text-block" style="max-height:45vh;overflow:auto">${md(d.text)}</div>
+    <div class="actions">${approved ? pill("approved") : `<button class="btn go" data-approve="${esc(doc)}" data-docproject="${esc(project)}">Approve${doc.includes("/specs/") ? " and start the build" : ""}</button>`}</div></div>`;
+}
+
+async function renderMemory() {
+  const data = await api("/api/memory");
+  el("memoryIndex").innerHTML = md(data.index || "");
+  el("memoryFiles").innerHTML = (data.files || []).map(f => `<div class="item" data-memory="${esc(f.name)}"><span class="main">${esc(f.name)}</span><span class="sub">${ago(f.modified)}</span></div>`).join("") || '<p class="hint">Nothing remembered yet.</p>';
+}
+async function renderMemoryFile(name) {
+  const d = await api("/api/memory/" + encodeURIComponent(name));
+  el("memoryView").innerHTML = `<div class="card detail"><h3>${esc(name)} <button class="btn" style="float:right" data-close="memoryView">Close</button></h3><div class="text-block">${md(d.text || d.error)}</div></div>`;
+}
+
+let openChange = null;
+async function renderChanges() {
+  const data = await api("/api/proposals");
+  el("changesList").innerHTML = (data.proposals || []).map(p => `<div class="item" data-change="${p.id}"><span class="main">${esc(p.goal)}</span>
+      <span class="sub">${ago(p.created_at)}</span>${pill(p.status)}</div>`).join("") || '<p class="hint">None yet.</p>';
+  if (openChange) renderChange(openChange);
+}
+async function renderChange(id) {
+  openChange = id;
+  const data = await api("/api/proposals");
+  const p = (data.proposals || []).find(x => x.id == id);
+  if (!p) return;
+  const diff = ["ready_for_review", "tests_failed", "blocked"].includes(p.status) ? (await api(`/api/proposals/${id}/diff`)).diff : "";
+  el("changeDetail").innerHTML = `<div class="card detail"><h3>Change ${p.id} ${pill(p.status)} <button class="btn" style="float:right" data-close="changeDetail">Close</button></h3>
+    <div class="kv">Asked for: <b>${esc(p.goal)}</b></div>
+    ${p.detail ? `<div class="kv" style="color:var(--red)">${esc(p.detail)}</div>` : ""}
+    ${p.summary ? `<div class="kv">Jarvis's summary:</div><div class="text-block" style="max-height:16vh;overflow:auto">${md(p.summary)}</div>` : ""}
+    ${p.files ? `<div class="kv">Files changed: <b>${esc(p.files.join(", "))}</b></div>` : ""}
+    ${p.tests_passed !== undefined ? `<div class="kv">Tests: <b style="color:${p.tests_passed ? "var(--green)" : "var(--red)"}">${p.tests_passed ? "all passed" : "FAILED"}</b></div>` : ""}
+    ${p.test_output && !p.tests_passed ? `<div class="transcript" style="max-height:18vh">${esc(p.test_output)}</div>` : ""}
+    ${diff ? `<div class="kv">The exact change:</div><div class="transcript">${esc(diff)}</div>` : ""}
+    <div class="actions">
+      ${p.status === "ready_for_review" ? `<button class="btn go" data-change-act="approve" data-id="${p.id}">Apply this change</button>` : ""}
+      ${!["applied", "undone", "rejected"].includes(p.status) ? `<button class="btn danger" data-change-act="reject" data-id="${p.id}">Reject</button>` : ""}
+      ${p.status === "applied" ? `<button class="btn danger" data-change-act="undo" data-id="${p.id}">Undo this change</button>` : ""}
+    </div></div>`;
+}
+
+// One click handler for every list/button in the new tabs.
+document.addEventListener("click", async e => {
+  const t = e.target.closest("[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-close]");
+  if (!t) return;
+  const d = t.dataset;
+  if (d.close) { el(d.close).innerHTML = ""; if (d.close === "runDetail") openRun = null; if (d.close === "changeDetail") openChange = null; return; }
+  if (d.cancel) { await act(`/api/runs/${d.cancel}/cancel`, {}, "Stop this run?"); return renderRuns(); }
+  if (d.retry) { await act(`/api/runs/${d.retry}/retry`); return renderRuns(); }
+  if (d.run) { activateTab("runs"); return renderRunDetail(d.run); }
+  if (d.open) return act(`/api/projects/${encodeURIComponent(d.open)}/open`, { what: d.what });
+  if (d.approve) {
+    const r = await act("/api/doc/approve", { project: d.docproject, doc: d.approve, via: "ui" },
+      d.approve.includes("/specs/") ? "Approve this spec? The build starts straight away." : "Approve this document?");
+    if (r) { renderDoc(d.docproject, d.approve); renderSpecs(); }
+    return;
+  }
+  if (d.doc) return renderDoc(d.docproject, d.doc);
+  if (d.project) return renderProjectDetail(d.project);
+  if (d.memory) return renderMemoryFile(d.memory);
+  if (d.changeAct) {
+    const msgs = { approve: "Apply this change to Jarvis? You'll need to restart Jarvis afterwards.", reject: "Throw this change away?", undo: "Undo this change? You'll need to restart Jarvis afterwards." };
+    await act(`/api/proposals/${d.id}/${d.changeAct}`, {}, msgs[d.changeAct]);
+    return renderChanges();
+  }
+  if (d.change) return renderChange(d.change);
+});
+el("improveBtn").addEventListener("click", async () => {
+  const goal = el("improveInput").value.trim();
+  if (!goal) return;
+  el("improveInput").value = "";
+  await act("/api/proposals", { goal });
+  renderChanges();
+});
+
+const RENDERERS = { runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const PANELS = ["money", "store", "business", "trading"];
+function refreshPane(name) {
+  if (PANELS.includes(name)) return loadPanel(name);
+  if (RENDERERS[name]) return RENDERERS[name]();
+}
+function activateTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.pane === name));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === "pane-" + name));
+  if (activePane !== name) { activePane = name; refreshPane(name); }
+}
+
+let activePane = "usage";
+document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.pane)));
+el("needsHead").addEventListener("click", () => {
+  const n = el("needs");
+  n.classList.toggle("collapsed");
+  el("needsToggle").textContent = n.classList.contains("collapsed") ? "show" : "hide";
+});
+
+// ------------------------------------------------------------- loops
+// Fullscreen: the desktop window does it natively (pywebview); in a plain browser, the Fullscreen API.
+function toggleFullscreen() {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_fullscreen) {
+    window.pywebview.api.toggle_fullscreen();
+  } else if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+}
+el("fsBtn").addEventListener("click", toggleFullscreen);
+document.addEventListener("keydown", e => { if (e.key === "F11") { e.preventDefault(); toggleFullscreen(); } });
+
+// Each poll waits for the previous one to finish, so a slow moment can never pile up requests.
+function every(ms, fn) {
+  const tick = async () => { try { await fn(); } catch (e) {} setTimeout(tick, ms); };
+  tick();
+}
+loadPanel("needs_you");
+every(1500, pollState);
+every(1500, pollConversation);
+setInterval(() => loadPanel("needs_you"), 30000);
+every(4000, () => {
+  if (activePane === "memory" || activePane === "projects" || activePane === "usage") return;   // these only change when clicked
+  return refreshPane(activePane);
+});
+</script>
+</body>
+</html>

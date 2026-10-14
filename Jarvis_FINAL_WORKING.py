@@ -5142,6 +5142,78 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 _ABBREVIATION_RE = re.compile(r"\b(mr|mrs|ms|dr|prof|sr|jr|st|vs|approx|etc)\.$", re.IGNORECASE)
 
 
+_V2_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_v2", "data")
+_V2_URL = os.environ.get("JARVIS_V2_URL", "http://127.0.0.1:8780")
+
+
+def _v2_brain_token():
+    """The v2 server's token if the new window has switched voice over to its brain, else None."""
+    try:
+        with open(os.path.join(_V2_DATA_DIR, "use_v2_brain"), encoding="utf-8") as f:
+            if f.read().strip() != "1":
+                return None
+        with open(os.path.join(_V2_DATA_DIR, "server_token"), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _ask_v2_brain(user_message):
+    """
+    Hands one conversational message to the Jarvis v2 brain. Returns False
+    (so the old brain answers) when v2 isn't switched on.
+
+    Runs in a background thread and returns at once, on purpose: the v2
+    brain may itself ask THIS engine to do something ("open steam") through
+    /command, which is served by this very loop. Waiting here would
+    deadlock that. The original requester's reply queue is taken now and
+    answered directly, so a command the brain sends meanwhile can't steal
+    its reply.
+    """
+    global active_remote_reply
+    token = _v2_brain_token()
+    if not token:
+        return False
+    with active_remote_lock:
+        requester = active_remote_reply
+        active_remote_reply = None
+    add_to_memory("user", user_message)
+    jarvis_processing.set()
+
+    def work():
+        global active_remote_reply
+        reply = None
+        try:
+            response = requests.post(f"{_V2_URL}/api/ask", json={"text": user_message},
+                                     headers={"X-Jarvis-Token": token}, timeout=300)
+            data = response.json()
+            reply = (data.get("spoken") or data.get("text") or "").strip() or None
+        except Exception as error:
+            print(f"Jarvis v2 brain unavailable ({error}); using the old brain for this one.")
+        finally:
+            jarvis_processing.clear()
+        if reply is None:
+            with active_remote_lock:
+                active_remote_reply = requester
+            ask_jarvis(user_message)
+            return
+        if requester is not None:
+            try:
+                requester.put_nowait(reply)
+            except queue.Full:
+                pass
+        add_to_memory("jarvis", reply)
+        with active_remote_lock:
+            pending, active_remote_reply = active_remote_reply, None
+        say(reply)
+        with active_remote_lock:
+            if active_remote_reply is None:
+                active_remote_reply = pending
+
+    threading.Thread(target=work, daemon=True, name="jarvis-v2-ask").start()
+    return True
+
+
 def ask_jarvis(user_message):
     """
     Conversation brain, powered entirely by the local Ollama gpt-oss:20b
@@ -10381,6 +10453,12 @@ def run_local_command_flow(command, user_message):
     if handle_agent_command(command):
         return True
 
+    if handle_store_command(command):
+        return True
+
+    if handle_money_command(command):
+        return True
+
     if handle_business_channel_command(command):
         return True
 
@@ -11771,6 +11849,71 @@ def handle_agent_command(command):
     result = jarvis_agent.run_agent(task, hard=hard)
     final_text = result["answer"]
     jbiz.log_decision("agent", f"Agent finished via {result['brain']} brain in {result['steps']} step(s): {final_text[:200]}")
+    try:
+        add_to_memory("jarvis", final_text)
+    except Exception:
+        pass
+    say(final_text)
+    return True
+
+
+_STORE_CMD_RE = re.compile(r"^(?:jarvis[, ]+|jay[, ]+)?(?:store|shop)\s*[:,]\s*(?P<action>status|drafts|add(?: (?:a )?(?:new )?(?P<xmas>christmas )?product| christmas)?)(?:\s*[:,-]?\s*(?P<kw>.+))?$",
+                           re.IGNORECASE | re.DOTALL)
+
+
+def handle_store_command(command):
+    """
+    'store: status', 'store: drafts', 'store: add [keyword]' -- the Collective
+    Shopify store via jarvis_store (official API, DRAFT-only writes). The colon
+    is required so ordinary sentences are never hijacked.
+    """
+    match = _STORE_CMD_RE.match(command.strip())
+    if not match:
+        return False
+    action = match.group("action").lower()
+    try:
+        if action == "status":
+            from jarvis_store.__main__ import status_text
+            say(status_text())
+        elif action == "drafts":
+            from jarvis_store.__main__ import drafts_text
+            say(drafts_text())
+        else:
+            from jarvis_store.pipeline import add_product
+            kind = "christmas" if "christmas" in action else "everyday"
+            say(f"Researching a new {'Christmas' if kind == 'christmas' else ''} product for the store, sir. "
+                "It will go in as a draft for you to review.")
+            jbiz.log_decision("store", f"Store add requested ({kind}): {match.group('kw') or 'any product'}")
+            result = add_product((match.group("kw") or "").strip() or None, kind=kind, log=lambda m: print("Store:", m))
+            prices = ", ".join(f"£{p:.2f}" for p in sorted(set(result["prices"])))
+            say(f"Added '{result['title']}' as a draft at {prices}, delivered in up to {result['shipping_days']} days. "
+                f"The video and review notes are in {result['folder']}. It is not live until you publish it.")
+    except Exception as error:
+        say(f"The store job stopped safely, sir: {error}")
+    return True
+
+
+_MONEY_CMD_RE = re.compile(
+    r"^(?:jarvis[, ]+|jay[, ]+)?(?:check (?:the )?(?:money|earnings|sales|income)|"
+    r"(?:(?:have|did) )?we (?:made|make|earned|earn) (?:any )?(?:money|sales|anything)(?: anywhere| yet)*|"
+    r"any (?:orders|sales|money)(?: yet| anywhere)*|how much have we made(?: so far)?)\??$",
+    re.IGNORECASE)
+
+
+def handle_money_command(command):
+    """
+    'check money' / 'have we made any money' -- reads Shopify, Fiverr,
+    Redbubble and AdSense in the Jarvis browser and reports only what the
+    pages actually show (jarvis_money).
+    """
+    if not _MONEY_CMD_RE.match(command.strip()):
+        return False
+    say("Checking every business now, sir. Give me a minute.")
+    try:
+        import jarvis_money
+        final_text = jarvis_money.describe(jarvis_money.money_status())
+    except Exception as error:
+        final_text = f"The money check stopped, sir: {error}"
     try:
         add_to_memory("jarvis", final_text)
     except Exception:
@@ -14173,6 +14316,12 @@ while True:
         # so it can only affect commands that would otherwise just be
         # conversation anyway.
         if _looks_like_pc_action_request(command) and handle_v58_autonomous_commands(command, force=True):
+            continue
+
+        # Jarvis v2: while the new window is open, conversation goes to the
+        # new brain (Claude -> OpenAI -> local). Off otherwise; and if the
+        # new brain can't be reached, the old brain below answers instead.
+        if _ask_v2_brain(user_message):
             continue
 
         # ask_jarvis() streams the reply and speaks it sentence-by-sentence
