@@ -174,6 +174,7 @@
       <button class="tab" data-pane="money">Money</button>
       <button class="tab" data-pane="store">Store</button>
       <button class="tab" data-pane="business">Business</button>
+      <button class="tab" data-pane="advertising">Advertising</button>
       <button class="tab" data-pane="trading">Trading</button>
       <button class="tab" data-pane="sessions">Sessions</button>
       <button class="tab" data-pane="runs">Runs</button>
@@ -223,6 +224,21 @@
       <div class="card"><h3>Recent activity</h3><div id="bizActivity"></div></div>
       <div class="card"><h3>What he's learned</h3><div id="bizLessons"></div></div>
     </div>
+    <div class="pane" id="pane-advertising">
+      <div id="advProblem"></div>
+      <div class="tiles" id="advTiles"></div>
+      <div class="card"><h3>TikTok videos <span class="sub" id="advChecked"></span>
+          <button class="btn" style="float:right" id="advRefresh">Check TikTok now</button></h3>
+        <div id="advVideos">Loading…</div></div>
+      <div class="card"><h3>TikTok ads</h3>
+        <div class="check"><span class="mark">○</span><span>You're not running any TikTok ads yet. When you do, log into <b>ads.tiktok.com</b> in Jarvis's browser window and their spend, reach, clicks and sales will show here. Jarvis never spends money without your OK.</span></div></div>
+      <div class="card"><h3>Ready to post</h3>
+        <div class="check"><span class="mark">○</span><span>Coming next: Jarvis prepares videos and captions here, and each one goes live only when you press <b>Post to TikTok</b>.</span></div></div>
+      <div class="card"><h3>Other platforms</h3><div class="chips">
+        <span class="chip">📸 Instagram · not set up yet</span><span class="chip">🔎 Google · not set up yet</span><span class="chip">📘 Facebook · not set up yet</span></div>
+        <p class="hint">Each appears here once you create the account and log into it once in Jarvis's browser window.</p></div>
+    </div>
+
     <div class="pane" id="pane-trading">
       <div class="tiles" id="tradeTiles"></div>
       <div class="card"><h3>Forward paper trial <span class="sub">(fake money, live prices)</span></h3><div id="tradeForward">Loading…</div>
@@ -940,6 +956,44 @@ async function renderStore() {
     : `<div class="check"><span class="mark neg">✘</span><span>Not set up yet: Jarvis can't add products until his store keys are in (${acc.shopify ? "" : "Shopify"}${!acc.shopify && !acc.cj ? " and " : ""}${acc.cj ? "" : "CJ"}). The steps are in the NEEDS YOU list.</span></div>`;
 }
 
+// --------------------------------------------------------- advertising
+function changeNote(m) {
+  if (!m || m.change == null) return "vs the 7 days before: —";
+  const up = m.change > 0, flat = m.change === 0;
+  const pctTxt = m.change_pct != null ? ` (${m.change_pct > 0 ? "+" : ""}${m.change_pct.toFixed(0)}%)` : "";
+  return `<span class="${flat ? "" : up ? "pos" : "neg"}">${up ? "▲" : flat ? "■" : "▼"} ${Math.abs(m.change)}${pctTxt}</span> vs the 7 days before`;
+}
+async function renderAdvertising() {
+  const data = await api("/api/advertising");
+  const t = data.tiktok || {};
+  el("advRefresh").disabled = !!data.refreshing;
+  el("advRefresh").textContent = data.refreshing ? "Checking…" : "Check TikTok now";
+  el("advProblem").innerHTML = t.problem ? `<div class="card attention"><div class="check"><span class="mark neg">!</span><span>${esc(t.problem)}.
+      ${t.logged_out ? " Log into TikTok again in Jarvis's browser window, then press Check TikTok now." : ""}
+      ${t.ok ? " Showing the last good reading." : ""}</span></div></div>` : "";
+  if (!t.ok) {
+    el("advTiles").innerHTML = "";
+    el("advVideos").innerHTML = data.refreshing ? '<p class="hint">Reading TikTok…</p>' : '<p class="hint">Not checked yet. Press "Check TikTok now".</p>';
+    return;
+  }
+  const m = t.metrics || {}, val = k => (m[k] || {}).value;
+  const vids = (t.videos || []).slice().sort((a, b) => (b.views || 0) - (a.views || 0));
+  const totalViews = vids.reduce((s, v) => s + (v.views || 0), 0);
+  el("advTiles").innerHTML = `
+    <div class="tile"><div class="label">Views · ${esc((t.period || "").toLowerCase())}</div><div class="value">${val("Video views") ?? "—"}</div><div class="note">${changeNote(m["Video views"])}</div></div>
+    <div class="tile"><div class="label">Likes · ${esc((t.period || "").toLowerCase())}</div><div class="value">${val("Likes") ?? "—"}</div><div class="note">${changeNote(m["Likes"])}</div></div>
+    <div class="tile"><div class="label">Followers</div><div class="value">${t.followers ?? "—"}</div><div class="note">${val("Profile views") ?? 0} profile views this week</div></div>
+    <div class="tile"><div class="label">Videos posted</div><div class="value">${vids.length}</div><div class="note">${totalViews} views in total</div></div>`;
+  el("advChecked").textContent = t.checked_at ? "· checked " + ago(t.checked_at) : "";
+  const top = Math.max(1, ...vids.map(v => v.views || 0));
+  el("advVideos").innerHTML = vids.length ? `<table class="grid"><tr><th>Video</th><th>Views</th><th></th><th>Likes</th><th>Comments</th><th>Posted</th></tr>` +
+    vids.map((v, i) => `<tr><td title="${esc(v.caption)}">${i === 0 ? "🏆 " : ""}${esc(v.caption.split(/[.!?]/)[0].slice(0, 70))}</td>
+      <td><b>${v.views ?? "—"}</b></td><td style="width:22%"><div class="track" style="height:6px;border-radius:3px;background:rgba(255,255,255,0.06)"><div class="fill" style="height:100%;border-radius:3px;width:${100 * (v.views || 0) / top}%;background:linear-gradient(90deg,var(--gold),#ff8c3d)"></div></div></td>
+      <td>${v.likes ?? "—"}</td><td>${v.comments ?? "—"}</td><td class="sub">${esc(v.posted)}${v.privacy !== "Public" ? " · " + esc(v.privacy) : ""}</td></tr>`).join("") + `</table>`
+    : '<p class="hint">No videos found.</p>';
+}
+el("advRefresh").addEventListener("click", async () => { await api("/api/advertising/refresh", {}); renderAdvertising(); });
+
 // ------------------------------------------------------------- trading
 const REJECT_LABELS = {
   NOT_SIGNIFICANT: "Could just be luck", LOSING_IN_VALIDATION: "Lost money on newer data", LOSING_IN_TRAINING: "Lost money on old data",
@@ -1055,7 +1109,7 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const RENDERERS = { advertising: renderAdvertising, store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);

@@ -271,6 +271,13 @@ def session_detail(name):
     return "\n".join(parts)
 
 
+def advertising_status(refresh=False):
+    from . import advertising
+    if refresh:
+        return advertising.describe(advertising.refresh())
+    return advertising.describe()
+
+
 def what_is_on_screen():
     from . import screen
     return screen.describe_windows()
@@ -349,6 +356,9 @@ TOOLS = {
     "session_detail": (session_detail, "One session: what it's working on, Danny's last message to it, what it last said, and why it needs him. "
                        "You cannot send messages into sessions or answer their questions; tell Danny exactly what it's asking.",
                        _schema({"name": _S}, ["name"])),
+    "advertising_status": (advertising_status, "How Danny's TikTok is doing: views and likes this week (with the change), followers, and every video's views. "
+                           "refresh=true reads TikTok live first (~20 s); otherwise the last reading. Read-only.",
+                           _schema({"refresh": {"type": "boolean"}})),
     "what_is_on_screen": (what_is_on_screen, "Which app is in front and which windows are open, by name. No picture: use this first.", _schema()),
     "look_at_screen": (look_at_screen, "Take ONE screenshot of Danny's screen, only when he asks you to look at it. Returns the image file to Read.", _schema()),
 }

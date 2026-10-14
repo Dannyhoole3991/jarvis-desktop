@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import alerts, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
+from . import advertising, alerts, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -45,6 +45,7 @@ class State:
         self.last_reply = None
         self.panels = {}                 # name -> {"text", "at", "running"}
         self.panel_lock = threading.Lock()
+        self.adv_refreshing = False
         self.announcer = None            # alerts.Announcer, set by start()
         self.watcher = None
 
@@ -327,6 +328,13 @@ def api_get(state, path, query):
         return business_view()
     if path == "/api/store":
         return store_view(state)
+    if path == "/api/advertising":
+        data = advertising.load()
+        t = data.get("tiktok") or {}
+        stale = time.time() - (t.get("checked_at") or 0) > 3600
+        if stale and not t.get("logged_out"):
+            _refresh_advertising(state)
+        return dict(data, refreshing=state.adv_refreshing)
     if path == "/api/trading":
         return trading_view()
     if path == "/api/sessions":
@@ -445,6 +453,21 @@ def trading_view():
     return _cached("trading", 60, load)
 
 
+def _refresh_advertising(state):
+    """Reads TikTok in the background (one read at a time: it drives Jarvis's browser window)."""
+    with state.panel_lock:
+        if state.adv_refreshing:
+            return
+        state.adv_refreshing = True
+
+    def work():
+        try:
+            advertising.refresh()
+        finally:
+            state.adv_refreshing = False
+    threading.Thread(target=work, daemon=True, name="jarvis-advertising").start()
+
+
 def api_post(state, path, body, from_ui=False):
     ex = state.executor
     parts = path.strip("/").split("/")
@@ -467,6 +490,9 @@ def api_post(state, path, body, from_ui=False):
         if parts[3] == "retry":
             new_id = ex.retry(run_id)
             return {"run_id": new_id, "text": f"Started it again as run {new_id}."}
+    if path == "/api/advertising/refresh":
+        _refresh_advertising(state)
+        return {"text": "Checking TikTok now (about 20 seconds)."}
     if path == "/api/visibility":
         if state.announcer:
             state.announcer.window_visible = bool(body.get("visible", True))

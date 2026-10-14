@@ -23,6 +23,9 @@
     2. Paste the three values when it asks.
     3. Tell Claude "keys done".
 
+- [ ] **Other advertising accounts.** Create them when you're ready (Instagram for the shop first, then any others), and log into each one once in Jarvis's browser window. Each one then appears in the Advertising tab.
+- [ ] **TikTok developer account (optional, later).** This is the safer, official way for Jarvis to post videos. Claude will give you the steps when you want to do it.
+
 ## Claude will do these once the above is done
 - [ ] Full Jarvis test, after "keys done":
   1. Jarvis adds a new Christmas product as a draft.
