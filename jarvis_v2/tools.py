@@ -111,7 +111,7 @@ def pc_command(command):
     command = (command or "").strip()
     if not command:
         return "Say what to do on the PC."
-    req = urllib.request.Request(config.ENGINE_URL + "/command", data=json.dumps({"command": command}).encode("utf-8"),
+    req = urllib.request.Request(config.ENGINE_URL + "/command", data=json.dumps({"command": command, "from_brain": True}).encode("utf-8"),
                                  headers={"Content-Type": "application/json"}, method="POST")
     secret = os.environ.get("JARVIS_PHONE_SECRET", "")
     if secret:

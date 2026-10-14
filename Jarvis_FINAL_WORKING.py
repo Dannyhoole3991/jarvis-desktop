@@ -895,9 +895,11 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            command = str(payload.get("command", "")).strip()
+            command = str(payload.get("command", "")).strip().replace(BRAIN_PC_MARKER, "")
             if not command:
                 raise ValueError("No command supplied")
+            if payload.get("from_brain") is True:
+                command = BRAIN_PC_MARKER + command
 
             reply_queue = queue.Queue(maxsize=1)
             remote_commands.put((command, reply_queue))
@@ -5186,6 +5188,35 @@ _LOCAL_QUESTION_RE = re.compile(
 def _is_plain_question(command):
     command = (command or "").strip()
     return bool(_QUESTION_RE.match(command)) and not _LOCAL_QUESTION_RE.match(command)
+
+
+# A short, direct instruction to the PC ("open steam", "volume up", "let's play rust"). While the v2
+# brain is on, ONLY these stay with the engine's own PC handlers; everything else (chat, pasted
+# text, "I copied what you said", plans, questions) goes to the brain, which can still drive the PC
+# through its pc_command tool. Confirmed live: pasted Needs You text ("Sign up for a UK address...")
+# was mistaken for a PC task and the v58 agent started "figuring out a new task".
+_DIRECT_PC_RE = re.compile(
+    r"^(?:jarvis[, ]+)?(?:please |can you |could you )?"
+    r"(?:open|launch|start|play|close|quit|exit|shut down|shutdown|restart|reboot|turn|"
+    r"switch (?:to|on|off)|set|change|mute|unmute|volume|increase|decrease|lower|raise|pause|resume|skip|next|"
+    r"previous|minimi[sz]e|maximi[sz]e|show (?:me )?(?:my |the )?(?:desktop|downloads|documents)|go to|take a screenshot|"
+    r"screenshot|click|type|install|uninstall|lock|sleep|i'?m ready to play|i am ready to play|ready to play|let'?s play)\b",
+    re.IGNORECASE)
+BRAIN_PC_MARKER = "\x00from-brain\x00"   # prefixes PC jobs the v2 brain sends, so they never bounce back to it
+
+
+def _is_direct_pc_command(command):
+    command = (command or "").strip().replace("’", "'")
+    if not command or "\n" in command or re.search(r"https?://", command):
+        return False
+    if len(command.split()) > 14 or len(re.findall(r"[.!?](?:\s|$)", command)) > 1:
+        return False
+    return bool(_DIRECT_PC_RE.match(command) or _LOCAL_QUESTION_RE.match(command))
+
+
+def _goes_to_v2_brain(command, from_brain=False):
+    """While the v2 brain is on: everything except a short direct PC command (or the brain's own PC jobs)."""
+    return not from_brain and (_is_plain_question(command) or not _is_direct_pc_command(command))
 
 
 def _announce(text):
@@ -14269,6 +14300,9 @@ while True:
             continue
 
         user_message = get_user_input()
+        from_brain = user_message.startswith(BRAIN_PC_MARKER)
+        if from_brain:
+            user_message = user_message[len(BRAIN_PC_MARKER):]
         user_message = _strip_leading_wake_word(user_message)
 
         if not user_message.strip():
@@ -14329,7 +14363,7 @@ while True:
         # the v2 brain when it's on. Otherwise the PC-action routes below can mistake
         # it for a task and try to act it out (confirmed live: it tried, failed, and
         # then sat in "show me and say done" learning mode instead of answering).
-        if _is_plain_question(command) and _ask_v2_brain(user_message):
+        if _goes_to_v2_brain(command, from_brain) and _ask_v2_brain(user_message):
             continue
 
         if handle_smart_routine_phrases(command):

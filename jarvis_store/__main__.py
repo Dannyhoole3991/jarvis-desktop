@@ -14,8 +14,11 @@ from .shopify import Shopify, ShopError
 
 def status_text():
     present = creds.status()
-    lines = [f"Shopify connected: {'yes' if present.get('shopify') else 'NO (run setup_credentials)'}",
-             f"CJ connected: {'yes' if present.get('cj') else 'NO (run setup_credentials)'}"]
+    lines = [f"Shopify API keys: {'set up' if present.get('shopify') else 'not set up yet'}",
+             f"CJ API key: {'set up' if present.get('cj') else 'not set up yet'}"]
+    if not (present.get("shopify") and present.get("cj")):
+        lines.append("(The store itself is live at collectivefinds.co.uk. The missing keys are one of Danny's later jobs: "
+                     "without them Jarvis can't read orders or add products through the API. Nothing is down.)")
     if present.get("shopify"):
         try:
             shop = Shopify()
