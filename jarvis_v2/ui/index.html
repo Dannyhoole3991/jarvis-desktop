@@ -114,6 +114,9 @@
   .hbar .track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.06); overflow: hidden; }
   .hbar .fill { height: 100%; background: linear-gradient(90deg, var(--gold), #ff8c3d); }
   .hbar .n { text-align: right; color: var(--dim); }
+  .post { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px 0; border-top: 1px solid rgba(255,179,71,0.07); }
+  .post video { width: 96px; height: 170px; object-fit: cover; border-radius: 8px; background: #000; }
+  .post .cap { font-size: 12px; color: var(--dim); white-space: pre-wrap; max-height: 92px; overflow: auto; margin: 4px 0 8px; user-select: text; }
   .check { display: flex; gap: 8px; font-size: 13px; padding: 4px 0; }
   .check .mark { width: 18px; flex-shrink: 0; }
   .row-input { display: flex; gap: 8px; }
@@ -232,8 +235,9 @@
         <div id="advVideos">Loading…</div></div>
       <div class="card"><h3>TikTok ads</h3>
         <div class="check"><span class="mark">○</span><span>You're not running any TikTok ads yet. When you do, log into <b>ads.tiktok.com</b> in Jarvis's browser window and their spend, reach, clicks and sales will show here. Jarvis never spends money without your OK.</span></div></div>
-      <div class="card"><h3>Ready to post</h3>
-        <div class="check"><span class="mark">○</span><span>Coming next: Jarvis prepares videos and captions here, and each one goes live only when you press <b>Post to TikTok</b>.</span></div></div>
+      <div class="card"><h3>Ready to post <span class="sub" id="postCount"></span></h3>
+        <div id="postList"><p class="hint">Loading…</p></div>
+        <p class="hint">Nothing goes on TikTok until you press <b>Post to TikTok</b> on that video. Jarvis then uploads it, checks the caption word for word, posts it and confirms it's live.</p></div>
       <div class="card"><h3>Other platforms</h3><div class="chips">
         <span class="chip">📸 Instagram · not set up yet</span><span class="chip">🔎 Google · not set up yet</span><span class="chip">📘 Facebook · not set up yet</span></div>
         <p class="hint">Each appears here once you create the account and log into it once in Jarvis's browser window.</p></div>
@@ -994,6 +998,44 @@ async function renderAdvertising() {
 }
 el("advRefresh").addEventListener("click", async () => { await api("/api/advertising/refresh", {}); renderAdvertising(); });
 
+const POST_STATUS = { ready: "ready", posting: "posting…", posted: "live on TikTok", failed: "didn't post", check: "check TikTok" };
+let renderedPosts = "";
+async function renderPosts() {
+  const data = await api("/api/posts");
+  const items = data.posts || [];
+  const key = JSON.stringify(items.map(i => [i.id, i.status, i.error, i.note])) + data.posting_now;
+  if (key === renderedPosts) return;            // don't rebuild (and restart the video previews) when nothing changed
+  renderedPosts = key;
+  const ready = items.filter(i => i.status !== "posted");
+  el("postCount").textContent = `· ${items.filter(i => i.status === "ready").length} ready, ${items.filter(i => i.status === "posted").length} posted`;
+  const order = { posting: 0, failed: 1, check: 2, ready: 3, posted: 4 };
+  el("postList").innerHTML = items.slice().sort((a, b) => (order[a.status] - order[b.status]) || a.id - b.id).map(i => `
+    <div class="post">
+      <video src="/api/posts/${i.id}/video?t=${encodeURIComponent(TOKEN)}" preload="metadata" controls muted playsinline></video>
+      <div><b>${esc(i.title)}</b> <span class="pill ${i.status === "posted" ? "good" : i.status === "failed" ? "bad" : i.status === "posting" ? "busy" : ""}">${esc(POST_STATUS[i.status] || i.status)}</span>
+        ${i.error ? `<div class="kv" style="color:var(--red)">${esc(i.error)}</div>` : ""}
+        ${i.note ? `<div class="kv" style="color:#e0a030">${esc(i.note)}</div>` : ""}
+        <div class="cap">${esc(i.caption)}</div>
+        <div class="actions" style="margin-top:0">
+          ${["ready", "failed"].includes(i.status) ? `<button class="btn go" data-postnow="${i.id}" ${data.posting_now ? "disabled" : ""}>Post to TikTok</button>
+            <button class="btn" data-postremove="${i.id}">Remove</button>` : ""}
+          ${i.status === "posted" ? `<span class="sub">posted ${ago(i.posted_at)}</span>` : ""}
+        </div></div>
+    </div>`).join("") || '<p class="hint">Nothing waiting. Ask Jarvis to prepare a video.</p>';
+}
+document.addEventListener("click", async e => {
+  const p = e.target.closest("[data-postnow],[data-postremove]");
+  if (!p) return;
+  if (p.dataset.postnow) {
+    const item = p.closest(".post").querySelector("b").textContent;
+    await act(`/api/posts/${p.dataset.postnow}/post`, {}, `Post "${item}" publicly to your TikTok now?`);
+  } else {
+    await act(`/api/posts/${p.dataset.postremove}/remove`, {}, "Take this video out of the list? (The file is kept.)");
+  }
+  renderedPosts = "";
+  renderPosts();
+});
+
 // ------------------------------------------------------------- trading
 const REJECT_LABELS = {
   NOT_SIGNIFICANT: "Could just be luck", LOSING_IN_VALIDATION: "Lost money on newer data", LOSING_IN_TRAINING: "Lost money on old data",
@@ -1109,7 +1151,7 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { advertising: renderAdvertising, store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const RENDERERS = { advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);

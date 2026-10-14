@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import advertising, alerts, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
+from . import advertising, alerts, posting, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -46,6 +46,7 @@ class State:
         self.panels = {}                 # name -> {"text", "at", "running"}
         self.panel_lock = threading.Lock()
         self.adv_refreshing = False
+        self.posting_now = None
         self.announcer = None            # alerts.Announcer, set by start()
         self.watcher = None
 
@@ -85,6 +86,41 @@ def make_handler(state):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_video(self, item_id):
+            item = posting.get(item_id)
+            if not item:
+                return self._json({"error": "no such video"}, 404)
+            try:
+                path = posting._safe_video(item["video"])
+            except ValueError as error:
+                return self._json({"error": str(error)}, 400)
+            size = os.path.getsize(path)
+            start, end = 0, size - 1
+            rng = self.headers.get("Range", "")
+            mm = re.match(r"bytes=(\d*)-(\d*)", rng)
+            if mm:
+                start = int(mm.group(1) or 0)
+                end = min(int(mm.group(2)) if mm.group(2) else size - 1, size - 1)
+            self.send_response(206 if mm else 200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            if mm:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (ConnectionError, OSError):
+                        break
+                    remaining -= len(chunk)
+
         def _host_ok(self):
             host = (self.headers.get("Host") or "").split(":")[0]
             return host in ("127.0.0.1", "localhost")
@@ -117,6 +153,13 @@ def make_handler(state):
                 self.send_header("X-Frame-Options", "DENY")
                 self.end_headers()
                 return self.wfile.write(body)
+            m = re.match(r"^/api/posts/(\d+)/video$", url.path)
+            if m and self._host_ok():
+                # A <video> tag can't send headers, so this one GET takes the token in the query string.
+                t = urllib.parse.parse_qs(url.query).get("t", [""])[0]
+                if not secrets.compare_digest(t, state.token):
+                    return self._json({"error": "unauthorized"}, 401)
+                return self._send_video(int(m.group(1)))
             if not self._authorized():
                 return self._json({"error": "unauthorized"}, 401)
             if url.path == "/api/state":
@@ -328,6 +371,8 @@ def api_get(state, path, query):
         return business_view()
     if path == "/api/store":
         return store_view(state)
+    if path == "/api/posts":
+        return {"posts": posting.listing(), "posting_now": state.posting_now}
     if path == "/api/advertising":
         data = advertising.load()
         t = data.get("tiktok") or {}
@@ -456,7 +501,7 @@ def trading_view():
 def _refresh_advertising(state):
     """Reads TikTok in the background (one read at a time: it drives Jarvis's browser window)."""
     with state.panel_lock:
-        if state.adv_refreshing:
+        if state.adv_refreshing or state.posting_now:
             return
         state.adv_refreshing = True
 
@@ -466,6 +511,30 @@ def _refresh_advertising(state):
         finally:
             state.adv_refreshing = False
     threading.Thread(target=work, daemon=True, name="jarvis-advertising").start()
+
+
+def _start_post(state, item_id):
+    """Posts one video in the background (one at a time: it drives Jarvis's browser window)."""
+    item = posting.get(item_id)
+    if not item:
+        raise ValueError("No such video in the list.")
+    with state.panel_lock:
+        if state.posting_now or state.adv_refreshing:
+            raise ValueError("Jarvis's browser is busy with TikTok right now; try again in a minute.")
+        state.posting_now = item_id
+
+    def work():
+        try:
+            result = posting.post(item_id)
+            if state.announcer and result:
+                if result["status"] == "posted":
+                    state.announcer.urgent(f"Your {result['title'].replace('Christmas: ', '')} video is live on TikTok, sir.")
+                else:
+                    state.announcer.urgent(f"The {result['title'].replace('Christmas: ', '')} video didn't post: {result.get('error')}")
+        finally:
+            state.posting_now = None
+    threading.Thread(target=work, daemon=True, name="jarvis-posting").start()
+    return {"text": f"Posting '{item['title']}' to TikTok now. This takes a minute or two; I'll tell you when it's live."}
 
 
 def api_post(state, path, body, from_ui=False):
@@ -490,6 +559,14 @@ def api_post(state, path, body, from_ui=False):
         if parts[3] == "retry":
             new_id = ex.retry(run_id)
             return {"run_id": new_id, "text": f"Started it again as run {new_id}."}
+    m = re.match(r"^/api/posts/(\d+)/(post|remove)$", path)
+    if m:
+        if not from_ui:
+            raise PermissionError("Only Danny can post or remove videos, from the Advertising tab.")
+        item_id, action = int(m.group(1)), m.group(2)
+        if action == "remove":
+            return {"text": posting.remove(item_id)}
+        return _start_post(state, item_id)
     if path == "/api/advertising/refresh":
         _refresh_advertising(state)
         return {"text": "Checking TikTok now (about 20 seconds)."}

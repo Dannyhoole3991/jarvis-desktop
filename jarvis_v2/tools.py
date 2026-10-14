@@ -278,6 +278,17 @@ def advertising_status(refresh=False):
     return advertising.describe()
 
 
+def tiktok_post_list():
+    from . import posting
+    return posting.describe()
+
+
+def queue_tiktok_video(video, caption, title):
+    from . import posting
+    item = posting.add(video, caption, title, source="jarvis")
+    return f"Added '{item['title']}' to the Ready to post list. Danny posts it with the button in the Advertising tab."
+
+
 def what_is_on_screen():
     from . import screen
     return screen.describe_windows()
@@ -359,6 +370,10 @@ TOOLS = {
     "advertising_status": (advertising_status, "How Danny's TikTok is doing: views and likes this week (with the change), followers, and every video's views. "
                            "refresh=true reads TikTok live first (~20 s); otherwise the last reading. Read-only.",
                            _schema({"refresh": {"type": "boolean"}})),
+    "tiktok_post_list": (tiktok_post_list, "The videos waiting in the Ready to post list, what's been posted, and any that failed.", _schema()),
+    "queue_tiktok_video": (queue_tiktok_video, "Add a video Jarvis made (from generated_videos) with its caption to the Ready to post list. "
+                           "It is NOT posted: only Danny can post it, with the button in the Advertising tab. Captions must be honest (no fake reviews or discounts).",
+                           _schema({"video": _S, "caption": _S, "title": _S}, ["video", "caption", "title"])),
     "what_is_on_screen": (what_is_on_screen, "Which app is in front and which windows are open, by name. No picture: use this first.", _schema()),
     "look_at_screen": (look_at_screen, "Take ONE screenshot of Danny's screen, only when he asks you to look at it. Returns the image file to Read.", _schema()),
 }
