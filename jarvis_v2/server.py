@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import builds, config, memory, projects as P, router as R, runs, selfimprove, tools
+from . import alerts, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -45,6 +45,8 @@ class State:
         self.last_reply = None
         self.panels = {}                 # name -> {"text", "at", "running"}
         self.panel_lock = threading.Lock()
+        self.announcer = None            # alerts.Announcer, set by start()
+        self.watcher = None
 
 
 PANEL_SOURCES = {
@@ -321,6 +323,11 @@ def api_get(state, path, query):
             raise ValueError("No such memory.")
         with open(full, encoding="utf-8") as f:
             return {"name": name, "text": f.read()}
+    if path == "/api/sessions":
+        snap = state.watcher.last if (state.watcher and state.watcher.last) else SS.snapshot()
+        return {"sessions": [{k: v for k, v in s.items() if k != "pipe"} for s in snap], "text": SS.describe(snap)}
+    if path == "/api/alerts":
+        return {"alerts": list(reversed(state.announcer.history)) if state.announcer else []}
     if parts[:2] == ["api", "proposals"]:
         if len(parts) == 2:
             return {"proposals": selfimprove.listing()}
@@ -354,6 +361,10 @@ def api_post(state, path, body, from_ui=False):
         if parts[3] == "retry":
             new_id = ex.retry(run_id)
             return {"run_id": new_id, "text": f"Started it again as run {new_id}."}
+    if path == "/api/visibility":
+        if state.announcer:
+            state.announcer.window_visible = bool(body.get("visible", True))
+        return {"ok": True}
     if parts[:2] == ["api", "projects"] and len(parts) == 4 and parts[3] == "open":
         project = P.find(urllib.parse.unquote(parts[2]))
         if not project:
@@ -390,13 +401,21 @@ def set_engine_brain(enabled):
         f.write("1" if enabled else "0")
 
 
-def start(router=None, port=PORT, executor=None):
+def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
+    """watch=None: watch sessions/proposals only for the real app (a passed-in test executor means no watcher)."""
     config.ensure_dirs()
+    real = executor is None
+    announcer = announcer or alerts.Announcer()
     if executor is None:
         executor = runs.Executor()
-        executor.listeners += [builds.on_run_change, selfimprove.on_run_change]
+        executor.listeners += [builds.on_run_change, selfimprove.on_run_change, alerts.on_run_change(announcer)]
         executor.start()
     state = State(router or R.default_router(), executor)
+    state.announcer = announcer
+    announcer.thinking = lambda: state.thinking
+    should_watch = real if watch is None else watch
+    if should_watch:
+        state.watcher = alerts.Watcher(announcer, proposals=selfimprove.listing).start()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
@@ -407,6 +426,8 @@ def start(router=None, port=PORT, executor=None):
 def stop(server, state):
     set_engine_brain(False)
     try:
+        if state.watcher:
+            state.watcher.stop()
         state.executor.stop()
         server.shutdown()
     finally:

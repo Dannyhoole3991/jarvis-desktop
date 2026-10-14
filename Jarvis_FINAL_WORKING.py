@@ -753,7 +753,7 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path in ("/unload_ai", "/stop", "/command", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open", "/trading/run_research", "/trading/stop_research", "/trading/emergency_stop", "/trading/disarm") and not self._action_authorized():
+        if self.path in ("/unload_ai", "/stop", "/command", "/speak", "/attach_image", "/files/open", "/apps/open", "/business/run_cycle", "/business/open", "/trading/run_research", "/trading/stop_research", "/trading/emergency_stop", "/trading/disarm") and not self._action_authorized():
             self._send_json({"error": "unauthorized"}, status=401)
             return
 
@@ -765,6 +765,20 @@ class JarvisMobileHandler(http.server.BaseHTTPRequestHandler):
                 if not url:
                     raise ValueError("Unknown channel")
                 open_url(url)
+                self._send_json({"ok": True})
+            except Exception as error:
+                self._send_json({"error": str(error)}, status=400)
+            return
+
+        if self.path == "/speak":
+            # Jarvis v2 announcements ("the blog session needs you"). Spoken and shown in the
+            # chat, but never handed to whoever is waiting on a /command reply.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                text = str(json.loads(self.rfile.read(length).decode("utf-8")).get("text", "")).strip()[:600]
+                if not text:
+                    raise ValueError("Nothing to say")
+                _announce(text)
                 self._send_json({"ok": True})
             except Exception as error:
                 self._send_json({"error": str(error)}, status=400)
@@ -5156,6 +5170,20 @@ def _v2_brain_token():
             return f.read().strip() or None
     except OSError:
         return None
+
+
+def _announce(text):
+    """Speak an announcement without answering anyone's pending /command with it."""
+    global active_remote_reply
+    add_to_memory("jarvis", text)
+    with active_remote_lock:
+        pending, active_remote_reply = active_remote_reply, None
+    try:
+        say(text)
+    finally:
+        with active_remote_lock:
+            if active_remote_reply is None:
+                active_remote_reply = pending
 
 
 def _ask_v2_brain(user_message):

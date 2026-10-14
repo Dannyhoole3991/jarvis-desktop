@@ -140,6 +140,7 @@
       <button class="tab" data-pane="store">Store</button>
       <button class="tab" data-pane="business">Business</button>
       <button class="tab" data-pane="trading">Trading</button>
+      <button class="tab" data-pane="sessions">Sessions</button>
       <button class="tab" data-pane="runs">Runs</button>
       <button class="tab" data-pane="projects">Projects</button>
       <button class="tab" data-pane="specs">Specs</button>
@@ -176,6 +177,14 @@
     <div class="pane" id="pane-store"><div class="card"><h3>Collective store</h3><div class="text-block" id="store-text">Loading…</div><p class="hint" id="store-at"></p><button class="btn" data-refresh="store">Refresh</button></div></div>
     <div class="pane" id="pane-business"><div class="card"><h3>Business tracker</h3><div class="text-block" id="business-text">Loading…</div><p class="hint" id="business-at"></p><button class="btn" data-refresh="business">Refresh</button></div></div>
     <div class="pane" id="pane-trading"><div class="card"><h3>Trading lab (read-only)</h3><div class="text-block" id="trading-text">Loading…</div><p class="hint" id="trading-at"></p><button class="btn" data-refresh="trading">Refresh</button></div></div>
+
+    <div class="pane" id="pane-sessions">
+      <div id="sessionDetail"></div>
+      <div class="card attention" id="sessionsNeedsCard" style="display:none"><h3>Needs you</h3><div id="sessionsNeeds"></div></div>
+      <div class="card"><h3>Your Claude Code sessions</h3><div id="sessionsList"><p class="hint">Looking…</p></div>
+        <p class="hint">Jarvis watches these and tells you when one needs you. He can't type into them on Windows: answer them in the session itself.</p></div>
+      <div class="card"><h3>Recent announcements</h3><div id="alertsList"><p class="hint">Nothing announced yet.</p></div></div>
+    </div>
 
     <div class="pane" id="pane-runs">
       <div id="runDetail"></div>
@@ -805,12 +814,57 @@ async function renderChange(id) {
     </div></div>`;
 }
 
+let openSession = null, sessionCache = [];
+const SESSION_LABEL = { needs_you: "needs you", working: "working", idle: "idle", gone: "closed", fresh: "new", shell: "shell", unknown: "unknown" };
+function sessionRow(s) {
+  const cls = s.state === "needs_you" ? "bad" : s.state === "working" ? "busy" : s.state === "idle" ? "good" : "";
+  return `<div class="item" data-session="${esc(s.session_id)}"><span class="main"><b>${esc(s.name)}</b> <span class="sub">${esc(s.project)}${s.reason ? " · " + esc(s.reason) : ""}</span></span>
+          <span class="sub">${ago(s.updated)}</span><span class="pill ${cls}">${esc(SESSION_LABEL[s.state] || s.state)}</span></div>`;
+}
+async function renderSessions() {
+  const data = await api("/api/sessions");
+  sessionCache = data.sessions || [];
+  const needs = sessionCache.filter(s => s.state === "needs_you");
+  el("sessionsNeedsCard").style.display = needs.length ? "" : "none";
+  el("sessionsNeeds").innerHTML = needs.map(sessionRow).join("");
+  const rest = sessionCache.filter(s => s.state !== "needs_you");
+  el("sessionsList").innerHTML = rest.length ? rest.map(sessionRow).join("") : '<p class="hint">No other sessions are running.</p>';
+  const al = await api("/api/alerts");
+  el("alertsList").innerHTML = (al.alerts || []).slice(0, 15).map(a => `<div class="kv">${a.urgent ? "⚠ " : ""}${esc(a.text)} <span class="sub">${ago(a.ts)}</span></div>`).join("")
+    || '<p class="hint">Nothing announced yet.</p>';
+  if (openSession) renderSession(openSession);
+}
+function renderSession(id) {
+  openSession = id;
+  const s = sessionCache.find(x => x.session_id === id);
+  if (!s) { el("sessionDetail").innerHTML = ""; return; }
+  el("sessionDetail").innerHTML = `<div class="card detail"><h3>${esc(s.name)} <span class="pill">${esc(SESSION_LABEL[s.state] || s.state)}</span>
+      <button class="btn" style="float:right" data-close="sessionDetail">Close</button></h3>
+    <div class="kv">Project <b>${esc(s.project)}</b> · ${esc(s.cwd)} · ${esc(s.entrypoint)}</div>
+    ${s.state === "needs_you" ? `<div class="kv" style="color:var(--red)">Waiting on you: ${esc(s.reason || "")}. Answer it in that session${s.entrypoint === "claude-desktop" ? " (Claude app)" : " (its terminal)"}.</div>` : ""}
+    ${s.last_user ? `<div class="kv" style="margin-top:6px">You last told it:</div><div class="text-block" style="max-height:12vh;overflow:auto">${md(s.last_user)}</div>` : ""}
+    ${s.last_text ? `<div class="kv" style="margin-top:6px">It last said:</div><div class="text-block" style="max-height:22vh;overflow:auto">${md(s.last_text)}</div>` : ""}
+    ${(s.recent_tools || []).length ? `<div class="kv" style="margin-top:6px">Recent tools: ${esc(s.recent_tools.filter(Boolean).join(", "))}</div>` : ""}</div>`;
+}
+
+// The window tells the server when it's hidden, so urgent news also becomes a Windows notification.
+function reportVisibility() { api("/api/visibility", { visible: document.visibilityState === "visible" }).catch(() => {}); }
+document.addEventListener("visibilitychange", reportVisibility);
+reportVisibility();
+
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-close]");
+  const t = e.target.closest("[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-close]");
   if (!t) return;
   const d = t.dataset;
-  if (d.close) { el(d.close).innerHTML = ""; if (d.close === "runDetail") openRun = null; if (d.close === "changeDetail") openChange = null; return; }
+  if (d.close) {
+    el(d.close).innerHTML = "";
+    if (d.close === "runDetail") openRun = null;
+    if (d.close === "changeDetail") openChange = null;
+    if (d.close === "sessionDetail") openSession = null;
+    return;
+  }
+  if (d.session) return renderSession(d.session);
   if (d.cancel) { await act(`/api/runs/${d.cancel}/cancel`, {}, "Stop this run?"); return renderRuns(); }
   if (d.retry) { await act(`/api/runs/${d.retry}/retry`); return renderRuns(); }
   if (d.run) { activateTab("runs"); return renderRunDetail(d.run); }
@@ -839,7 +893,7 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const RENDERERS = { sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money", "store", "business", "trading"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);

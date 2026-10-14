@@ -245,6 +245,44 @@ def open_in_editor(project, file=""):
     return projects.open_in_editor(p, file or None) if p else f"I don't know a project called {project}."
 
 
+# ------------------------------------------------ sessions and the screen
+def list_sessions(filter=""):
+    from . import sessions
+    snap = sessions.snapshot()
+    if filter:
+        snap = [s for s in snap if s["state"] == filter]
+    return sessions.describe(snap) if snap else "No Claude Code sessions match that."
+
+
+def session_detail(name):
+    from . import sessions
+    s = sessions.find(name)
+    if not s:
+        return f"I can't find a session called {name}."
+    parts = [f"'{s['name']}' in {s['project']} is {s['state'].replace('_', ' ')}" + (f" ({s['reason']})" if s["reason"] else "") + "."]
+    if s["last_user"]:
+        parts.append(f"Danny last told it: {s['last_user'][:400]}")
+    if s["last_text"]:
+        parts.append(f"It last said: {s['last_text'][:800]}")
+    if s["recent_tools"]:
+        parts.append("Recent tools: " + ", ".join(t for t in s["recent_tools"] if t) + ".")
+    if s["state"] == "needs_you":
+        parts.append("I can't answer it for Danny: he needs to answer it in that session himself.")
+    return "\n".join(parts)
+
+
+def what_is_on_screen():
+    from . import screen
+    return screen.describe_windows()
+
+
+def look_at_screen():
+    from . import screen
+    path = screen.capture()
+    return (f"Took one screenshot: {path}. If you can read images, Read that file to see it; "
+            "otherwise tell Danny you can only list his windows right now.")
+
+
 def open_in_terminal(project):
     from . import projects
     p = projects.find(project)
@@ -303,6 +341,16 @@ TOOLS = {
     "jarvis_changes": (jarvis_changes, "The status of Jarvis's proposed changes to his own code (being worked on, ready for review, applied...).", _schema()),
     "open_in_editor": (open_in_editor, "Open a project (or one file in it) in VS Code on Danny's screen.", _schema({"project": _S, "file": _S}, ["project"])),
     "open_in_terminal": (open_in_terminal, "Open a terminal window in a project's folder on Danny's screen.", _schema({"project": _S}, ["project"])),
+
+    # Danny's other Claude Code sessions (watch only: messages can't be sent into them on Windows)
+    "list_sessions": (list_sessions, "Every Claude Code session on this PC and what each is doing: which need Danny, which are working, which are idle. "
+                      "The ONLY correct way to answer 'what's running' or 'what needs me'. Optional filter: needs_you, working, idle.",
+                      _schema({"filter": _S})),
+    "session_detail": (session_detail, "One session: what it's working on, Danny's last message to it, what it last said, and why it needs him. "
+                       "You cannot send messages into sessions or answer their questions; tell Danny exactly what it's asking.",
+                       _schema({"name": _S}, ["name"])),
+    "what_is_on_screen": (what_is_on_screen, "Which app is in front and which windows are open, by name. No picture: use this first.", _schema()),
+    "look_at_screen": (look_at_screen, "Take ONE screenshot of Danny's screen, only when he asks you to look at it. Returns the image file to Read.", _schema()),
 }
 
 # Names that must never be exposed to any brain. Checked by the tests.
