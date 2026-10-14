@@ -292,3 +292,11 @@ class SpeakingTests(unittest.TestCase):
         self.assertEqual(desktop.ensure_fresh_engine(started_at=lambda: None, changed_at=lambda: 200, alive=lambda: False,
                                                      busy=lambda: False, send=send, sleep=lambda s: None), "not running")
         send.assert_not_called()
+
+
+class EngineCommandShapeTests(unittest.TestCase):
+    def test_the_restart_sends_the_field_the_engine_reads(self):
+        from jarvis_v2 import desktop, server
+        with mock.patch.object(server, "_engine") as engine:
+            desktop.ensure_fresh_engine.__defaults__[4]("shut down jarvis")
+        engine.assert_called_once_with("/command", {"command": "shut down jarvis"}, timeout=8)

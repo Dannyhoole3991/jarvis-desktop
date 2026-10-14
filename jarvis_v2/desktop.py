@@ -65,7 +65,7 @@ def _engine_busy():
 
 
 def ensure_fresh_engine(started_at=_engine_started_at, changed_at=_engine_code_changed_at, alive=_engine_alive,
-                        busy=_engine_busy, send=lambda text: server._engine("/command", {"text": text}, timeout=8),
+                        busy=_engine_busy, send=lambda text: server._engine("/command", {"command": text}, timeout=8),
                         sleep=None):
     """
     If the voice engine still running was started BEFORE its code last changed, it's running old code
