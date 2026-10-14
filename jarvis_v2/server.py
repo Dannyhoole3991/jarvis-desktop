@@ -323,6 +323,12 @@ def api_get(state, path, query):
             raise ValueError("No such memory.")
         with open(full, encoding="utf-8") as f:
             return {"name": name, "text": f.read()}
+    if path == "/api/business":
+        return business_view()
+    if path == "/api/store":
+        return store_view(state)
+    if path == "/api/trading":
+        return trading_view()
     if path == "/api/sessions":
         snap = state.watcher.last if (state.watcher and state.watcher.last) else SS.snapshot()
         return {"sessions": [{k: v for k, v in s.items() if k != "pipe"} for s in snap], "text": SS.describe(snap)}
@@ -337,6 +343,106 @@ def api_get(state, path, query):
         if len(parts) == 4 and parts[3] == "diff":
             return {"diff": selfimprove.diff(int(parts[2]))}
     return None
+
+
+_URL_RE = re.compile(r"https?://[^\s'\"<>)]+")
+_NAME_RE = re.compile(r"^(?:Testing:\s*)?(.*?)(?:\s*\(score\s*([\d.]+)/10\))?$")
+
+
+def business_view():
+    """The business tracker shaped for the Business tab: totals, what's live (with links), activity, lessons."""
+    import jarvis_business as jbiz
+    s = jbiz.summary()
+    links = {}
+    for item in list(s.get("recent_lessons") or []) + list(s.get("recent_decisions") or []):
+        text = item.get("lesson_text") or item.get("reasoning") or ""
+        m = _URL_RE.search(text)
+        if m and item.get("experiment_id") and item["experiment_id"] not in links:
+            links[item["experiment_id"]] = m.group(0).rstrip(".,")
+    experiments = []
+    for e in s.get("active_experiments") or []:
+        m = _NAME_RE.match((e.get("opportunity_name") or e.get("hypothesis") or "").strip())
+        name, score = (m.group(1), m.group(2)) if m else (e.get("hypothesis") or "Experiment", None)
+        experiments.append({"id": e["id"], "name": e.get("opportunity_name") or name, "score": float(score) if score else None,
+                            "type": (e.get("business_model_type") or "").replace("_", " "), "status": e.get("status"),
+                            "started": e.get("started_at"), "cost": e.get("cost_spent") or 0.0, "revenue": e.get("revenue_earned") or 0.0,
+                            "traffic": e.get("latest_traffic"), "url": links.get(e["id"])})
+    activity = [{"ts": d.get("timestamp"), "type": (d.get("decision_type") or "").replace("_", " "), "text": d.get("reasoning") or "",
+                 "url": (_URL_RE.search(d.get("reasoning") or "") or [None])[0] if _URL_RE.search(d.get("reasoning") or "") else None}
+                for d in s.get("recent_decisions") or []]
+    lessons = [{"ts": l.get("created_at"), "category": l.get("category"), "text": l.get("lesson_text") or ""} for l in s.get("recent_lessons") or []]
+    return {"target": s.get("target_daily_revenue"), "budget": s.get("budget"), "revenue": s.get("revenue_total") or 0.0,
+            "cost": s.get("cost_total") or 0.0, "profit": s.get("profit_total") or 0.0,
+            "opportunities": s.get("opportunity_counts") or {}, "experiment_counts": s.get("experiment_counts") or {},
+            "experiments": experiments, "activity": activity, "lessons": lessons,
+            "pending_actions": [a.get("description") for a in s.get("pending_human_actions") or []]}
+
+
+_cache = {}
+
+
+def _cached(key, ttl, fn):
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    value = fn()
+    _cache[key] = (time.time(), value)
+    return value
+
+
+def _public_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Jarvis/2 (store dashboard)"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def store_view(state=None):
+    """The live shop (read from its public pages, so it works without Jarvis's store keys) + Jarvis's access."""
+    from jarvis_store import config as SC, creds
+    base = "https://" + SC.SHOP_PUBLIC_URL
+
+    def load():
+        products = _public_json(base + "/products.json?limit=250").get("products", [])
+        collections = _public_json(base + "/collections.json").get("collections", [])
+        xmas = set()
+        for c in collections:
+            if "christmas" in (c.get("handle") or ""):
+                xmas |= {p["handle"] for p in _public_json(f"{base}/collections/{c['handle']}/products.json?limit=250").get("products", [])}
+        items = []
+        for p in products:
+            prices = sorted(float(v["price"]) for v in p.get("variants") or [] if v.get("price"))
+            items.append({"title": p["title"], "url": f"{base}/products/{p['handle']}", "type": p.get("product_type") or "",
+                          "image": ((p.get("images") or [{}])[0].get("src") or "").split("?")[0] + "?width=240",
+                          "price_min": prices[0] if prices else None, "price_max": prices[-1] if prices else None,
+                          "variants": len(p.get("variants") or []), "christmas": p["handle"] in xmas, "published": p.get("published_at")})
+        return {"products": items, "collections": [{"title": c["title"], "count": c.get("products_count"), "url": f"{base}/collections/{c['handle']}"}
+                                                   for c in collections if c.get("handle") != "frontpage"]}
+
+    try:
+        shop = _cached("store", 600, load)
+    except Exception as error:
+        shop = {"products": [], "collections": [], "error": f"Couldn't read the shop: {error}"}
+    access = creds.status()
+    money = (state.panels.get("money") if state else None) or {}
+    return dict(shop, shop_url=base, access={"shopify": bool(access.get("shopify")), "cj": bool(access.get("cj"))},
+                money_text=money.get("text"), money_at=money.get("at"))
+
+
+def trading_view():
+    """Research lab + forward trial, read-only."""
+    from jarvis_trading import service
+
+    def load():
+        s = service.summary()
+        fv = service.forward_view()
+        return {"tested": s.get("n_versions"), "trials": s.get("n_trials"), "counts": s.get("counts"), "funnel": s.get("funnel"),
+                "rejections": s.get("rejection_reasons")[:8], "readiness": (s.get("readiness") or {}).get("items", []),
+                "mode": s.get("mode"), "daemon": s.get("daemon"), "power": s.get("power"), "benchmark": s.get("benchmark"),
+                "near_misses": len(s.get("near_misses") or []),
+                "forward": [{k: t.get(k) for k in ("strategy", "template", "start", "days_elapsed", "status", "trades", "pnl_pct",
+                                                   "max_drawdown", "win_rate", "open_positions")} for t in fv.get("trials", [])],
+                "forward_note": fv.get("note")}
+    return _cached("trading", 60, load)
 
 
 def api_post(state, path, body, from_ui=False):

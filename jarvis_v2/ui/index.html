@@ -81,6 +81,41 @@
   .btn.go { color: var(--green); border-color: rgba(53,224,138,.4); }
   .progress { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.07); overflow: hidden; margin-top: 4px; }
   .progress > div { height: 100%; background: var(--green); }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .label { font-size: 11px; letter-spacing: .8px; text-transform: uppercase; color: var(--dim); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 4px; color: var(--text); }
+  .tile .value.neg { color: var(--red); }
+  .tile .value.pos { color: var(--green); }
+  .tile .note { font-size: 11px; color: var(--dimmer); margin-top: 3px; }
+  .group-title { font-size: 12px; color: var(--gold-bright); margin: 10px 0 4px; display: flex; gap: 6px; align-items: center; }
+  .exp { display: grid; grid-template-columns: 1fr auto auto auto; gap: 12px; align-items: center; padding: 7px 10px; border-radius: 8px; font-size: 13px; }
+  .exp:hover { background: rgba(255,179,71,0.05); }
+  .exp .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .exp .num { font-size: 12px; color: var(--dim); white-space: nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border: 1px solid var(--border); border-radius: 16px; padding: 5px 12px; font-size: 12px; color: var(--dim); }
+  .chip b { color: var(--text); font-size: 14px; margin-right: 4px; }
+  .event { display: grid; grid-template-columns: 74px auto 1fr; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid rgba(255,179,71,0.06); font-size: 13px; }
+  .event .when { font-size: 11px; color: var(--dimmer); }
+  .event .what { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  .products { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .product { display: block; text-decoration: none; color: var(--text); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: rgba(0,0,0,0.2); }
+  .product:hover { border-color: var(--gold); }
+  .product img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; background: #111; }
+  .product .pt { padding: 7px 9px 2px; font-size: 12px; line-height: 1.3; height: 2.6em; overflow: hidden; }
+  .product .pp { padding: 2px 9px 8px; font-size: 13px; font-weight: 600; color: var(--gold-bright); display: flex; justify-content: space-between; align-items: center; }
+  .badge { font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 8px; background: rgba(255,106,106,0.15); color: #ff9a9a; }
+  table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grid th { text-align: left; font-weight: 500; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; padding: 4px 8px; }
+  table.grid td { padding: 7px 8px; border-top: 1px solid rgba(255,179,71,0.07); }
+  .neg { color: var(--red); } .pos { color: var(--green); }
+  .hbar { display: grid; grid-template-columns: 210px 1fr 54px; gap: 10px; align-items: center; font-size: 12px; margin: 5px 0; }
+  .hbar .track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.06); overflow: hidden; }
+  .hbar .fill { height: 100%; background: linear-gradient(90deg, var(--gold), #ff8c3d); }
+  .hbar .n { text-align: right; color: var(--dim); }
+  .check { display: flex; gap: 8px; font-size: 13px; padding: 4px 0; }
+  .check .mark { width: 18px; flex-shrink: 0; }
   .row-input { display: flex; gap: 8px; }
   .row-input input { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 7px 10px; font-size: 13px; outline: none; }
   .tab.active { color: var(--gold-bright); border-bottom-color: var(--gold); }
@@ -174,9 +209,29 @@
         <button class="btn" id="money-refresh">Check all four now (about a minute)</button>
       </div>
     </div>
-    <div class="pane" id="pane-store"><div class="card"><h3>Collective store</h3><div class="text-block" id="store-text">Loading…</div><p class="hint" id="store-at"></p><button class="btn" data-refresh="store">Refresh</button></div></div>
-    <div class="pane" id="pane-business"><div class="card"><h3>Business tracker</h3><div class="text-block" id="business-text">Loading…</div><p class="hint" id="business-at"></p><button class="btn" data-refresh="business">Refresh</button></div></div>
-    <div class="pane" id="pane-trading"><div class="card"><h3>Trading lab (read-only)</h3><div class="text-block" id="trading-text">Loading…</div><p class="hint" id="trading-at"></p><button class="btn" data-refresh="trading">Refresh</button></div></div>
+    <div class="pane" id="pane-store">
+      <div class="tiles" id="storeTiles"></div>
+      <div class="card"><h3>Live products <span class="sub" id="storeCount"></span></h3><div class="products" id="storeProducts">Loading…</div></div>
+      <div class="card"><h3>Collections</h3><div class="chips" id="storeCollections"></div></div>
+      <div class="card"><h3>Jarvis's store access</h3><div id="storeAccess"></div></div>
+    </div>
+    <div class="pane" id="pane-business">
+      <div class="tiles" id="bizTiles"></div>
+      <div class="card"><h3>What Jarvis is running <span class="sub" id="bizExpCount"></span></h3><div id="bizExperiments">Loading…</div></div>
+      <div class="card"><h3>Ideas pipeline</h3><div class="chips" id="bizPipeline"></div>
+        <p class="hint">Ideas Jarvis finds are scored, the best are tested as experiments, and ones that don't work out are dropped.</p></div>
+      <div class="card"><h3>Recent activity</h3><div id="bizActivity"></div></div>
+      <div class="card"><h3>What he's learned</h3><div id="bizLessons"></div></div>
+    </div>
+    <div class="pane" id="pane-trading">
+      <div class="tiles" id="tradeTiles"></div>
+      <div class="card"><h3>Forward paper trial <span class="sub">(fake money, live prices)</span></h3><div id="tradeForward">Loading…</div>
+        <p class="hint" id="tradeForwardNote"></p></div>
+      <div class="card"><h3>Research funnel</h3><div id="tradeFunnel"></div></div>
+      <div class="card"><h3>Why strategies were rejected</h3><div id="tradeRejections"></div></div>
+      <div class="card"><h3>Before real money could ever be used</h3><div id="tradeReadiness"></div>
+        <p class="hint">Read-only. Live trading is switched off and Jarvis has no way to turn it on.</p></div>
+    </div>
 
     <div class="pane" id="pane-sessions">
       <div id="sessionDetail"></div>
@@ -814,6 +869,113 @@ async function renderChange(id) {
     </div></div>`;
 }
 
+// ------------------------------------------------------------ business
+const gbp = n => (n < 0 ? "−£" : "£") + Math.abs(n || 0).toFixed(2);
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), days = Math.floor((Date.now() - d) / 86400000);
+  return days <= 0 ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : days === 1 ? "yesterday" : days + " days ago";
+}
+const KIND = { "content article": ["📝", "Blog articles"], "freelance gig": ["💼", "Fiverr gigs"], "print on demand": ["🎨", "Print designs (Redbubble)"] };
+const EXP_STATUS = { review: "live · awaiting results", running: "running", abandoned: "dropped" };
+function linkify(text) { return esc(text).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">link</a>'); }
+
+async function renderBusiness() {
+  const b = await api("/api/business");
+  if (b.error) { el("bizExperiments").textContent = b.error; return; }
+  const bud = b.budget || {}, target = b.target || [0, 0];
+  const spentPct = bud.daily_cap ? Math.min(100, 100 * (bud.spent_today || 0) / bud.daily_cap) : 0;
+  el("bizTiles").innerHTML = `
+    <div class="tile"><div class="label">Money in</div><div class="value ${b.revenue > 0 ? "pos" : ""}">${gbp(b.revenue)}</div><div class="note">Target ${gbp(target[0])}–${gbp(target[1])} a day</div></div>
+    <div class="tile"><div class="label">Costs so far</div><div class="value">${gbp(b.cost)}</div><div class="note">AI used to make things</div></div>
+    <div class="tile"><div class="label">Profit</div><div class="value ${b.profit < 0 ? "neg" : b.profit > 0 ? "pos" : ""}">${gbp(b.profit)}</div><div class="note">Money in minus costs</div></div>
+    <div class="tile"><div class="label">AI spend today</div><div class="value">${gbp(bud.spent_today)}</div>
+      <div class="progress"><div style="width:${spentPct}%;background:var(--gold)"></div></div><div class="note">of ${gbp(bud.daily_cap)} daily limit</div></div>`;
+
+  const exps = b.experiments || [];
+  el("bizExpCount").textContent = exps.length ? `· ${exps.length} experiments` : "";
+  const groups = {};
+  exps.forEach(e => (groups[e.type] = groups[e.type] || []).push(e));
+  el("bizExperiments").innerHTML = Object.keys(groups).sort().map(type => {
+    const [icon, label] = KIND[type] || ["•", type.charAt(0).toUpperCase() + type.slice(1)];
+    return `<div class="group-title">${icon} ${esc(label)} <span class="sub">(${groups[type].length})</span></div>` +
+      groups[type].map(e => `<div class="exp"><span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>
+        <span class="num">${when(e.started)}</span>
+        <span class="num">${gbp(e.revenue)} in${e.traffic ? " · " + e.traffic + " visits" : ""}</span>
+        <span>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">view</a> ` : ""}<span class="pill ${e.status === "review" ? "busy" : ""}">${esc(EXP_STATUS[e.status] || e.status)}</span></span></div>`).join("");
+  }).join("") || '<p class="hint">No experiments yet.</p>';
+
+  const op = b.opportunities || {};
+  const opLabels = { testing: "being tested", scored: "scored, waiting", abandoned: "dropped", found: "just found" };
+  el("bizPipeline").innerHTML = Object.entries(op).map(([k, v]) => `<span class="chip"><b>${v}</b>${esc(opLabels[k] || k)}</span>`).join("") || '<p class="hint">No ideas yet.</p>';
+
+  el("bizActivity").innerHTML = (b.activity || []).slice(0, 12).map(a =>
+    `<div class="event"><span class="when">${when(a.ts)}</span><span class="pill">${esc(a.type)}</span><span class="what">${linkify(a.text.slice(0, 220))}</span></div>`).join("") || '<p class="hint">Nothing yet.</p>';
+  el("bizLessons").innerHTML = (b.lessons || []).slice(0, 8).map(l =>
+    `<div class="event"><span class="when">${when(l.ts)}</span><span class="pill">${esc(l.category || "note")}</span><span class="what">${linkify(l.text.slice(0, 260))}</span></div>`).join("") || '<p class="hint">Nothing yet.</p>';
+}
+
+// --------------------------------------------------------------- store
+async function renderStore() {
+  const s = await api("/api/store");
+  const products = s.products || [];
+  const xmas = products.filter(p => p.christmas).length;
+  const prices = products.map(p => p.price_min).filter(x => x != null);
+  const acc = s.access || {};
+  el("storeTiles").innerHTML = `
+    <div class="tile"><div class="label">Live products</div><div class="value">${products.length}</div><div class="note"><a href="${esc(s.shop_url)}" target="_blank" rel="noopener">${esc((s.shop_url || "").replace("https://", ""))}</a></div></div>
+    <div class="tile"><div class="label">Christmas range</div><div class="value">${xmas}</div><div class="note">in The Christmas Collection</div></div>
+    <div class="tile"><div class="label">Prices</div><div class="value">${prices.length ? gbp(Math.min(...prices)) : "—"}</div><div class="note">${prices.length ? "up to " + gbp(Math.max(...products.map(p => p.price_max || 0))) : ""}</div></div>
+    <div class="tile"><div class="label">Orders</div><div class="value" style="font-size:15px;line-height:1.3">${s.money_text ? (/no orders/i.test(s.money_text) ? "None yet" : "See Money tab") : "Not checked"}</div><div class="note">${s.money_at ? "checked " + ago(s.money_at) : "Money tab → Check all four now"}</div></div>`;
+  el("storeCount").textContent = products.length ? `· ${products.length}` : "";
+  el("storeProducts").innerHTML = s.error ? `<p class="hint">${esc(s.error)}</p>` : products.map(p => `
+    <a class="product" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.title)}">
+      <img src="${esc(p.image)}" alt="" loading="lazy" />
+      <div class="pt">${esc(p.title)}</div>
+      <div class="pp"><span>${p.price_min === p.price_max ? gbp(p.price_min) : gbp(p.price_min) + "–" + gbp(p.price_max)}</span>${p.christmas ? '<span class="badge">Christmas</span>' : ""}</div>
+    </a>`).join("");
+  el("storeCollections").innerHTML = (s.collections || []).map(c => `<a class="chip" href="${esc(c.url)}" target="_blank" rel="noopener"><b>${c.count ?? ""}</b>${esc(c.title)}</a>`).join("");
+  el("storeAccess").innerHTML = (acc.shopify && acc.cj)
+    ? `<div class="check"><span class="mark pos">✔</span>Jarvis can research CJ products and add them to the store as drafts for you to review.</div>`
+    : `<div class="check"><span class="mark neg">✘</span><span>Not set up yet: Jarvis can't add products until his store keys are in (${acc.shopify ? "" : "Shopify"}${!acc.shopify && !acc.cj ? " and " : ""}${acc.cj ? "" : "CJ"}). The steps are in the NEEDS YOU list.</span></div>`;
+}
+
+// ------------------------------------------------------------- trading
+const REJECT_LABELS = {
+  NOT_SIGNIFICANT: "Could just be luck", LOSING_IN_VALIDATION: "Lost money on newer data", LOSING_IN_TRAINING: "Lost money on old data",
+  NEAR_DUPLICATE: "Copy of an earlier strategy", OOS_DEGRADATION: "Fell apart on unseen data", POOR_OOS_PERFORMANCE: "Weak on unseen data",
+  LOW_OOS_PROFIT_FACTOR: "Too little profit per loss", TOO_FEW_TRADES: "Too few trades to judge", EXCESSIVE_OOS_DRAWDOWN: "Too big a drop on unseen data",
+  EXCESSIVE_DRAWDOWN: "Too big a drop", REGIME_DEPENDENT: "Only works in one kind of market", LOOKAHEAD_BIAS: "Cheated by seeing the future",
+  UNSTABLE_PARAMETERS: "Breaks if settings change slightly", EXCESSIVE_COSTS: "Fees eat the profit", SUSPICIOUSLY_HIGH_PERFORMANCE: "Too good to be true",
+  RUIN_RISK: "Risk of losing everything", TOO_FEW_OOS_TRADES: "Too few trades on unseen data", LEAKAGE_INCONCLUSIVE: "Leak check gave no answer"
+};
+const pctText = x => x == null ? "—" : (x * 100).toFixed(1) + "%";
+async function renderTrading() {
+  const t = await api("/api/trading");
+  if (t.error) { el("tradeForward").textContent = t.error; return; }
+  const fwd = t.forward || [];
+  const day = fwd.length ? Math.floor(Math.max(...fwd.map(f => f.days_elapsed || 0))) : 0;
+  const passed = (t.counts || {}).candidate || 0;
+  el("tradeTiles").innerHTML = `
+    <div class="tile"><div class="label">Strategies tested</div><div class="value">${(t.tested || 0).toLocaleString()}</div><div class="note">${(t.trials || 0).toLocaleString()} settings tried</div></div>
+    <div class="tile"><div class="label">Passed every check</div><div class="value ${passed ? "pos" : ""}">${passed}</div><div class="note">${t.near_misses || 0} near-misses</div></div>
+    <div class="tile"><div class="label">Forward trial</div><div class="value">Day ${day}</div><div class="progress"><div style="width:${Math.min(100, day / 90 * 100)}%;background:var(--gold)"></div></div><div class="note">of at least 90</div></div>
+    <div class="tile"><div class="label">Live trading</div><div class="value neg" style="font-size:20px">OFF</div><div class="note">no real money, by design</div></div>`;
+  el("tradeForward").innerHTML = fwd.length ? `<table class="grid"><tr><th>Strategy</th><th>Type</th><th>Trades</th><th>Profit / loss</th><th>Worst drop</th><th>Status</th></tr>` +
+    fwd.map(f => `<tr><td>${esc(f.strategy)}</td><td>${esc((f.template || "").replace(/_/g, " "))}</td>
+      <td>${f.trades} <span class="sub">/ 20</span>${f.open_positions ? ` <span class="sub">(+${f.open_positions} open)</span>` : ""}</td>
+      <td class="${(f.pnl_pct || 0) < 0 ? "neg" : (f.pnl_pct || 0) > 0 ? "pos" : ""}">${(f.pnl_pct || 0) >= 0 ? "+" : ""}${pctText(f.pnl_pct)}</td>
+      <td>${pctText(f.max_drawdown)}</td><td><span class="pill busy">${esc((f.status || "").toLowerCase())}</span></td></tr>`).join("") + `</table>` : '<p class="hint">No forward trial running.</p>';
+  el("tradeForwardNote").textContent = "Each needs at least 90 days and 20 trades before any verdict. Results this early mean nothing either way.";
+  const funnel = t.funnel || [];
+  const top = Math.max(1, ...funnel.map(f => f.count || 0));
+  el("tradeFunnel").innerHTML = funnel.map(f => `<div class="hbar"><span>${esc(f.label)}</span><div class="track"><div class="fill" style="width:${100 * (f.count || 0) / top}%"></div></div><span class="n">${(f.count || 0).toLocaleString()}</span></div>`).join("");
+  const rej = t.rejections || [];
+  const rtop = Math.max(1, ...rej.map(r => r[1]));
+  el("tradeRejections").innerHTML = rej.map(([code, n]) => `<div class="hbar"><span title="${esc(code)}">${esc(REJECT_LABELS[code] || code.replace(/_/g, " ").toLowerCase())}</span><div class="track"><div class="fill" style="width:${100 * n / rtop}%"></div></div><span class="n">${n}</span></div>`).join("");
+  el("tradeReadiness").innerHTML = (t.readiness || []).map(i => `<div class="check"><span class="mark ${i.ok ? "pos" : "neg"}">${i.ok ? "✔" : "✘"}</span><span>${esc(i.detail)}</span></div>`).join("");
+}
+
 let openSession = null, sessionCache = [];
 const SESSION_LABEL = { needs_you: "needs you", working: "working", idle: "idle", gone: "closed", fresh: "new", shell: "shell", unknown: "unknown" };
 function sessionRow(s) {
@@ -893,8 +1055,8 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
-const PANELS = ["money", "store", "business", "trading"];
+const RENDERERS = { store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);
   if (RENDERERS[name]) return RENDERERS[name]();
@@ -937,7 +1099,7 @@ every(1500, pollState);
 every(1500, pollConversation);
 setInterval(() => loadPanel("needs_you"), 30000);
 every(4000, () => {
-  if (activePane === "memory" || activePane === "projects" || activePane === "usage") return;   // these only change when clicked
+  if (["memory", "projects", "usage", "store"].includes(activePane)) return;   // these only change when clicked (store photos would flicker)
   return refreshPane(activePane);
 });
 </script>

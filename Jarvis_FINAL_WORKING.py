@@ -5172,6 +5172,22 @@ def _v2_brain_token():
         return None
 
 
+_QUESTION_RE = re.compile(
+    r"^(?:jarvis[, ]+)?(?:how (?:do|can|would|should|could) (?:i|you|we)|how to|how does|how much|how many|"
+    r"what(?:'s| is| are| was| were| does| do)|whats|why|who|when|where|which|explain|"
+    r"tell me (?:about|how|what|why|who)|can you (?:explain|tell me)|could you (?:explain|tell me)|"
+    r"is (?:it|there|this)|are there|should i|do you know)\b", re.IGNORECASE)
+# Questions the engine already answers instantly and exactly, without any AI.
+_LOCAL_QUESTION_RE = re.compile(
+    r"^(?:jarvis[, ]+)?(?:what(?:'s| is) the (?:time|date|day)|what time|what day|what date|what's today|what is today)",
+    re.IGNORECASE)
+
+
+def _is_plain_question(command):
+    command = (command or "").strip()
+    return bool(_QUESTION_RE.match(command)) and not _LOCAL_QUESTION_RE.match(command)
+
+
 def _announce(text):
     """Speak an announcement without answering anyone's pending /command with it."""
     global active_remote_reply
@@ -14307,6 +14323,13 @@ while True:
 
         if _looks_like_code_mode_request(command):
             _start_jarvis_code_session(user_message, command)
+            continue
+
+        # A plain QUESTION ("how do I change the taskbar colour?") goes straight to
+        # the v2 brain when it's on. Otherwise the PC-action routes below can mistake
+        # it for a task and try to act it out (confirmed live: it tried, failed, and
+        # then sat in "show me and say done" learning mode instead of answering).
+        if _is_plain_question(command) and _ask_v2_brain(user_message):
             continue
 
         if handle_smart_routine_phrases(command):
