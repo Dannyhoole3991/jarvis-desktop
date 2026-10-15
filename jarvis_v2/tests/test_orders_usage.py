@@ -99,3 +99,31 @@ class UsageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneSyncTests(unittest.TestCase):
+    def test_push_sends_every_section_with_the_secret(self):
+        from jarvis_v2 import phone_sync
+        state = server.State(router=mock.Mock(), executor=mock.Mock())
+        sections = {"/api/business": {"revenue": 0}, "/api/trading": {"mode": "paper"},
+                    "/api/advertising": {"tiktok": {}}, "/api/posts": {"posts": []}}
+        post = mock.Mock(return_value=mock.Mock(status_code=200))
+        with mock.patch.dict(os.environ, {"JARVIS_PHONE_BACKEND_URL": "https://phone.example/", "JARVIS_PHONE_SECRET": "s"}), \
+             mock.patch.object(server, "api_state", return_value={"usage": {}}), \
+             mock.patch.object(server, "api_panel", return_value={"text": "Pay CJ", "at": 1}), \
+             mock.patch.object(server, "store_view", return_value={"products": [{"title": "Bow", "image": "x", "secret": 1}]}), \
+             mock.patch.object(server, "api_get", side_effect=lambda st, path, q: sections[path]):
+            self.assertTrue(phone_sync.push(state, post=post))
+        url = post.call_args[0][0]
+        body = json.loads(post.call_args[1]["data"])
+        self.assertEqual(url, "https://phone.example/api/dashboard_push")
+        self.assertEqual(post.call_args[1]["headers"]["Authorization"], "Bearer s")
+        self.assertEqual(body["needs_you"]["text"], "Pay CJ")
+        self.assertEqual(body["store"]["products"], [{"title": "Bow", "url": None, "price_min": None, "price_max": None,
+                                                      "christmas": None, "image": "x"}])
+        self.assertEqual(body["trading"], {"mode": "paper"})
+
+    def test_no_backend_configured_means_no_push(self):
+        from jarvis_v2 import phone_sync
+        with mock.patch.dict(os.environ, {"JARVIS_PHONE_BACKEND_URL": "", "JARVIS_PHONE_SECRET": ""}):
+            self.assertFalse(phone_sync.push(mock.Mock(), post=mock.Mock()))

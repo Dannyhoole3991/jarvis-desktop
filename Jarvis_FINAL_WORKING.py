@@ -1059,6 +1059,7 @@ def _phone_poll_loop():
     """
     if not JARVIS_PHONE_BACKEND_URL or not JARVIS_PHONE_SECRET:
         return
+    last_sync = 0.0
     while True:
         try:
             response = requests.post(
@@ -1071,8 +1072,11 @@ def _phone_poll_loop():
                     _handle_polled_command(item)
         except Exception:
             pass
-        _sync_phone_conversation()
-        time.sleep(3)
+        if time.time() - last_sync >= 5:
+            _sync_phone_conversation()
+            last_sync = time.time()
+        # Every second (was 3): the phone's PC tab waits on this, so it's the gap Danny hears.
+        time.sleep(1)
 
 
 # ============================================================

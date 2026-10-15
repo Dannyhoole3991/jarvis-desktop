@@ -678,6 +678,8 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     if should_watch:
         state.watcher = alerts.Watcher(announcer, proposals=selfimprove.listing).start()
         threading.Thread(target=_keep_usage_fresh, args=(state,), daemon=True, name="jarvis-usage").start()
+        from . import phone_sync
+        phone_sync.start(state)               # the phone app's tabs (read-only copy)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
