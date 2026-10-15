@@ -115,7 +115,8 @@ class PhoneSyncTests(unittest.TestCase):
              mock.patch.object(server, "api_get", side_effect=lambda st, path, q: sections[path]):
             self.assertTrue(phone_sync.push(state, post=post))
         url = post.call_args[0][0]
-        body = json.loads(post.call_args[1]["data"])
+        import base64, gzip
+        body = json.loads(gzip.decompress(base64.b64decode(json.loads(post.call_args[1]["data"])["gz"])))
         self.assertEqual(url, "https://phone.example/api/dashboard_push")
         self.assertEqual(post.call_args[1]["headers"]["Authorization"], "Bearer s")
         self.assertEqual(body["needs_you"]["text"], "Pay CJ")
