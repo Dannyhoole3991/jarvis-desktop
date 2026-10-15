@@ -11,6 +11,7 @@ Invariants
   - Runs need Claude. While Claude's allowance is used up they wait as "waiting_for_claude" and
     start by themselves when it renews (the fallback brains never write code).
   - At most MAX_CONCURRENT run at once: the Pro allowance is small and shared with the chat brain.
+    Agent jobs (jobs.py, kind "job") have their own lane of one, so a long job never blocks a run.
 
 Safety: runs execute with --permission-mode acceptEdits (file edits inside the project are allowed,
 no prompts) plus an allowlist of ordinary dev commands; the dangerous ones are denied outright.
@@ -31,6 +32,7 @@ from .claude_env import child_env
 
 DB_FILE = os.path.join(config.DATA_DIR, "runs.db")
 MAX_CONCURRENT = 1
+LANE_LIMITS = {"run": MAX_CONCURRENT, "job": 1}
 DEFAULT_TIMEOUT = 45 * 60
 TERMINAL = ("succeeded", "failed", "cancelled", "timed_out")
 ACTIVE = ("queued", "waiting_for_claude", "running")
@@ -125,7 +127,7 @@ class RunStore:
         if len(body) > MAX_EVENT_CHARS:
             # Never chop the JSON itself (that made it unreadable): keep a valid, shortened summary instead.
             short = {"type": event.get("type"), "subtype": event.get("subtype"), "truncated": True,
-                     "summary": summarise_event(event) or body[:2000]}
+                     "summary": summarise_event(event) or (None if event.get("type") == "user" else body[:2000])}
             if event.get("type") == "result":
                 short.update({k: event.get(k) for k in ("result", "is_error", "usage", "total_cost_usd")})
                 short["result"] = str(short.get("result") or "")[:MAX_EVENT_CHARS // 2]
@@ -182,6 +184,10 @@ def claude_available():
     return not (b and b.get("until", 0) > time.time())
 
 
+def _lane(run):
+    return "job" if run.get("kind") == "job" else "run"
+
+
 def summarise_event(ev):
     """One short human line for the transcript view (None = not worth showing)."""
     if ev.get("truncated"):
@@ -217,6 +223,8 @@ class Executor:
         self.threads = {}
         self.wake = threading.Event()
         self.listeners = []                      # callables(run_id, run) on every state change
+        self.lanes = {}                          # run_id -> "run" | "job"
+        self.extra_time = lambda run_id: 0       # seconds a job spent waiting for Danny (not counted against it)
         self._thread = None
         self._stop = False
 
@@ -277,8 +285,15 @@ class Executor:
                 pass
 
     def _recover(self):
-        """A run that was 'running' when Jarvis last stopped can't be resumed: mark it failed, honestly."""
+        """A run that was 'running' when Jarvis last stopped can't be resumed: mark it failed, honestly.
+        A job can: it carries on from its saved Claude conversation (or starts again if it never got going)."""
         for run in self.store.list(limit=500, statuses=["running"]):
+            if run.get("kind") == "job":
+                meta = dict(run["meta"], resume_at=0, resumed_because="Jarvis was restarted while it was working")
+                if run.get("session_id"):
+                    meta["resume_session"] = run["session_id"]
+                self.store.update(run["id"], status="waiting_for_claude", meta=meta)
+                continue
             self.store.update(run["id"], status="failed", finished_at=time.time(), error="Jarvis was restarted while this run was going")
 
     def _loop(self):
@@ -291,14 +306,21 @@ class Executor:
                 print("runs: tick failed:", error)
 
     def tick(self):
-        """Starts the next waiting run if there's room. Returns the started run id (or None)."""
-        running = [rid for rid, p in self.procs.items() if p.poll() is None]
-        if len(running) >= MAX_CONCURRENT:
-            return None
+        """Starts the next waiting run if its lane has room. Returns the started run id (or None)."""
+        busy = {}
+        for rid, p in self.procs.items():
+            if p.poll() is None:
+                lane = self.lanes.get(rid, "run")
+                busy[lane] = busy.get(lane, 0) + 1
         waiting = self.store.list(limit=100, statuses=["queued", "waiting_for_claude"])
         if not waiting:
             return None
-        nxt = waiting[-1]                         # oldest first
+        now = time.time()
+        ready = [r for r in reversed(waiting)                     # oldest first
+                 if busy.get(_lane(r), 0) < LANE_LIMITS.get(_lane(r), 1) and float(r["meta"].get("resume_at") or 0) <= now]
+        if not ready:
+            return None
+        nxt = ready[0]
         if not self.claude_ok():
             for run in waiting:
                 if run["status"] == "queued":
@@ -310,6 +332,9 @@ class Executor:
 
     def command(self, run):
         exe = self.exe or config.find_claude_exe()
+        if run.get("kind") == "job":
+            from . import jobs
+            return jobs.command(run, exe)
         cmd = [exe, "-p", run["prompt"], "--output-format", "stream-json", "--verbose",
                "--permission-mode", "acceptEdits",
                "--allowedTools", *ALLOWED_TOOLS, "--disallowedTools", *DENIED_TOOLS]
@@ -320,7 +345,11 @@ class Executor:
     def _launch(self, run):
         run_id = run["id"]
         try:
-            proc = self.popen(self.command(run), cwd=run["cwd"], env=child_env(), stdin=subprocess.DEVNULL,
+            env = child_env()
+            if run.get("kind") == "job":
+                from . import jobs
+                env.update(jobs.job_env(run))
+            proc = self.popen(self.command(run), cwd=run["cwd"], env=env, stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
                               creationflags=0x08000000 if os.name == "nt" else 0)
         except Exception as error:
@@ -328,7 +357,8 @@ class Executor:
             self._notify(run_id)
             return
         self.procs[run_id] = proc
-        self.store.update(run_id, status="running", started_at=time.time())
+        self.lanes[run_id] = _lane(run)
+        self.store.update(run_id, status="running", started_at=run.get("started_at") or time.time())
         self._notify(run_id)
         t = threading.Thread(target=self._drive, args=(run, proc), daemon=True, name=f"run-{run_id}")
         self.threads[run_id] = t
@@ -347,7 +377,11 @@ class Executor:
 
         def watchdog():
             while proc.poll() is None:
-                if time.time() > deadline:
+                try:
+                    extra = float(self.extra_time(run_id) or 0)
+                except Exception:
+                    extra = 0
+                if time.time() > deadline + extra:
                     timed_out.set()
                     try:
                         proc.kill()
@@ -358,6 +392,7 @@ class Executor:
         threading.Thread(target=watchdog, daemon=True).start()
 
         result, is_error, tokens_in, tokens_out, cost, session = None, False, 0, 0, 0.0, None
+        limit_resets, live_out, seen = None, 0, 0
         try:
             for line in proc.stdout:
                 line = line.strip()
@@ -373,11 +408,20 @@ class Executor:
                     session = ev.get("session_id")
                     self.store.update(run_id, session_id=session)
                 elif kind == "rate_limit_event":
+                    info = dict(ev.get("rate_limit_info") or {})
                     try:
                         from .brains.claude import record_usage
-                        record_usage(dict(ev.get("rate_limit_info") or {}))
+                        record_usage(info)
                     except Exception:
                         pass
+                    if str(info.get("status") or "").lower() in ("rejected", "blocked", "exceeded", "throttled"):
+                        limit_resets = info.get("resetsAt") if isinstance(info.get("resetsAt"), (int, float)) else 0
+                elif kind == "assistant" and run.get("kind") == "job":
+                    # Jobs are long: keep their token count live for the window, not just at the end.
+                    live_out += int(((ev.get("message") or {}).get("usage") or {}).get("output_tokens") or 0)
+                    seen += 1
+                    if seen % 5 == 0:
+                        self.store.update(run_id, output_tokens=int(run.get("output_tokens") or 0) + live_out)
                 elif kind == "result":
                     result = str(ev.get("result") or "")
                     is_error = bool(ev.get("is_error"))
@@ -392,6 +436,22 @@ class Executor:
             self.procs.pop(run_id, None)
 
         current = self.store.get(run_id)
+        if run.get("kind") == "job":                 # a job's tokens and cost add up across its resumes
+            tokens_in += int(run.get("input_tokens") or 0)
+            tokens_out = int(run.get("output_tokens") or 0) + (tokens_out or live_out)
+            cost += float(run.get("cost_usd") or 0)
+        limit_hit = limit_resets is not None or bool(is_error and result and any(m in result.lower() for m in ("usage limit", "limit reached", "rate limit")))
+        if (run.get("kind") == "job" and current and current["status"] == "running" and not timed_out.is_set()
+                and limit_hit and (is_error or code != 0) and (session or run.get("session_id"))):
+            # Claude's allowance ran out partway through: pause, and carry on from here when it renews.
+            from . import jobs
+            meta = dict(current["meta"], resume_session=session or run.get("session_id"),
+                        resume_at=jobs.resume_time(limit_resets), resumed_because="Claude's allowance ran out partway through")
+            self.store.update(run_id, status="waiting_for_claude", meta=meta, input_tokens=tokens_in,
+                              output_tokens=tokens_out, cost_usd=cost)
+            self._notify(run_id)
+            self.wake.set()
+            return
         if current and current["status"] == "cancelled":
             status, error = "cancelled", current.get("error")
         elif timed_out.is_set():

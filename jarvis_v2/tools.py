@@ -35,6 +35,13 @@ def _clip(text):
 def needs_you():
     """Everything only Danny can do, with steps: unticked LATER_JOBS.md items + the business human-action queue."""
     parts = []
+    try:
+        from . import jobs
+        waiting = jobs.pending_text()
+        if waiting:
+            parts.append(waiting)
+    except Exception:
+        pass
     if os.path.exists(config.LATER_JOBS_FILE):
         with open(config.LATER_JOBS_FILE, encoding="utf-8") as f:
             mine = f.read().split("## Claude will do")[0]
@@ -254,6 +261,18 @@ def cancel_run(run_id):
     return _text(_server(f"/api/runs/{int(run_id)}/cancel", {}))
 
 
+def start_job(goal):
+    return _text(_server("/api/jobs", {"goal": goal, "source": "brain"}))
+
+
+def job_status(job_id=None):
+    return _text(_server(f"/api/jobs/{int(job_id)}/describe" if job_id else "/api/jobs/describe"))
+
+
+def cancel_job(job_id):
+    return _text(_server(f"/api/jobs/{int(job_id)}/cancel", {}))
+
+
 def start_build(project, title, goal, constraints="", out_of_scope=""):
     return _text(_server("/api/builds", {"project": project, "title": title, "goal": goal,
                                          "constraints": constraints, "out_of_scope": out_of_scope}))
@@ -399,6 +418,15 @@ TOOLS = {
     "run_status": (run_status, "How work you started is going. With no run_id: everything active plus the last few finished.",
                    _schema({"run_id": {"type": "integer"}})),
     "cancel_run": (cancel_run, "Stop a run that is still going.", _schema({"run_id": {"type": "integer"}}, ["run_id"])),
+    "start_job": (start_job, "DO a real-world job yourself, end to end, in the background: anything that needs doing on websites, "
+                  "in Jarvis's browser, on the store or the PC (e.g. 'add Pinterest and get the Christmas range advertised there', "
+                  "'check every product page for broken images'). Use this INSTEAD of giving Danny steps. goal = the complete job in "
+                  "plain words, with every detail Danny gave. It answers at once; the job reports progress out loud and asks Danny "
+                  "before anything public, permanent or costly.",
+                  _schema({"goal": _S}, ["goal"])),
+    "job_status": (job_status, "How Jarvis's jobs are going (or one job by number): working, waiting for Danny, paused, done.",
+                   _schema({"job_id": {"type": "integer"}})),
+    "cancel_job": (cancel_job, "Stop a job that's still going.", _schema({"job_id": {"type": "integer"}}, ["job_id"])),
     "start_build": (start_build, "Build a REAL project: write the agreed design down as a spec in the project. Nothing runs until Danny approves the spec. "
                     "Only call this after you and Danny have agreed what to build (ask him one question at a time first). goal = the full agreed design.",
                     _schema({"project": _S, "title": _S, "goal": _S, "constraints": _S, "out_of_scope": _S}, ["project", "title", "goal"])),

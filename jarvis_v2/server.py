@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import advertising, alerts, posting, builds, config, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
+from . import advertising, alerts, posting, builds, config, jobs, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -50,6 +50,8 @@ class State:
         self.orders = None               # last reading: {ok, orders, payouts, at}
         self.posting_now = None
         self.announcer = None            # alerts.Announcer, set by start()
+        self.approvals = None            # jobs.ApprovalStore: what jobs asked Danny, and his answers
+        self.push_phone = None           # sends the phone a fresh copy at once (set by start() for the real app)
         self.watcher = None
 
 
@@ -342,6 +344,30 @@ def api_get(state, path, query):
         info["recent_runs"] = [_run_view(r) for r in store.list(limit=15, project=project["name"])]
         info["builds"] = [b for b in builds.builds_list() if os.path.normcase(b["path"]) == os.path.normcase(project["path"])]
         return info
+    if parts[:2] == ["api", "jobs"]:
+        if len(parts) == 2:
+            return {"jobs": [jobs.view(r, state.approvals.for_run(r["id"])) for r in store.list(limit=40, kind="job")],
+                    "waiting_for_you": state.approvals.pending()}
+        if parts[2] == "describe":
+            active = store.list(limit=10, statuses=list(runs.ACTIVE), kind="job")
+            recent = [r for r in store.list(limit=4, kind="job") if r["status"] in runs.TERMINAL][:2]
+            lines = [jobs.describe(r, state.approvals.for_run(r["id"])) for r in active + recent]
+            return {"text": " ".join(lines) or "No jobs yet."}
+        run = store.get(int(parts[2]))
+        if not run or run.get("kind") != "job":
+            raise ValueError("No such job.")
+        if len(parts) == 4 and parts[3] == "describe":
+            return {"text": jobs.describe(run, state.approvals.for_run(run["id"]))}
+        out = jobs.view(run, state.approvals.for_run(run["id"]), with_audit=True)
+        out["transcript"] = _run_view(run, with_events=True, store=store)["transcript"]
+        return out
+    if parts[:2] == ["api", "approvals"]:
+        if len(parts) == 2:
+            return {"waiting_for_you": state.approvals.pending()}
+        a = state.approvals.get(int(parts[2]))
+        if not a:
+            raise ValueError("No such question.")
+        return a
     if path == "/api/docs":
         return {"documents": builds.all_documents(), "builds": builds.builds_list()}
     if path == "/api/doc":
@@ -499,6 +525,16 @@ def _keep_usage_fresh(state, interval=None):
         time.sleep(interval or usage_check.INTERVAL)
 
 
+def _watch_jobs(state, interval=60):
+    """Says when a job has been going a long time, so a long job is never a silent one."""
+    while not getattr(state, "stopping", False):
+        try:
+            jobs.check_long(state.executor.store, state.announcer)
+        except Exception:
+            pass
+        time.sleep(interval)
+
+
 def _refresh_orders(state, force=False):
     """Reads the Shopify orders list + pending payout in the background, one browser job at a time."""
     with state.panel_lock:
@@ -607,6 +643,19 @@ def api_post(state, path, body, from_ui=False):
         if parts[3] == "retry":
             new_id = ex.retry(run_id)
             return {"run_id": new_id, "text": f"Started it again as run {new_id}."}
+    if path == "/api/jobs":
+        run_id, text = jobs.start(ex, str(body.get("goal", "")), source=str(body.get("source") or ""))
+        return {"run_id": run_id, "text": text}
+    if parts[:2] == ["api", "jobs"] and len(parts) == 4:
+        return _job_post(state, int(parts[2]), parts[3], body)
+    m = re.match(r"^/api/approvals/(\d+)/(approve|reject|done|cant)$", path)
+    if m:
+        if not from_ui:
+            raise PermissionError("Only Danny can answer a job's question, with the buttons in the Jarvis window.")
+        a = state.approvals.decide(int(m.group(1)), m.group(2), str(body.get("note") or ""))
+        words = {"approved": "Approved: the job will go ahead with it.", "rejected": "Rejected: the job won't do it.",
+                 "done": "Thanks, sir: the job is carrying on.", "cant": "Understood: the job will carry on without it."}
+        return {"approval": a, "text": words[a["status"]]}
     m = re.match(r"^/api/posts/(\d+)/(post|remove)$", path)
     if m:
         if not from_ui:
@@ -653,6 +702,41 @@ def api_post(state, path, body, from_ui=False):
     return None
 
 
+def _job_post(state, run_id, action, body):
+    """A job's own requests (from its tool server, with the server token) and Danny's Stop button."""
+    run = state.executor.store.get(run_id)
+    if not run or run.get("kind") != "job":
+        raise ValueError("No such job.")
+    if action == "cancel":
+        stopped = state.executor.cancel(run_id)
+        state.approvals.close_for_run(run_id)
+        return {"text": f"Stopped job {run_id}." if stopped else "That job had already finished."}
+    if run["status"] != "running":
+        raise ValueError("That job isn't running.")
+    if action == "say":
+        text = " ".join(str(body.get("text", "")).split())[:300]
+        if not text:
+            raise ValueError("Nothing to say.")
+        if state.announcer:
+            state.announcer.urgent(text)
+        return {"ok": True}
+    if action == "ask":
+        kind = "hand" if body.get("kind") == "hand" else "approval"
+        what, why = str(body.get("what", "")).strip(), str(body.get("why", "")).strip()
+        if not what:
+            raise ValueError("Say what needs Danny.")
+        approval_id = state.approvals.create(run_id, what, why, kind=kind)
+        if state.announcer:
+            if kind == "approval":
+                state.announcer.urgent(f"Job {run_id} needs your OK, sir: {what}. Press Approve or Reject in the Jarvis window.")
+            else:
+                state.announcer.urgent(f"Job {run_id} needs you to do one thing, sir: {what}. Press Done in the Jarvis window when you have.")
+        if state.push_phone:
+            threading.Thread(target=state.push_phone, daemon=True).start()
+        return {"approval_id": approval_id}
+    raise ValueError("Unknown job action.")
+
+
 # ---------------------------------------------------------------- lifecycle
 def set_engine_brain(enabled):
     """Tells the voice engine to send conversation to this brain (it falls back to its old brain if we're down)."""
@@ -692,6 +776,9 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         executor = runs.Executor()
         executor.listeners += [builds.on_run_change, selfimprove.on_run_change, alerts.on_run_change(announcer)]
     state = State(router or R.default_router(), executor)
+    state.approvals = jobs.ApprovalStore(executor.store.path)
+    executor.listeners.append(jobs.on_change(announcer, state.approvals))
+    executor.extra_time = state.approvals.waiting_seconds
     # Claim the port FIRST: if another copy has it, fail here, before starting any work or touching its files.
     server = _Server(("127.0.0.1", port), make_handler(state))
     if real:
@@ -705,6 +792,8 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         threading.Thread(target=_keep_usage_fresh, args=(state,), daemon=True, name="jarvis-usage").start()
         from . import phone_sync
         phone_sync.start(state)               # the phone app's tabs (read-only copy)
+        state.push_phone = lambda: phone_sync.push(state)
+        threading.Thread(target=_watch_jobs, args=(state,), daemon=True, name="jarvis-jobs").start()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
     threading.Thread(target=server.serve_forever, daemon=True, name="jarvis-v2-server").start()

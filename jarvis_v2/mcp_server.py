@@ -17,30 +17,33 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "jarvis", "version": "2.0"}
 
 
-def handle(msg):
-    """One JSON-RPC message in, the response dict out (None for notifications)."""
+def handle(msg, registry=None, server_info=None):
+    """One JSON-RPC message in, the response dict out (None for notifications).
+
+    registry: an object with specs(), call(name, args) and TOOLS (default: Jarvis's tools; jobs pass their own)."""
+    registry = registry or tools
     method, mid = msg.get("method"), msg.get("id")
     if mid is None:
         return None  # notifications (e.g. notifications/initialized) get no reply
     if method == "initialize":
         result = {"protocolVersion": (msg.get("params") or {}).get("protocolVersion") or PROTOCOL_VERSION,
-                  "capabilities": {"tools": {}}, "serverInfo": SERVER_INFO}
+                  "capabilities": {"tools": {}}, "serverInfo": server_info or SERVER_INFO}
     elif method == "ping":
         result = {}
     elif method == "tools/list":
-        result = {"tools": [{"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]} for t in tools.specs()]}
+        result = {"tools": [{"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]} for t in registry.specs()]}
     elif method == "tools/call":
         params = msg.get("params") or {}
         name = params.get("name", "")
         with contextlib.redirect_stdout(sys.stderr):
-            text = tools.call(name, params.get("arguments") or {})
-        result = {"content": [{"type": "text", "text": text}], "isError": name not in tools.TOOLS}
+            text = registry.call(name, params.get("arguments") or {})
+        result = {"content": [{"type": "text", "text": text}], "isError": name not in registry.TOOLS}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Unknown method {method}"}}
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
-def main(stdin=None, stdout=None):
+def main(stdin=None, stdout=None, registry=None, server_info=None):
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     for line in stdin:
@@ -53,7 +56,7 @@ def main(stdin=None, stdout=None):
             reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
         else:
             try:
-                reply = handle(msg)
+                reply = handle(msg, registry, server_info)
             except Exception as error:  # never let one bad call kill the server
                 reply = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(error)}}
         if reply is not None:

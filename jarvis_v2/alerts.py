@@ -175,8 +175,8 @@ def on_run_change(announcer):
     def listener(run_id, run):
         if not run or run["status"] not in ("succeeded", "failed", "timed_out"):
             return
-        if run.get("kind") == "self_improve":
-            return                            # the proposal check announces the outcome instead
+        if run.get("kind") in ("self_improve", "job"):
+            return                            # proposals and jobs announce their own outcome
         what = (run.get("meta") or {}).get("title") or run["prompt"][:60].replace("\n", " ")
         if run["status"] == "succeeded":
             announcer.routine(f"the job in {run['project']} ('{what}') is done")

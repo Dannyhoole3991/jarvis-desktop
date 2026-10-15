@@ -147,6 +147,10 @@
   .brain .state { color: var(--dim); }
   .brain.active .state { color: var(--green); }
   .pick { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ask { border: 1px solid rgba(255,179,71,.5); background: rgba(255,179,71,0.08); border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; font-size: 13px; line-height: 1.45; }
+  .ask .actions { margin-top: 6px; align-items: center; }
+  .ask .btn { font-size: 13px; padding: 6px 16px; }
+  .audit-bad { color: var(--red); }
 </style>
 </head>
 <body>
@@ -169,6 +173,7 @@
   <section class="right">
     <div class="needs" id="needs">
       <h2 id="needsHead"><span>&#9888; Needs you</span><span class="hint" id="needsToggle">hide</span></h2>
+      <div id="approvalCards"></div>
       <div class="body" id="needsBody">Loading…</div>
     </div>
 
@@ -179,6 +184,7 @@
       <button class="tab" data-pane="business">Business</button>
       <button class="tab" data-pane="advertising">Advertising</button>
       <button class="tab" data-pane="trading">Trading</button>
+      <button class="tab" data-pane="jobs">Jobs</button>
       <button class="tab" data-pane="sessions">Sessions</button>
       <button class="tab" data-pane="runs">Runs</button>
       <button class="tab" data-pane="projects">Projects</button>
@@ -261,6 +267,13 @@
       <div class="card"><h3>Your Claude Code sessions</h3><div id="sessionsList"><p class="hint">Looking…</p></div>
         <p class="hint">Jarvis watches these and tells you when one needs you. He can't type into them on Windows: answer them in the session itself.</p></div>
       <div class="card"><h3>Recent announcements</h3><div id="alertsList"><p class="hint">Nothing announced yet.</p></div></div>
+    </div>
+
+    <div class="pane" id="pane-jobs">
+      <div id="jobDetail"></div>
+      <div class="card"><h3>Active</h3><div id="jobsActive"><p class="hint">No job running.</p></div></div>
+      <div class="card"><h3>History</h3><div id="jobsHistory"><p class="hint">No jobs yet. Say "Jarvis, do it:" and the job, e.g. "do it: add our Christmas range to Pinterest".</p></div>
+        <p class="hint">Jobs work in Jarvis's own browser window. They never pay, type passwords, create accounts or pass human checks, and they ask you before anything public or permanent: your answer is the Approve / Reject buttons that appear at the top.</p></div>
     </div>
 
     <div class="pane" id="pane-runs">
@@ -764,7 +777,7 @@ document.querySelectorAll("[data-refresh]").forEach(b => b.addEventListener("cli
 // ------------------------------------------- runs / projects / specs / memory / changes
 function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function dur(a, b) { if (!a) return ""; const s = Math.round(((b || Date.now() / 1000) - a)); return s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h"; }
-const STATUS_CLASS = { succeeded: "good", applied: "good", ready_for_review: "busy", finished: "good", running: "busy", queued: "busy",
+const STATUS_CLASS = { needs_you: "bad", paused: "busy", approved: "good", done: "good", rejected: "bad", cant: "bad", succeeded: "good", applied: "good", ready_for_review: "busy", finished: "good", running: "busy", queued: "busy",
   waiting_for_claude: "busy", working: "busy", building: "busy", failed: "bad", timed_out: "bad", tests_failed: "bad", blocked: "bad", run_failed: "bad" };
 function pill(status) { return `<span class="pill ${STATUS_CLASS[status] || ""}">${esc(String(status).replace(/_/g, " "))}</span>`; }
 async function act(path, body, confirmText) {
@@ -808,6 +821,70 @@ async function renderRunDetail(id) {
     <div class="transcript">${(r.transcript || []).map(l => esc(l.text)).join("\n\n") || "Nothing yet."}</div>
     <div class="actions">${live ? `<button class="btn danger" data-cancel="${r.id}">Stop it</button>` : ""}
       ${!live && r.status !== "succeeded" ? `<button class="btn" data-retry="${r.id}">Try again</button>` : ""}</div></div>`;
+  const t = box.querySelector(".transcript");
+  if (t && wasAtBottom) t.scrollTop = t.scrollHeight;
+}
+
+// ------------------------------------------------------------ jobs
+function askCard(a) {
+  const buttons = a.kind === "approval"
+    ? `<button class="btn go" data-answer="${a.id}" data-act="approve">Approve</button><button class="btn danger" data-answer="${a.id}" data-act="reject">Reject</button>`
+    : `<button class="btn go" data-answer="${a.id}" data-act="done">Done it</button><button class="btn" data-answer="${a.id}" data-act="cant">I can't right now</button>`;
+  return `<div class="ask"><b>Job #${a.run_id} ${a.kind === "approval" ? "asks to" : "needs you to"}:</b> ${esc(a.what)}
+    ${a.why ? `<div class="hint">${esc(a.why)}</div>` : ""}<div class="actions">${buttons}<span class="hint">asked ${ago(a.created_at)}</span></div></div>`;
+}
+let askKey = "";
+async function renderApprovals() {
+  const data = await api("/api/approvals");
+  const items = data.waiting_for_you || [];
+  const key = items.map(a => a.id).join(",");
+  if (key === askKey) return;                     // don't redraw (and lose a half-made click) every poll
+  askKey = key;
+  el("approvalCards").innerHTML = items.map(askCard).join("");
+  if (items.length) { el("needs").classList.remove("collapsed"); el("needsToggle").textContent = "hide"; }
+}
+function jobRow(j) {
+  const waiting = (j.approvals || []).some(a => a.status === "pending");
+  const tok = (j.input_tokens || 0) + (j.output_tokens || 0);
+  const paused = j.status === "waiting_for_claude" && j.resume_at;
+  return `<div class="item" data-job="${j.id}"><span class="main">#${j.id} · ${esc(j.title)}</span>
+    <span class="sub">${dur(j.started_at, j.finished_at)}${tok ? " · " + tok.toLocaleString() + " tok" : ""}${j.cost_usd ? " · ~$" + j.cost_usd.toFixed(2) : ""}</span>
+    ${waiting ? pill("needs_you") : pill(paused ? "paused" : j.status)}</div>`;
+}
+let openJob = null;
+async function renderJobs() {
+  const data = await api("/api/jobs");
+  const all = data.jobs || [];
+  const live = all.filter(j => ["queued", "waiting_for_claude", "running"].includes(j.status));
+  el("jobsActive").innerHTML = live.length ? live.map(jobRow).join("") : '<p class="hint">No job running.</p>';
+  const done = all.filter(j => !live.includes(j));
+  if (done.length) el("jobsHistory").innerHTML = done.map(jobRow).join("");
+  if (openJob) renderJobDetail(openJob);
+}
+async function renderJobDetail(id) {
+  openJob = id;
+  const j = await api("/api/jobs/" + id);
+  if (j.error) { el("jobDetail").innerHTML = ""; openJob = null; return; }
+  const live = ["queued", "waiting_for_claude", "running"].includes(j.status);
+  const box = el("jobDetail");
+  const wasAtBottom = (() => { const t = box.querySelector(".transcript"); return !t || t.scrollTop + t.clientHeight >= t.scrollHeight - 20; })();
+  const tok = (j.input_tokens || 0) + (j.output_tokens || 0);
+  const paused = j.status === "waiting_for_claude" && j.resume_at && j.resume_at * 1000 > Date.now();
+  const asks = (j.approvals || []).map(a => `<div class="kv">${pill(a.status === "pending" ? "needs_you" : a.status)} ${esc(a.what)}</div>`).join("");
+  const audit = (j.audit || []).filter(e => e.allowed === false || e.blocked || e.needs_approval || e.covered_by_approval)
+    .map(e => `<div class="kv ${e.allowed === false || e.blocked ? "audit-bad" : ""}">${clock(e.ts)} · ${esc(e.tool || e.browser || "")} · ${esc(e.reason || e.blocked || e.needs_approval || ("approved: " + (e.approved_what || "")))}</div>`).join("");
+  box.innerHTML = `<div class="card detail"><h3>Job #${j.id} ${pill(paused ? "paused" : j.status)} <button class="btn" style="float:right" data-close="jobDetail">Close</button></h3>
+    <div class="text-block" style="max-height:12vh;overflow:auto">${md(j.prompt)}</div>
+    <div class="kv">${j.started_at ? "Working for " + dur(j.started_at, j.finished_at) : "Not started yet"} · ${tok.toLocaleString()} tokens${j.cost_usd ? " · about $" + j.cost_usd.toFixed(2) + " of your Claude allowance" : ""}</div>
+    ${paused ? `<div class="kv">Paused: ${esc(j.resumed_because || "")}. Carrying on at about ${clock(j.resume_at)}.</div>` : ""}
+    ${j.error ? `<div class="kv" style="color:var(--red)">${esc(j.error)}</div>` : ""}
+    ${j.result ? `<div class="kv" style="margin-top:6px">Result:</div><div class="text-block" style="max-height:20vh;overflow:auto">${md(j.result)}</div>` : ""}
+    ${asks ? `<div class="kv" style="margin-top:8px">Asked you:</div>${asks}` : ""}
+    ${audit ? `<div class="kv" style="margin-top:8px">Safety log (blocked and approved actions):</div>${audit}` : ""}
+    <div class="kv" style="margin-top:8px">What it's doing:</div>
+    <div class="transcript">${(j.transcript || []).map(l => esc(l.text)).join("\n\n") || "Nothing yet."}</div>
+    <div class="actions">${live ? `<button class="btn danger" data-job-stop="${j.id}">Stop this job</button>` : ""}
+      <span class="hint">Its folder: ${esc(j.cwd)}</span></div></div>`;
   const t = box.querySelector(".transcript");
   if (t && wasAtBottom) t.scrollTop = t.scrollHeight;
 }
@@ -1143,7 +1220,7 @@ reportVisibility();
 
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-close]");
+  const t = e.target.closest("[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-close]");
   if (!t) return;
   const d = t.dataset;
   if (d.close) {
@@ -1151,8 +1228,21 @@ document.addEventListener("click", async e => {
     if (d.close === "runDetail") openRun = null;
     if (d.close === "changeDetail") openChange = null;
     if (d.close === "sessionDetail") openSession = null;
+    if (d.close === "jobDetail") openJob = null;
     return;
   }
+  if (d.answer) {
+    const sure = { approve: "Approve this? The job will go ahead and do it." }[d.act];
+    if (sure && !confirm(sure)) return;
+    const card = t.closest(".ask");
+    if (card) card.querySelectorAll("button").forEach(b => b.disabled = true);
+    await act(`/api/approvals/${d.answer}/${d.act}`, {});
+    askKey = "";
+    renderApprovals();
+    return activePane === "jobs" ? renderJobs() : null;
+  }
+  if (d.jobStop) { await act(`/api/jobs/${d.jobStop}/cancel`, {}, "Stop this job?"); return renderJobs(); }
+  if (d.job) { activateTab("jobs"); return renderJobDetail(d.job); }
   if (d.session) return renderSession(d.session);
   if (d.cancel) { await act(`/api/runs/${d.cancel}/cancel`, {}, "Stop this run?"); return renderRuns(); }
   if (d.retry) { await act(`/api/runs/${d.retry}/retry`); return renderRuns(); }
@@ -1182,7 +1272,7 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const RENDERERS = { jobs: renderJobs, advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);
@@ -1224,6 +1314,7 @@ function every(ms, fn) {
 loadPanel("needs_you");
 every(1500, pollState);
 every(1500, pollConversation);
+every(2000, renderApprovals);
 setInterval(() => loadPanel("needs_you"), 30000);
 every(4000, () => {
   if (["memory", "projects", "usage", "store"].includes(activePane)) return;   // these only change when clicked (store photos would flicker)

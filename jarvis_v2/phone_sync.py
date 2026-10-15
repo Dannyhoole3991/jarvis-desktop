@@ -39,7 +39,7 @@ def _section(fn):
 
 def snapshot(state):
     """The same data the desktop tabs read, gathered in-process."""
-    from . import server as S
+    from . import jobs, server as S
 
     def store():
         s = S.store_view(state)
@@ -63,6 +63,7 @@ def snapshot(state):
         "trading": _section(lambda: S.api_get(state, "/api/trading", {})),
         "advertising": _section(lambda: S.api_get(state, "/api/advertising", {})),
         "posts": _section(lambda: S.api_get(state, "/api/posts", {})),
+        "jobs": _section(lambda: jobs.phone_view(state.executor.store, state.approvals)),
     }
 
 
