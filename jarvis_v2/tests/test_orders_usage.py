@@ -128,3 +128,23 @@ class PhoneSyncTests(unittest.TestCase):
         from jarvis_v2 import phone_sync
         with mock.patch.dict(os.environ, {"JARVIS_PHONE_BACKEND_URL": "", "JARVIS_PHONE_SECRET": ""}):
             self.assertFalse(phone_sync.push(mock.Mock(), post=mock.Mock()))
+
+
+class BrowserLockTests(unittest.TestCase):
+    def test_a_second_program_waits_for_the_first(self):
+        import subprocess, sys, textwrap
+        import jarvis_browser as jb
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "b.lock")
+            holder = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+                import time, jarvis_browser as jb
+                lock = jb._CrossProcessLock({path!r}); lock.acquire(5); print("held", flush=True); time.sleep(3); lock.release()
+            """)], stdout=subprocess.PIPE, text=True, cwd=os.path.dirname(jb.__file__))
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            mine = jb._CrossProcessLock(path)
+            with self.assertRaises(jb.BrowserBusy):
+                mine.acquire(0.5)                    # still held by the other program
+            mine.acquire(10)                         # free once it lets go
+            mine.acquire(1)                          # re-entrant in this program
+            mine.release(); mine.release()
+            holder.wait(10)

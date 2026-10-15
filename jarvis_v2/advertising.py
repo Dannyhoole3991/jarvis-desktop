@@ -100,6 +100,11 @@ def _looks_logged_out(url, text):
 def read_tiktok():
     """Reads the three Studio pages. Returns {"ok", ...data} or {"ok": False, "problem"}."""
     import jarvis_browser as jb
+    with jb.exclusive():           # three pages in a row: no other program may navigate meanwhile
+        return _read_tiktok(jb)
+
+
+def _read_tiktok(jb):
     try:
         info = jb.goto(STUDIO + "/analytics", settle=6)
         text = jb.read_text(8000)

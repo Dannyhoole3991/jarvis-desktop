@@ -123,6 +123,103 @@ def launch_browser(start_url="about:blank", visible=False):
     return False, "The browser didn't start listening in time."
 
 
+LOCK_FILE = os.path.join(HERE, "store_data", "jarvis_browser.lock")
+
+
+class BrowserBusy(TimeoutError):
+    pass
+
+
+class _CrossProcessLock:
+    """
+    Only one program drives Jarvis's browser at a time. Several do (the voice engine,
+    the v2 window's order reader and TikTok posting, the brain's tools process), and
+    they all drive the same tab: confirmed live 2026-10-15 that two of them navigating
+    it at once left every read hanging ("The browser took too long to respond").
+    Re-entrant within a process, so a multi-step job (see exclusive()) can hold it
+    across its steps while each step's run() takes it again.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self._local = threading.RLock()
+        self._depth = 0
+        self._handle = None
+
+    def acquire(self, timeout):
+        deadline = time.time() + timeout
+        if not self._local.acquire(timeout=max(0.1, timeout)):
+            raise BrowserBusy("Jarvis's browser is busy with another job.")
+        try:
+            if self._depth == 0:
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                handle = open(self.path, "a+b")
+                while True:
+                    try:
+                        _lock_file(handle)
+                        break
+                    except OSError:
+                        if time.time() > deadline:
+                            handle.close()
+                            raise BrowserBusy("Jarvis's browser is busy with another job; try again in a minute.")
+                        time.sleep(0.25)
+                self._handle = handle
+            self._depth += 1
+        except BaseException:
+            self._local.release()
+            raise
+
+    def release(self):
+        try:
+            self._depth -= 1
+            if self._depth == 0 and self._handle is not None:
+                try:
+                    _unlock_file(self._handle)
+                finally:
+                    self._handle.close()
+                    self._handle = None
+        finally:
+            self._local.release()
+
+
+def _lock_file(handle):
+    if os.name == "nt":
+        import msvcrt
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle):
+    if os.name == "nt":
+        import msvcrt
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+_browser_lock = _CrossProcessLock(LOCK_FILE)
+
+
+class exclusive:
+    """`with jarvis_browser.exclusive():` -- keep the browser for a whole multi-step job."""
+
+    def __init__(self, wait=300):
+        self.wait = wait
+
+    def __enter__(self):
+        _browser_lock.acquire(self.wait)
+        return self
+
+    def __exit__(self, *exc):
+        _browser_lock.release()
+        return False
+
+
 class _Worker:
     def __init__(self):
         self._queue = queue.Queue()
@@ -161,6 +258,13 @@ class _Worker:
         return self._page
 
     def run(self, action, timeout=60):
+        _browser_lock.acquire(max(timeout, 120))    # wait for another program's browser job to finish
+        try:
+            return self._run(action, timeout)
+        finally:
+            _browser_lock.release()
+
+    def _run(self, action, timeout):
         if not _port_open():
             ok, message = launch_browser()
             if not ok:

@@ -93,7 +93,12 @@ voice_commands = queue.Queue()
 # ============================================================
 
 REMOTE_COMMANDS_ENABLED = True
-REMOTE_COMMAND_TIMEOUT = 60
+# A request can now go to the v2 brain, which may check several sites before answering
+# (confirmed live: a phone question was cut off with "took too long" at 60s while the
+# brain was still working). Direct /command callers (the Jarvis window) wait up to
+# 3 minutes; the phone's PC tab, which keeps talking while it waits, up to 10.
+REMOTE_COMMAND_TIMEOUT = 180
+PHONE_COMMAND_TIMEOUT = 600
 remote_commands = queue.Queue()
 active_remote_reply = None
 active_remote_lock = threading.Lock()
@@ -1005,7 +1010,7 @@ def _handle_polled_command(item):
         reply_queue = queue.Queue(maxsize=1)
         remote_commands.put((item.get("command", ""), reply_queue))
         try:
-            reply = reply_queue.get(timeout=REMOTE_COMMAND_TIMEOUT)
+            reply = reply_queue.get(timeout=PHONE_COMMAND_TIMEOUT)
         except queue.Empty:
             reply = "Jarvis took too long to reply."
         try:

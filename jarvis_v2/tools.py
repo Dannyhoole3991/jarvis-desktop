@@ -58,9 +58,52 @@ def needs_you():
     return "\n\n".join(parts) or "Nothing is waiting on Danny right now."
 
 
-def money_check():
+MONEY_CACHE_SECONDS = 15 * 60
+
+
+def money_check(fresh=False):
+    """Reads four websites (1-3 minutes), so a reading from the last 15 minutes is reused unless fresh=True."""
+    import time
     import jarvis_money
-    return jarvis_money.describe(jarvis_money.money_status())
+    path = os.path.join(config.DATA_DIR, "money_cache.json")
+    if not fresh:
+        try:
+            with open(path, encoding="utf-8") as f:
+                cached = json.load(f)
+            age = time.time() - cached["at"]
+            if age < MONEY_CACHE_SECONDS:
+                return cached["text"] + f"\n(Checked {max(1, round(age / 60))} minute(s) ago. Ask for a fresh check to re-read the sites.)"
+        except Exception:
+            pass
+    text = jarvis_money.describe(jarvis_money.money_status())
+    if "couldn't check" in text.lower():       # a failed read isn't worth reusing
+        return text
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "text": text}, f)
+    except Exception:
+        pass
+    return text
+
+
+def shop_orders():
+    """The Shopify orders + pending payout the Jarvis window read in the last 10 minutes. Instant."""
+    out = _server("/api/store", timeout=30)
+    if out.get("error"):
+        return out["error"]
+    o = out.get("orders") or {}
+    if not o.get("at"):
+        return "I haven't read the Shopify orders yet (it happens in the background); try again in a minute."
+    lines = [f"- {r['number']} {r['date']}: {r['customer']}, {r['total']}, {r['payment']}, fulfilment {r['fulfilment'] or 'not started'} ({r['items']})"
+             for r in o.get("orders") or []]
+    pay = o.get("payouts") or {}
+    text = (f"{len(lines)} Shopify order(s):\n" + "\n".join(lines)) if lines else "No Shopify orders yet."
+    if pay.get("pending"):
+        text += "\nPending payout: " + pay["pending"] + " (" + ", ".join(f"{t['order']} {t['net']} on {t['payout_date']}" for t in pay.get("transactions") or []) + "), paid to Danny's bank automatically."
+    if o.get("problem"):
+        text += f"\nNote: {o['problem']}."
+    import time
+    return text + f"\n(Read from Shopify {max(0, round((time.time() - o['at']) / 60))} minute(s) ago.)"
 
 
 def store_status():
@@ -321,7 +364,13 @@ _S = {"type": "string"}
 
 TOOLS = {
     "needs_you": (needs_you, "Everything only Danny can do himself (logins, payments, account details, approvals), with the exact steps. Use it when he asks what he needs to do, and mention it when something is blocked on him.", _schema()),
-    "money_check": (money_check, "Have we made any money: real orders and earnings read live from Shopify, Fiverr, Redbubble and AdSense. Report exactly what it says; if a site couldn't be read, say so. Takes about a minute.", _schema()),
+    "money_check": (money_check, "Earnings across all four businesses (Shopify, Fiverr, Redbubble, AdSense), read from their websites. SLOW (1-3 minutes) "
+                    "when fresh, so a reading from the last 15 minutes is reused; fresh=true only when Danny asks for a new check. "
+                    "For shop orders or payouts use shop_orders instead (instant). Report exactly what it says.",
+                    _schema({"fresh": {"type": "boolean"}})),
+    "shop_orders": (shop_orders, "Shopify orders (number, date, customer, total, payment and fulfilment status) and the pending payout with its "
+                    "date. Instant: read from Shopify in the last 10 minutes. Use this for anything about orders, sales or payouts on the shop.",
+                    _schema()),
     "store_status": (store_status, "Collective Shopify store: whether Jarvis's store access is connected, live product count, drafts waiting for review.", _schema()),
     "store_list_drafts": (store_list_drafts, "List Jarvis's draft products waiting for Danny's review.", _schema()),
     "store_add_draft_product": (store_add_draft_product, "Research ONE product on CJdropshipping and add it to the store as a hidden DRAFT (never live) with a TikTok video, for review. Optional keyword; christmas=true for a Christmas decoration. Takes several minutes; only when Danny asks.",

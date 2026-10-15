@@ -93,6 +93,12 @@ def parse_payouts(text):
 
 
 def shopify_orders():
+    """Orders + payouts, holding Jarvis's browser for both reads (see jarvis_browser.exclusive)."""
+    with jb.exclusive():
+        return _shopify_orders()
+
+
+def _shopify_orders():
     """Reads the orders list and payouts in Jarvis's logged-in browser. Never changes anything."""
     url, text = _read(SHOPIFY_ORDERS, settle=6.0)
     if jb._looks_blocked(text):
@@ -195,6 +201,11 @@ CHECKS = (shopify_check, fiverr_check, redbubble_check, adsense_check)
 
 
 def money_status():
+    with jb.exclusive():           # four sites in a row: no other program may navigate meanwhile
+        return _money_status()
+
+
+def _money_status():
     results = []
     for check in CHECKS:
         try:

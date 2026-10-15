@@ -127,6 +127,19 @@ def _norm(s):
 
 
 def post(item_id, browser=None, sleep=time.sleep, progress=None):
+    """Holds Jarvis's browser for the whole upload, so no other program navigates it halfway through."""
+    if browser is not None:                      # tests pass a stand-in browser
+        return _post(item_id, browser, sleep, progress)
+    import jarvis_browser
+    try:
+        with jarvis_browser.exclusive():
+            return _post(item_id, None, sleep, progress)
+    except jarvis_browser.BrowserBusy as error:
+        _update(int(item_id), status="failed", error=str(error))
+        return get(item_id)
+
+
+def _post(item_id, browser=None, sleep=time.sleep, progress=None):
     """DANNY ONLY (the window's Post button). Posts one queued video and verifies it. Returns the item.
 
     progress(sentence) is called at each stage so Jarvis can say what he's doing."""
