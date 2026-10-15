@@ -160,6 +160,7 @@ def parse_shopify_order(text):
     if start is None or pc_at - start < 3:
         raise ValueError("couldn't read the delivery address on the Shopify order")
     name = lines[start + 1]
+    street = lines[start + 2]
     town = lines[pc_at - 1]
 
     paid = None
@@ -172,7 +173,7 @@ def parse_shopify_order(text):
         raise ValueError("couldn't read how much the customer paid on the Shopify order")
     head = " ".join(lines[:200])
     cancelled = bool(re.search(r"(?i)\b(cancell?ed|refunded|partially refunded|voided)\b", head))
-    return {"items": items, "name": name, "town": town, "postcode": _norm_postcode(lines[pc_at]),
+    return {"items": items, "name": name, "street": street, "town": town, "postcode": _norm_postcode(lines[pc_at]),
             "paid_gbp": paid, "cancelled": cancelled}
 
 
@@ -200,10 +201,20 @@ def parse_cj_row(text):
     if m:
         total = _money(m.group(1))
     usd = [_money(x) for x in USD_RE.findall(text)]
+    qty_total = None
+    m = re.search(r"(?m)^\s*(\d{1,3})\s+(?:US\s?\$|\$)\s?(\d[\d,]*\.\d{2})\s*$", text)
+    if m:
+        qty_total = int(m.group(1))
+        if total is None:
+            total = _money(m.group(2))
     if total is None and usd:
         total = max(usd)
-    return {"cj_orders": numbers, "skus": skus, "total_usd": total, "usd": usd,
+    return {"cj_orders": numbers, "skus": skus, "total_usd": total, "usd": usd, "qty_total": qty_total,
             "postcode": _norm_postcode(text), "text": text}
+
+
+def _words(text):
+    return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
 def parse_payment_page(text):
@@ -234,8 +245,9 @@ def needs_danny(snap):
     return None
 
 
-def check_match(shop, row, pay, number, lim, spent_today_usd):
-    """Every reason not to offer paying CJ for this order ([] = fine)."""
+def check_match(shop, row, pay, number, lim, spent_today_usd, need_pay_page=True):
+    """Every reason not to offer paying CJ for this order ([] = fine). CJ's order list shows SKUs and the
+    postcode on some layouts only; when it doesn't, the total quantity and the first address line must match."""
     problems = []
     if shop.get("cancelled"):
         problems.append(f"order {number} is cancelled or refunded on Shopify")
@@ -243,7 +255,12 @@ def check_match(shop, row, pay, number, lim, spent_today_usd):
     for it in shop["items"]:
         want[it["sku"]] = want.get(it["sku"], 0) + it["qty"]
     got = row.get("skus") or {}
-    for sku, qty in want.items():
+    if not got:
+        if row.get("qty_total") is None:
+            problems.append("couldn't read the quantity on CJ")
+        elif row["qty_total"] != sum(want.values()):
+            problems.append(f"CJ has {row['qty_total']} item(s) but the customer ordered {sum(want.values())}")
+    for sku, qty in (want.items() if got else ()):
         if sku not in got:
             problems.append(f"CJ's order doesn't show the item {sku}")
         elif got[sku] is None:
@@ -255,20 +272,27 @@ def check_match(shop, row, pay, number, lim, spent_today_usd):
         problems.append(f"CJ's order has items the customer didn't order ({', '.join(extra)})")
     if len(row.get("cj_orders") or []) != 1:
         problems.append("couldn't tell which CJ order this is" if not row.get("cj_orders") else "more than one CJ order matched")
-    if not shop.get("postcode") or row.get("postcode") != shop["postcode"]:
-        problems.append("the delivery postcode on CJ doesn't match Shopify")
-    surname = _surname(shop.get("name"))
-    if not surname or surname not in (row.get("text") or "").lower():
+    row_words = _words(row.get("text"))
+    if row.get("postcode"):
+        if row["postcode"] != shop.get("postcode"):
+            problems.append("the delivery postcode on CJ doesn't match Shopify")
+    elif not shop.get("street") or _words(shop["street"]) not in row_words:
+        problems.append("the delivery address on CJ doesn't match Shopify")
+    name = _words(shop.get("name"))
+    if not name or f" {name} " not in f" {row_words} ":
         problems.append("the delivery name on CJ doesn't match Shopify")
     amount = pay.get("amount_usd")
+    if amount is None and not need_pay_page:
+        amount = row.get("total_usd")
     if amount is None:
-        problems.append("couldn't read the amount on CJ's payment page")
+        problems.append("couldn't read the amount on CJ" + ("'s payment page" if need_pay_page else ""))
     else:
-        if len(pay.get("orders") or []) != 1:
-            problems.append("CJ's payment page isn't for exactly one order")
-        if row.get("total_usd") is None or abs(row["total_usd"] - amount) > 0.005:
-            problems.append(f"CJ's payment page says ${amount:.2f} but the order list says "
-                            + (f"${row['total_usd']:.2f}" if row.get("total_usd") is not None else "nothing"))
+        if pay.get("amount_usd") is not None:
+            if len(pay.get("orders") or []) != 1:
+                problems.append("CJ's payment page isn't for exactly one order")
+            if row.get("total_usd") is None or abs(row["total_usd"] - amount) > 0.005:
+                problems.append(f"CJ's payment page says ${amount:.2f} but the order list says "
+                                + (f"${row['total_usd']:.2f}" if row.get("total_usd") is not None else "nothing"))
         if amount <= 0:
             problems.append("CJ's amount is zero")
         if amount > lim["max_per_order_usd"]:
@@ -726,6 +750,7 @@ class Payer:
         self.busy = threading.Lock()                    # one CJ job at a time in this process
         self.told = set()
         self.after_balance = {}                         # request id -> wallet balance after paying
+        self.last_tab_url = CJ_LIST_URL
 
     # -- small helpers
     def say(self, text, once_key=None):
@@ -760,10 +785,12 @@ class Payer:
     def find_on_cj(self, number):
         """-> (tab, rows) for the first CJ list tab showing this order, else (None, [])."""
         for tab in UNPAID_TABS + PAID_TABS:
-            if self.driver.click_tab(tab) is None:
+            snap = self.driver.click_tab(tab)
+            if snap is None:
                 continue
             rows = self.driver.row_texts(number)
             if rows:
+                self.last_tab_url = snap.get("url") or CJ_LIST_URL
                 return tab, rows
         return None, []
 
@@ -829,9 +856,10 @@ class Payer:
                 self.say(f"New order {number}, sir. {said} It can come from your CJ wallet: tap Pay in the Jarvis window "
                          f"or on your phone, or ignore it and nothing is paid.")
             else:
+                where = "" if "/mine/payment" in (r.get("pay_url") or "") else f", find order {number} there"
                 self.say(f"New order {number}, sir. {said} It all checks out. CJ needs your card's security code, so tap "
-                         f"Open CJ in the Jarvis window or on your phone, choose the card ending "
-                         f"{limits(self.limits_path)['card_last4']}, type the code and press Pay. I'll check it went through.")
+                         f"Open CJ in the Jarvis window or on your phone{where}, pay it with the card ending "
+                         f"{limits(self.limits_path)['card_last4']} and type the code. I'll check it went through.")
             self.push()
         elif out.get("outcome") == "already_paid":
             pass
@@ -870,46 +898,52 @@ class Payer:
         if len(rows) != 1:
             return {"ok": False, "outcome": "problem", "why": f"order {number} shows up more than once on CJ"}
 
+        moved = True
         if tab == "Imported":
             ok, label, snap = self.driver.click_row_button(number, MOVE_ON_LABEL)
             self.audit(folder, step="add_to_orders_picking", ok=ok, label=label, url=(snap or {}).get("url"))
-            if not ok:
-                return {"ok": False, "outcome": "problem", "why": f"I couldn't move it on in CJ ({label})"}
-            tab, rows = self.find_on_cj(number)
-            if tab not in ("Orders Picking", "Awaiting Payment") or len(rows) != 1:
-                return {"ok": False, "outcome": "problem", "why": "it didn't move to CJ's Orders Picking list"}
+            if ok:
+                tab, rows = self.find_on_cj(number)
+                if tab in PAID_TABS:
+                    return {"ok": False, "outcome": "already_paid", "why": f"CJ already shows order {number} as {tab.lower()}"}
+                if tab is None or len(rows) != 1:
+                    return {"ok": False, "outcome": "problem", "why": f"I lost track of order {number} on CJ after moving it on"}
+            moved = ok and tab != "Imported"
+        list_url = self.last_tab_url
 
         row = parse_cj_row(rows[0])
         self._shot(folder, "cj-order")
-        self.audit(folder, step="cj_row", tab=tab, cj_orders=row["cj_orders"], skus=row["skus"], total_usd=row["total_usd"],
-                   postcode_matches=row["postcode"] == shop["postcode"])
+        self.audit(folder, step="cj_row", tab=tab, cj_orders=row["cj_orders"], skus=row["skus"], qty_total=row["qty_total"],
+                   total_usd=row["total_usd"], postcode_shown=bool(row["postcode"]))
 
-        ok, label, snap = self.driver.click_row_button(number, TO_PAYMENT_LABEL)
-        self.audit(folder, step="open_payment", ok=ok, label=label, url=(snap or {}).get("url"))
-        if not ok:
-            return {"ok": False, "outcome": "problem", "why": f"I couldn't open CJ's payment page ({label})"}
-        if "/mine/payment" not in (snap.get("url") or ""):
-            self._shot(folder, "unexpected-page")
-            return {"ok": False, "outcome": "problem", "why": "CJ didn't open its payment page"}
-        # Only a human check stops the preparing: the card tile may already show its CVV box, which is for Danny
-        # (hand-off) and is checked again, with everything else, before any wallet payment.
-        from .job_browser import page_blocked
-        if page_blocked(snap):
-            return {"ok": False, "outcome": "problem", "why": "CJ is showing a human check (\"are you a robot\")"}
-        pay = parse_payment_page(snap.get("text"))
-        self._shot(folder, "cj-payment-page")
-        self.audit(folder, step="payment_page", url=snap["url"], orders=pay["orders"], amount_usd=pay["amount_usd"])
+        # CJ's payment page (needed for a wallet payment; for a hand-off, the list will do if it can't be opened).
+        pay, pay_url = {"orders": [], "amount_usd": None}, list_url
+        if moved:
+            ok, label, snap = self.driver.click_row_button(number, TO_PAYMENT_LABEL)
+            self.audit(folder, step="open_payment", ok=ok, label=label, url=(snap or {}).get("url"))
+            from .job_browser import page_blocked
+            if ok and page_blocked(snap):
+                return {"ok": False, "outcome": "problem", "why": "CJ is showing a human check (\"are you a robot\")"}
+            if ok and "/mine/payment" in (snap.get("url") or ""):
+                # The card tile may already show its CVV box: that's for Danny (hand-off). Everything is checked
+                # again, card fields included, before any wallet payment.
+                pay = parse_payment_page(snap.get("text"))
+                pay_url = snap["url"]
+                self._shot(folder, "cj-payment-page")
+                self.audit(folder, step="payment_page", url=pay_url, orders=pay["orders"], amount_usd=pay["amount_usd"])
+            elif ok:
+                self._shot(folder, "unexpected-page")
 
         lim = limits(self.limits_path)
-        problems = check_match(shop, row, pay, number, lim, self.store.spent_today())
+        problems = check_match(shop, row, pay, number, lim, self.store.spent_today(), need_pay_page=False)
         if problems:
             self.audit(folder, step="checks_failed", problems=problems)
             return {"ok": False, "outcome": "blocked", "why": "; ".join(problems)}
 
-        amount = pay["amount_usd"]
-        pay_url = snap["url"]
+        amount = pay["amount_usd"] if pay["amount_usd"] is not None else row["total_usd"]
         balance = self.wallet_balance()
-        method = "wallet" if balance is not None and balance >= amount else "handoff"
+        on_pay_page = "/mine/payment" in pay_url
+        method = "wallet" if on_pay_page and balance is not None and balance >= amount else "handoff"
         self.audit(folder, step="wallet", balance_usd=balance, method=method)
         net = order.get("net_gbp")
         profit = (net if net is not None else shop["paid_gbp"] * 0.97) - amount * lim["usd_to_gbp"]
@@ -917,7 +951,7 @@ class Payer:
         check = {"items": shop["items"], "postcode": shop["postcode"], "surname": _surname(shop["name"]),
                  "paid_gbp": shop["paid_gbp"], "skus": row["skus"]}
         rid = self.store.create(shop_order=number, shopify_id=str(order["id"]), cj_order=row["cj_orders"][0],
-                                pay_order=pay["orders"][0], pay_url=pay_url, amount_usd=amount, paid_gbp=shop["paid_gbp"],
+                                pay_order=(pay["orders"] or [""])[0], pay_url=pay_url, amount_usd=amount, paid_gbp=shop["paid_gbp"],
                                 summary=summary, check_json=json.dumps(check), folder=folder, method=method)
         self.audit(folder, step="offered", request=rid, amount_usd=amount, summary=summary, method=method)
         return {"ok": True, "outcome": "offered", "request": self.store.get(rid)}

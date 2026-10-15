@@ -65,6 +65,9 @@ Jane Doe
 1 Test Street, Darfield, Barnsley {postcode} United Kingdom
 GBP 18.98{extra}"""
 
+# CJ's real order-list row (layout seen live 2026-10-15; made-up customer): no SKUs, no postcode.
+REAL_ROW = ("\t\n#1001\nDP2610142124070665600\n \n\t\nmwrfta-mh\n\t\nAwaiting Payment\n\t\nOct. 15, 2026 18:14:46\n\t\n"
+            "Jane Doe\nGB\n{street}\n\t\n\nCJPacket Special line\n\n---\n\nDongguan, GD, CN\n\t{qty}\t${total}\nCOGS: \n62.38%\n")
 PAY_URL = "https://www.cjdropshipping.com/mine/payment?pid=abc123"
 PAY_PAGE = """Payment
 Order Number: CJPA2610150001
@@ -81,9 +84,12 @@ class FakeCJ:
     """CJ's order list (tabs of rows), its payment page, and what pressing PAY does."""
 
     def __init__(self, qty=2, total="15.62", postcode="S70 1AA", extra="", pay_amount=None, tab="Awaiting Payment",
-                 outcome="success", wallet="50.00", card_inputs=None, logged_in=True, wallet_page_says=None):
+                 outcome="success", wallet="50.00", card_inputs=None, logged_in=True, wallet_page_says=None,
+                 real_layout=False, street="1 Test Street", pay_button=True):
         self.tabs = {t: [] for t in C.UNPAID_TABS + C.PAID_TABS}
-        self.row = ROW.format(qty=qty, total=total, postcode=postcode, extra=extra)
+        self.row = (REAL_ROW.format(qty=qty, total=total, street=street) if real_layout
+                    else ROW.format(qty=qty, total=total, postcode=postcode, extra=extra))
+        self.pay_button = pay_button
         self.tabs[tab].append(self.row)
         self.pay_amount = pay_amount or total
         self.outcome, self.wallet, self.card_inputs, self.logged_in = outcome, float(wallet), card_inputs or [], logged_in
@@ -97,7 +103,8 @@ class FakeCJ:
         yield
 
     def _snap(self, text, **extra):
-        return dict({"url": self.url, "title": "", "text": text, "inputs": [], "frames": [], "tabs": [self.url]}, **extra)
+        url = self.url if "/mine/payment" in self.url or self.tab is None else f"{C.CJ_LIST_URL}?tab={self.tab}"
+        return dict({"url": url, "title": "", "text": text, "inputs": [], "frames": [], "tabs": [self.url]}, **extra)
 
     def _pay_text(self):
         text = PAY_PAGE.format(amount=self.pay_amount)
@@ -134,7 +141,7 @@ class FakeCJ:
             self.tabs["Imported"].remove(rows[0])
             self.tabs["Orders Picking"].append(rows[0])
             return True, "Add to Orders Picking", self._snap("")
-        if re.search(label_re, "Pay", re.I) and self.tab in ("Awaiting Payment", "Orders Picking"):
+        if self.pay_button and re.search(label_re, "Pay", re.I) and self.tab in ("Awaiting Payment", "Orders Picking"):
             self.url = PAY_URL
             return True, "Pay", self._snap(self._pay_text())
         return False, "no such button in the order's row", self._snap("")
@@ -498,6 +505,24 @@ class PayTests(unittest.TestCase):
 
     def test_logged_out_of_cj(self):
         self.assertNotOffered(self.payer(FakeCJ(logged_in=False)), "logged out of CJdropshipping")
+
+    def test_real_cj_layout_matches_on_quantity_name_and_street(self):
+        p = self.payer(FakeCJ(real_layout=True))
+        r = self.offered(p)
+        self.assertEqual((r["amount_usd"], r["cj_order"]), (15.62, "DP2610142124070665600"))
+
+    def test_real_cj_layout_wrong_quantity_blocks(self):
+        self.assertNotOffered(self.payer(FakeCJ(real_layout=True, qty=3)), "CJ has 3 item(s) but the customer ordered 2")
+
+    def test_real_cj_layout_wrong_street_blocks(self):
+        self.assertNotOffered(self.payer(FakeCJ(real_layout=True, street="9 Other Road")), "delivery address on CJ doesn't match")
+
+    def test_no_pay_button_still_gives_a_checked_handoff_to_the_list(self):
+        p = self.payer(FakeCJ(real_layout=True, pay_button=False))
+        r = self.offered(p)
+        self.assertEqual(r["method"], "handoff", "never a wallet payment without CJ's payment page")
+        self.assertIn("orderList", r["pay_url"])
+        self.assertIn("find order #1001 there", self.speaker.said[-1])
 
     def test_an_order_recorded_as_paid_is_never_touched(self):
         p = self.payer()

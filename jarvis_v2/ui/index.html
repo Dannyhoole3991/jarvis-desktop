@@ -860,7 +860,7 @@ function payCard(o) {
   const mins = Math.max(0, Math.round((o.expires_at - Date.now() / 1000) / 60));
   if (o.method === "handoff") {
     return `<div class="ask pay"><b>&#128179; ${esc(o.summary)}</b>
-    <div class="hint">Checked and ready. CJ needs your card's security code, so you pay this one: open CJ, choose your saved card, type the code, tick the terms box, press PAY. Jarvis then checks CJ shows it paid.</div>
+    <div class="hint">Checked and ready. CJ needs your card's security code, so you pay this one: open CJ (if it shows the order list, find ${esc(o.shop_order)} and press its pay button), choose your saved card, type the code, tick the terms box, press PAY. Jarvis then checks CJ shows it paid.</div>
     <div class="actions"><a class="btn go" href="${esc(o.pay_url)}" target="_blank" rel="noopener">Open CJ to pay $${Number(o.amount_usd).toFixed(2)}</a>
       <button class="btn" data-paycheck="${o.id}">I've paid it</button><button class="btn" data-payno="${o.id}">Not now</button></div></div>`;
   }
