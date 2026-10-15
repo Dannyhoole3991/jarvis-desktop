@@ -1,6 +1,6 @@
 """
 Sends the phone app a copy of everything the desktop tabs show (Money, Store + orders, Business,
-Advertising, Trading, Usage, Needs You), every few minutes while the Jarvis window is open.
+Advertising, Trading, Usage, Needs You, and an Inbox summary), every few minutes while the Jarvis window is open.
 
 The phone's backend can't reach this PC (it has no route to it), so the PC pushes, the same way
 it already pushes what Jarvis says (pc_said). The phone shows the last copy with its age, so the
@@ -39,7 +39,7 @@ def _section(fn):
 
 def snapshot(state):
     """The same data the desktop tabs read, gathered in-process."""
-    from . import jobs, server as S
+    from . import jobs, mailbox, server as S
 
     def store():
         s = S.store_view(state)
@@ -64,6 +64,7 @@ def snapshot(state):
         "advertising": _section(lambda: S.api_get(state, "/api/advertising", {})),
         "posts": _section(lambda: S.api_get(state, "/api/posts", {})),
         "jobs": _section(lambda: jobs.phone_view(state.executor.store, state.approvals)),
+        "inbox": _section(mailbox.phone_summary),         # counts + latest customer subjects, never email bodies
     }
 
 

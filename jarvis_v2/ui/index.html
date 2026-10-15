@@ -181,6 +181,7 @@
       <button class="tab active" data-pane="usage">Usage</button>
       <button class="tab" data-pane="money">Money</button>
       <button class="tab" data-pane="store">Store</button>
+      <button class="tab" data-pane="inbox" id="inboxTab">Inbox</button>
       <button class="tab" data-pane="business">Business</button>
       <button class="tab" data-pane="advertising">Advertising</button>
       <button class="tab" data-pane="trading">Trading</button>
@@ -226,6 +227,24 @@
       <div class="card"><h3>Live products <span class="sub" id="storeCount"></span></h3><div class="products" id="storeProducts">Loading…</div></div>
       <div class="card"><h3>Collections</h3><div class="chips" id="storeCollections"></div></div>
       <div class="card"><h3>Jarvis's store access</h3><div id="storeAccess"></div></div>
+    </div>
+    <div class="pane" id="pane-inbox">
+      <div id="inboxSetup"></div>
+      <div class="tiles" id="inboxTiles"></div>
+      <div id="mailDetail"></div>
+      <div class="card"><h3>Emails <span class="sub" id="inboxAt"></span>
+        <button class="btn" id="inboxCheck" style="float:right">Check now</button></h3>
+        <div class="pick" id="inboxFilter" style="margin-bottom:8px">
+          <button class="btn on" data-show="needs_you">Needs you</button>
+          <button class="btn" data-show="customer">Customers</button>
+          <button class="btn" data-show="replied">Answered</button>
+          <button class="btn" data-show="business">Business &amp; personal</button>
+          <button class="btn" data-show="spam">Spam</button>
+          <button class="btn" data-show="all">All</button>
+        </div>
+        <div id="inboxList">Loading…</div></div>
+      <div class="card"><h3>Answered automatically</h3><div id="inboxAuto"><p class="hint">None yet.</p></div>
+        <p class="hint">Jarvis only answers simple customer questions himself (delivery times, where's my order, the returns policy, product details), only from the shop's own pages and the customer's own order, at most twice a day per customer and ten an hour. Refunds, complaints, payment problems and anything he isn't sure of come to you as a draft. He never answers spam.</p></div>
     </div>
     <div class="pane" id="pane-business">
       <div class="tiles" id="bizTiles"></div>
@@ -1213,6 +1232,88 @@ function renderSession(id) {
     ${(s.recent_tools || []).length ? `<div class="kv" style="margin-top:6px">Recent tools: ${esc(s.recent_tools.filter(Boolean).join(", "))}</div>` : ""}</div>`;
 }
 
+// ------------------------------------------------------------ inbox
+// Email text comes from outside senders: it is always escaped and shown as plain text (links aren't clickable).
+const MAIL_CAT = { customer: "customer", unsure: "not sure", business: "business", personal: "personal", spam: "spam" };
+const MAIL_STATUS = { needs_you: "needs you", replied: "answered", spam: "spam", info: "no reply needed", done: "done", new: "sorting…" };
+let inboxShow = "needs_you", openMail = null, inboxKey = "";
+function mailPill(m) {
+  const cls = m.status === "needs_you" ? "bad" : m.status === "replied" ? "good" : m.status === "new" ? "busy" : "";
+  return `<span class="pill">${esc(MAIL_CAT[m.category] || m.category || "…")}</span><span class="pill ${cls}">${esc(MAIL_STATUS[m.status] || m.status)}</span>`;
+}
+function setInboxBadge(n) { el("inboxTab").textContent = n ? `Inbox (${n})` : "Inbox"; }
+async function renderInbox() {
+  const d = await api("/api/inbox?show=" + inboxShow);
+  const c = d.counts || {}, setup = d.setup || {}, poll = d.poll || {};
+  setInboxBadge(c.needs_you);
+  el("inboxSetup").innerHTML = !setup.configured
+    ? `<div class="card attention"><h3>Not connected yet</h3><div class="kv">Run this in a terminal, type the support Gmail address and its app password, then restart Jarvis:</div>
+       <div class="transcript" style="max-height:none">py -3 -m jarvis_v2.email_setup</div></div>`
+    : poll.last_error ? `<div class="card attention"><div class="check"><span class="mark neg">!</span><span>${esc(poll.last_error)}</span></div></div>` : "";
+  el("inboxTiles").innerHTML = `
+    <div class="tile"><div class="label">Needs you</div><div class="value ${c.needs_you ? "neg" : ""}">${c.needs_you || 0}</div><div class="note">drafts &amp; flags to check</div></div>
+    <div class="tile"><div class="label">Customer emails</div><div class="value">${c.customer || 0}</div><div class="note">${esc(setup.from_address || "support@collectivefinds.co.uk")}</div></div>
+    <div class="tile"><div class="label">Answered by Jarvis</div><div class="value pos">${c.auto_replied || 0}</div><div class="note">simple questions</div></div>
+    <div class="tile"><div class="label">Spam blocked</div><div class="value">${c.spam || 0}</div><div class="note">never answered</div></div>`;
+  el("inboxAt").textContent = d.checking ? "Checking…" : poll.last_poll_at ? "Checked " + ago(poll.last_poll_at) : "";
+  el("inboxCheck").disabled = !setup.configured || !!d.checking;
+  document.querySelectorAll("#inboxFilter .btn").forEach(b => b.classList.toggle("on", b.dataset.show === inboxShow));
+  const msgs = d.messages || [];
+  const key = inboxShow + "|" + msgs.map(m => m.id + m.status + m.category + m.has_draft).join(",");
+  if (key !== inboxKey) {                        // don't redraw (and flicker) when nothing changed
+    inboxKey = key;
+    el("inboxList").innerHTML = msgs.map(m => `<div class="item" data-mail="${m.id}">
+        <span class="main"><b>${esc(m.from_name || m.from_addr)}</b> · ${esc(m.subject)} <span class="sub">${esc((m.snippet || "").slice(0, 90))}</span></span>
+        <span class="sub">${clock(m.received_at)}</span>${mailPill(m)}</div>`).join("")
+      || `<p class="hint">${inboxShow === "needs_you" ? "Nothing waiting for you." : "No emails here."}</p>`;
+  }
+  const auto = d.auto_replies || [];
+  if (auto.length) el("inboxAuto").innerHTML = auto.map(r => `<div class="ask" style="cursor:pointer" data-mail="${r.msg_id}"><b>To ${esc(r.to_addr)}</b> · ${esc(r.subject)} <span class="sub">${ago(r.sent_at)}</span>
+      <div style="white-space:pre-wrap;margin-top:4px">${esc(r.text)}</div></div>`).join("");
+}
+async function renderMail(id) {
+  openMail = id;
+  const m = await api("/api/inbox/" + id);
+  if (m.error) { el("mailDetail").innerHTML = ""; openMail = null; return; }
+  const answered = (m.replies || []).length > 0;
+  const replies = (m.replies || []).map(r => `<div class="ask"><b>${r.kind === "auto" ? "Jarvis answered automatically" : "You replied"}</b> <span class="sub">${clock(r.sent_at)} to ${esc(r.to_addr)}</span>
+      <div style="white-space:pre-wrap;margin-top:4px">${esc(r.text)}</div></div>`).join("");
+  const thread = (m.thread || []).map(t => `<div class="item" data-mail="${t.id}"><span class="main">${esc(t.from_name || t.from_addr)} · ${esc(t.subject)}</span><span class="sub">${clock(t.received_at)}</span></div>`).join("");
+  const log = (m.audit || []).map(a => `<div class="kv">${clock(a.ts)} · ${esc(a.action.replace(/_/g, " "))} ${esc(a.detail || "")}</div>`).join("");
+  el("mailDetail").innerHTML = `<div class="card detail"><h3>${esc(m.subject)} <button class="btn" style="float:right" data-close="mailDetail">Close</button></h3>
+    <div class="kv">From <b>${esc(m.from_name)}</b> &lt;${esc(m.from_addr)}&gt; · ${clock(m.received_at)} ${m.folder !== "INBOX" ? "· <b>was in Gmail's Spam folder</b>" : ""}</div>
+    <div class="kv">Jarvis thinks: ${mailPill(m)} ${esc(m.reason || "")}</div>
+    ${m.note ? `<div class="kv" style="color:#e0a030">${esc(m.note)}</div>` : ""}
+    <div class="transcript" style="white-space:pre-wrap;max-height:34vh">${esc(m.body || "(empty)")}</div>
+    ${replies}
+    ${answered || m.status === "spam" ? "" : `<div class="kv" style="margin-top:8px">Reply (sent as Collective customer support, from support@collectivefinds.co.uk)</div>
+      <textarea id="mailDraft" rows="9" style="width:100%;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font:inherit;font-size:13px">${esc(m.draft || "")}</textarea>
+      ${m.draft_by === "jarvis" ? `<p class="hint">Jarvis wrote this draft from the shop's pages. Check it, edit anything, then Send.</p>` : ""}`}
+    <div class="actions">
+      ${answered || m.status === "spam" ? "" : `<button class="btn go" data-mail-act="send" data-id="${m.id}">Send</button><button class="btn" data-mail-act="draft" data-id="${m.id}">Save draft</button>`}
+      ${m.status === "spam" ? `<button class="btn" data-mail-act="not_spam" data-id="${m.id}">Not spam</button>` : `<button class="btn danger" data-mail-act="spam" data-id="${m.id}">Mark as spam</button>`}
+      ${m.status === "needs_you" ? `<button class="btn" data-mail-act="done" data-id="${m.id}">Done (no reply needed)</button>` : ""}
+    </div>
+    ${thread ? `<div class="kv" style="margin-top:10px">Same conversation</div>${thread}` : ""}
+    <details style="margin-top:8px"><summary class="hint">What Jarvis did</summary>${log}</details></div>`;
+}
+async function mailAction(act_, id) {
+  const text = el("mailDraft") ? el("mailDraft").value : "";
+  if (act_ === "send") {
+    if (!text.trim()) return addMsg("jarvis", "The reply is empty, sir.");
+    if (!confirm("Send this reply to the customer now, from support@collectivefinds.co.uk?")) return;
+    document.querySelectorAll("[data-mail-act]").forEach(b => b.disabled = true);
+  }
+  const r = await act(`/api/inbox/${id}/${act_}`, act_ === "send" || act_ === "draft" ? { text } : {},
+    act_ === "spam" ? "Mark this as spam? Jarvis will never answer it." : null);
+  inboxKey = "";
+  await renderInbox();
+  if (r && !r.error) return renderMail(id);
+  document.querySelectorAll("[data-mail-act]").forEach(b => b.disabled = false);
+}
+document.querySelectorAll("#inboxFilter .btn").forEach(b => b.addEventListener("click", () => { inboxShow = b.dataset.show; inboxKey = ""; renderInbox(); }));
+el("inboxCheck").addEventListener("click", async () => { await act("/api/inbox/check", {}); renderInbox(); });
+
 // The window tells the server when it's hidden, so urgent news also becomes a Windows notification.
 function reportVisibility() { api("/api/visibility", { visible: document.visibilityState === "visible" }).catch(() => {}); }
 document.addEventListener("visibilitychange", reportVisibility);
@@ -1220,7 +1321,7 @@ reportVisibility();
 
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-close]");
+  const t = e.target.closest("[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
   if (!t) return;
   const d = t.dataset;
   if (d.close) {
@@ -1229,6 +1330,7 @@ document.addEventListener("click", async e => {
     if (d.close === "changeDetail") openChange = null;
     if (d.close === "sessionDetail") openSession = null;
     if (d.close === "jobDetail") openJob = null;
+    if (d.close === "mailDetail") openMail = null;
     return;
   }
   if (d.answer) {
@@ -1241,6 +1343,8 @@ document.addEventListener("click", async e => {
     renderApprovals();
     return activePane === "jobs" ? renderJobs() : null;
   }
+  if (d.mailAct) return mailAction(d.mailAct, d.id);
+  if (d.mail) { activateTab("inbox"); return renderMail(d.mail); }
   if (d.jobStop) { await act(`/api/jobs/${d.jobStop}/cancel`, {}, "Stop this job?"); return renderJobs(); }
   if (d.job) { activateTab("jobs"); return renderJobDetail(d.job); }
   if (d.session) return renderSession(d.session);
@@ -1272,7 +1376,7 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { jobs: renderJobs, advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+const RENDERERS = { inbox: renderInbox, jobs: renderJobs, advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);
@@ -1316,6 +1420,7 @@ every(1500, pollState);
 every(1500, pollConversation);
 every(2000, renderApprovals);
 setInterval(() => loadPanel("needs_you"), 30000);
+every(30000, async () => { if (activePane !== "inbox") setInboxBadge(((await api("/api/inbox")).counts || {}).needs_you); });
 every(4000, () => {
   if (["memory", "projects", "usage", "store"].includes(activePane)) return;   // these only change when clicked (store photos would flicker)
   return refreshPane(activePane);

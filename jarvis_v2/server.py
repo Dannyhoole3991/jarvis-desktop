@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import advertising, alerts, posting, builds, config, jobs, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
+from . import advertising, alerts, posting, builds, config, email_setup, jobs, mailbox, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -49,6 +49,7 @@ class State:
         self.orders_refreshing = False   # reading Shopify orders in Jarvis's browser
         self.orders = None               # last reading: {ok, orders, payouts, at}
         self.posting_now = None
+        self.mail_checking = False       # the business inbox is being read right now
         self.announcer = None            # alerts.Announcer, set by start()
         self.approvals = None            # jobs.ApprovalStore: what jobs asked Danny, and his answers
         self.push_phone = None           # sends the phone a fresh copy at once (set by start() for the real app)
@@ -413,6 +414,16 @@ def api_get(state, path, query):
     if path == "/api/sessions":
         snap = state.watcher.last if (state.watcher and state.watcher.last) else SS.snapshot()
         return {"sessions": [{k: v for k, v in s.items() if k != "pipe"} for s in snap], "text": SS.describe(snap)}
+    if path == "/api/inbox":
+        which = (query.get("show") or ["needs_you"])[0]
+        return {"setup": email_setup.status(), "counts": mailbox.counts(), "poll": mailbox.poll_status(),
+                "checking": state.mail_checking, "messages": mailbox.listing(which if which in mailbox.FILTERS else "all"),
+                "auto_replies": mailbox.recent_auto_replies(10)}
+    if parts[:2] == ["api", "inbox"] and len(parts) == 3:
+        m = mailbox.get(int(parts[2]))
+        if not m:
+            raise ValueError("No such email.")
+        return m
     if path == "/api/alerts":
         return {"alerts": list(reversed(state.announcer.history)) if state.announcer else []}
     if parts[:2] == ["api", "proposals"]:
@@ -532,6 +543,45 @@ def _watch_jobs(state, interval=60):
             jobs.check_long(state.executor.store, state.announcer)
         except Exception:
             pass
+        time.sleep(interval)
+
+
+MAIL_INTERVAL = 150      # seconds between inbox checks
+
+
+def _inbox(state):
+    return mailbox.Inbox(announcer=state.announcer, window_orders=lambda: state.orders)
+
+
+def _check_mail(state):
+    """Reads the business inbox once, in the background (one check at a time). Never raises."""
+    with state.panel_lock:
+        if state.mail_checking:
+            return False
+        state.mail_checking = True
+
+    def work():
+        try:
+            if email_setup.configured():
+                result = _inbox(state).poll()
+                if result.get("fetched") and state.push_phone:
+                    state.push_phone()
+        except Exception as error:
+            mailbox.log(f"check failed: {error}")
+        finally:
+            state.mail_checking = False
+    threading.Thread(target=work, daemon=True, name="jarvis-mail").start()
+    return True
+
+
+def _poll_mail(state, interval=MAIL_INTERVAL):
+    """Checks the business inbox every couple of minutes, once it's been set up."""
+    time.sleep(15)
+    while not getattr(state, "stopping", False):
+        try:
+            _check_mail(state)
+        except Exception as error:
+            mailbox.log(f"poll loop: {error}")
         time.sleep(interval)
 
 
@@ -670,6 +720,29 @@ def api_post(state, path, body, from_ui=False):
     if path == "/api/orders/refresh":
         started = _refresh_orders(state)
         return {"text": "Checking Shopify orders now." if started else "Jarvis's browser is busy; try again in a minute."}
+    if path == "/api/inbox/check":
+        if not email_setup.configured():
+            raise ValueError("The inbox isn't connected yet: run py -3 -m jarvis_v2.email_setup, then restart Jarvis.")
+        return {"text": "Checking the inbox now." if _check_mail(state) else "Already checking the inbox."}
+    m = re.match(r"^/api/inbox/(\d+)/(draft|send|spam|not_spam|done)$", path)
+    if m:
+        msg_id, action = int(m.group(1)), m.group(2)
+        if action == "draft":
+            return mailbox.save_draft(msg_id, str(body.get("text", "")), by="danny" if from_ui else "jarvis")
+        if not from_ui:
+            raise PermissionError("Only Danny can send emails or sort the inbox, with the buttons in the Inbox tab.")
+        if action == "send":
+            try:
+                out = _inbox(state).send(msg_id, str(body.get("text", "")), kind="danny")
+            except ValueError:
+                raise
+            except Exception as error:
+                mailbox.log(f"send failed for message {msg_id}: {email_setup.explain(error)}")
+                raise ValueError("It didn't send. " + email_setup.explain(error))
+            if state.push_phone:
+                threading.Thread(target=state.push_phone, daemon=True).start()
+            return out
+        return mailbox.mark(msg_id, action)
     if path == "/api/visibility":
         if state.announcer:
             state.announcer.window_visible = bool(body.get("visible", True))
@@ -794,6 +867,7 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         phone_sync.start(state)               # the phone app's tabs (read-only copy)
         state.push_phone = lambda: phone_sync.push(state)
         threading.Thread(target=_watch_jobs, args=(state,), daemon=True, name="jarvis-jobs").start()
+        threading.Thread(target=_poll_mail, args=(state,), daemon=True, name="jarvis-mail-poll").start()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
     threading.Thread(target=server.serve_forever, daemon=True, name="jarvis-v2-server").start()
