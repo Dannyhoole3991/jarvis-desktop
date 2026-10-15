@@ -210,7 +210,7 @@ def make_handler(state):
                 name = path.split("/")[3]
                 return self._json(api_panel(state, name, refresh=True))
             ui = secrets.compare_digest(self.headers.get("X-Jarvis-UI", ""), state.ui_token)
-            if path.startswith("/api/cj_pay/") and not path.endswith("/check"):
+            if path.startswith("/api/cj_pay/") and not path.endswith(("/check", "/check_paid")):
                 # Money: the press must come from the window page itself (a browser sends its Origin on POST).
                 origin = (self.headers.get("Origin") or "").rstrip("/")
                 port = self.server.server_address[1]
@@ -660,12 +660,13 @@ def cjpay_log(line):
 
 CJPAY_POLL = 20               # seconds between looks for Danny's phone answers while a Pay request is waiting
 SHIPPING_CHECK = 2 * 3600     # how often to look whether CJ has dispatched a paid order
+HANDOFF_CHECK = 180           # how often to look whether Danny has paid a hand-off order on CJ
 
 
 def _cjpay_loop(state, interval=CJPAY_POLL):
     """Expires old Pay requests, collects Danny's phone taps, and later says when CJ has dispatched."""
     from . import phone_sync
-    payer, last_ship, had = state.cjpay, time.time(), set()
+    payer, last_ship, last_handoff, had = state.cjpay, time.time(), 0.0, set()
     for r in payer.store.interrupted():
         if r["status"] == "paying":
             state.announcer.urgent(f"Jarvis stopped while paying CJ for order {r['shop_order']}, sir. Please check that order "
@@ -677,7 +678,10 @@ def _cjpay_loop(state, interval=CJPAY_POLL):
             if had - ids and state.push_phone:            # one expired or was answered: refresh the phone's copy
                 threading.Thread(target=state.push_phone, daemon=True).start()
             had = ids
-            if offers:
+            if any(o.get("method") == "handoff" for o in offers) and time.time() - last_handoff > HANDOFF_CHECK:
+                last_handoff = time.time()
+                payer.verify_handoffs()
+            if any(o.get("method") != "handoff" for o in offers):
                 answers = phone_sync.fetch_pay_answers()
                 if answers:
                     payer.take_phone_answers(answers)
@@ -802,6 +806,11 @@ def api_post(state, path, body, from_ui=False):
             raise ValueError("The Pay button didn't say how much.")
         r = state.cjpay.approve(rid, "window", amount_usd=amount)
         return {"text": f"Paying CJ ${r['amount_usd']:.2f} for order {r['shop_order']} now, sir. I'll tell you when it's done."}
+    m = re.match(r"^/api/cj_pay/(\d+)/check_paid$", path)
+    if m:
+        # "I've paid it on CJ": look at CJ's list now (reads only, never pays).
+        threading.Thread(target=state.cjpay.verify_handoffs, daemon=True, name="jarvis-cjpay-verify").start()
+        return {"text": "Checking CJ now; I'll tell you as soon as it shows paid."}
     if path == "/api/cj_pay/check":
         # Looks for orders to pay (or offers one again). Never pays: that needs Danny's tap.
         only = str(body.get("order") or "").strip() or None

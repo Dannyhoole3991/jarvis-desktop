@@ -81,12 +81,14 @@ class FakeCJ:
     """CJ's order list (tabs of rows), its payment page, and what pressing PAY does."""
 
     def __init__(self, qty=2, total="15.62", postcode="S70 1AA", extra="", pay_amount=None, tab="Awaiting Payment",
-                 outcome="success", card_text="Visa **** 4242 (saved)", card_inputs=None, logged_in=True):
+                 outcome="success", wallet="50.00", card_inputs=None, logged_in=True, wallet_page_says=None):
         self.tabs = {t: [] for t in C.UNPAID_TABS + C.PAID_TABS}
         self.row = ROW.format(qty=qty, total=total, postcode=postcode, extra=extra)
         self.tabs[tab].append(self.row)
         self.pay_amount = pay_amount or total
-        self.outcome, self.card_text, self.card_inputs, self.logged_in = outcome, card_text, card_inputs or [], logged_in
+        self.outcome, self.wallet, self.card_inputs, self.logged_in = outcome, float(wallet), card_inputs or [], logged_in
+        self.wallet_page_says = wallet_page_says          # the payment page's own view of the wallet, if different
+        self.method = None
         self.tab, self.url, self.presses, self.clicks, self.shots = None, "", 0, [], []
         self.method_chosen = self.terms = False
 
@@ -99,13 +101,18 @@ class FakeCJ:
 
     def _pay_text(self):
         text = PAY_PAGE.format(amount=self.pay_amount)
-        return text + ("\n" + self.card_text if self.method_chosen else "")
+        if not self.method_chosen:
+            return text
+        enough = self.wallet_page_says if self.wallet_page_says is not None else self.wallet >= float(self.pay_amount)
+        return text + ("\nWallet balance $%.2f" % self.wallet if enough else "\n$%.2f Insufficient balance" % self.wallet)
 
     def open(self, url):
         if not self.logged_in:
             self.url = "https://www.cjdropshipping.com/login.html?target=x"
             return self._snap("Sign in")
         self.url, self.method_chosen, self.terms = url, False, False
+        if url == C.WALLET_URL:
+            return self._snap("My Wallet\nAccount Balance ($)\n%.2f\nRecharge" % self.wallet)
         return self._snap(self._pay_text() if "/mine/payment" in url else "My CJ\nOrders")
 
     def click_tab(self, name):
@@ -133,9 +140,10 @@ class FakeCJ:
         return False, "no such button in the order's row", self._snap("")
 
     def choose_method(self, label):
+        assert label == C.WALLET_LABEL, "Jarvis only ever chooses the CJ wallet"
         if "/mine/payment" not in self.url:
             return None
-        self.method_chosen = True
+        self.method_chosen, self.method = True, label
         return self._snap(self._pay_text(), inputs=list(self.card_inputs))
 
     def tick_terms(self):
@@ -149,6 +157,7 @@ class FakeCJ:
 
     def wait_result(self, tabs_before, seconds=40):
         if self.outcome == "success":
+            self.wallet -= float(self.pay_amount)
             self._move("Pending")
             return self._snap("Payment successful")
         if self.outcome == "otp":
@@ -235,6 +244,11 @@ class PayTests(unittest.TestCase):
         self.assertEqual(C.redact("card 4111 1111 1111 1111 ok, order DP2610142124070665600"),
                          "card [number hidden] ok, order DP2610142124070665600")
 
+    def test_wallet_balance(self):
+        self.assertEqual(C.parse_wallet("Account Balance ($)\n20.00"), 20.0)
+        self.assertEqual(C.parse_wallet("Account Balance ($): 1,250.5"), 1250.5)
+        self.assertIsNone(C.parse_wallet("Sign in"))
+
     def test_the_cj_driver_cannot_type(self):
         for name in ("fill", "type", "type_text", "press_key", "paste", "keyboard"):
             self.assertFalse(hasattr(C.CJBrowser, name), name)
@@ -253,13 +267,16 @@ class PayTests(unittest.TestCase):
         self.assertEqual(r["status"], "offered")
         self.assertIn("Pay CJ $15.62 for order #1001: 2 × Ceramic Christmas Tree Light - 17cm, to J Doe, Barnsley.", r["summary"])
         self.assertIn("You make about £5.85.", r["summary"])          # 18.35 - 15.62 * 0.80
-        self.assertIn("Tap Pay", self.speaker.said[-1])
+        self.assertEqual(r["method"], "wallet")
+        self.assertIn("tap Pay", self.speaker.said[-1])
         self.assertEqual(self.cj.presses, 0, "preparing never pays")
 
         p.approve(r["id"], "window", amount_usd=15.62, background=False)
         done = p.store.get(r["id"])
         self.assertEqual((done["status"], done["decided_by"], self.cj.presses), ("paid", "window", 1))
-        self.assertIn("CJ is paid $15.62 for order #1001", self.speaker.said[-1])
+        self.assertIn("CJ is paid $15.62 for order #1001 from your wallet", self.speaker.said[-1])
+        self.assertNotIn("wallet is down", self.speaker.said[-1])
+        self.assertEqual(self.cj.method, C.WALLET_LABEL)
         steps = [e["step"] for e in self.audit(done)]
         for step in ("shopify", "cj_row", "payment_page", "offered", "approved", "recheck_shopify", "status_before",
                      "pressing_pay", "after_pay", "status_after", "finished"):
@@ -376,7 +393,7 @@ class PayTests(unittest.TestCase):
         self.assertIn("doesn't show the same order and amount", self.speaker.said[-1])
 
     # ---------------------------------------------------------------- stopping for Danny
-    def test_card_details_asked_stops_before_pay(self):
+    def test_card_details_or_password_asked_stops_before_pay(self):
         cvv = {"tag": "input", "type": "text", "name": "cvv", "placeholder": "CVV", "id": "", "aria": "", "autocomplete": "",
                "field_label": ""}
         p = self.payer(FakeCJ(card_inputs=[cvv]))
@@ -386,12 +403,57 @@ class PayTests(unittest.TestCase):
         self.assertEqual((done["status"], self.cj.presses), ("blocked", 0))
         self.assertIn("card details", done["result"])
 
-    def test_no_saved_card_stops_before_pay(self):
-        p = self.payer(FakeCJ(card_text="Add a new card"))
+    def test_wallet_short_means_danny_pays_on_cj(self):
+        p = self.payer(FakeCJ(wallet="0.00"))
+        r = self.offered(p)
+        self.assertEqual(r["method"], "handoff")
+        self.assertIn("card ending 9336", self.speaker.said[-1])
+        self.assertNotIn("top up", " ".join(self.speaker.said).lower())
+        self.assertEqual(C.public(r)["pay_url"], PAY_URL)
+        with self.assertRaises(ValueError):
+            p.approve(r["id"], "window", amount_usd=15.62, background=False)
+        self.assertEqual(p.take_phone_answers([{"id": r["id"], "action": "pay", "nonce": r["nonce"], "amount_usd": 15.62}]), [])
+        self.assertEqual((p.store.get(r["id"])["status"], self.cj.presses), ("offered", 0))
+        self.assertGreater(r["expires_at"] - r["created_at"], 23 * 3600, "the hand-off stays up for a day")
+
+    def test_handoff_is_marked_paid_once_cj_shows_it(self):
+        p = self.payer(FakeCJ(wallet="0.00"))
+        r = self.offered(p)
+        self.assertEqual(p.verify_handoffs(), [], "not paid yet")
+        self.assertEqual(p.store.get(r["id"])["status"], "offered")
+        self.cj._move("Pending")                           # Danny paid it on CJ himself
+        self.assertEqual(p.verify_handoffs(), ["#1001"])
+        done = p.store.get(r["id"])
+        self.assertEqual((done["status"], done["decided_by"], self.cj.presses), ("paid", "danny_on_cj", 0))
+        self.assertIn("CJ shows order #1001 as paid", self.speaker.said[-1])
+        self.assertEqual(p.verify_handoffs(), [])
+        self.assertEqual(p.store.spent_today(), 15.62)
+        self.cj._move("Dispatched")
+        self.cj.tabs["Dispatched"][0] += "\nTracking No.: LP00123456789CN"
+        self.cj.row = self.cj.tabs["Dispatched"][0]
+        self.assertEqual(p.check_shipping(), ["#1001"])
+        self.assertIn("tracking LP00123456789CN", self.speaker.said[-1])
+
+    def test_wallet_dropped_since_the_offer_blocks(self):
+        p = self.payer()
+        r = self.offered(p)
+        self.cj.wallet = 5.0
+        p.approve(r["id"], "window", amount_usd=15.62, background=False)
+        done = p.store.get(r["id"])
+        self.assertEqual((done["status"], self.cj.presses), ("blocked", 0))
+        self.assertIn("only has $5.00", done["result"])
+
+    def test_payment_page_says_insufficient_blocks(self):
+        p = self.payer(FakeCJ(wallet_page_says=False))
         r = self.offered(p)
         p.approve(r["id"], "window", amount_usd=15.62, background=False)
         self.assertEqual((p.store.get(r["id"])["status"], self.cj.presses), ("blocked", 0))
-        self.assertIn("save your card on CJ", self.speaker.said[-1])
+
+    def test_low_wallet_note_after_paying(self):
+        p = self.payer(FakeCJ(wallet="30.00"))
+        r = self.offered(p)
+        p.approve(r["id"], "window", amount_usd=15.62, background=False)
+        self.assertIn("Your CJ wallet is down to $14.38.", self.speaker.said[-1])
 
     def test_bank_check_after_pay_stops_without_retry(self):
         p = self.payer(FakeCJ(outcome="otp"))

@@ -858,8 +858,14 @@ function askCard(a) {
 // ------------------------------------------------------------ paying CJ (one tap = one order, once)
 function payCard(o) {
   const mins = Math.max(0, Math.round((o.expires_at - Date.now() / 1000) / 60));
+  if (o.method === "handoff") {
+    return `<div class="ask pay"><b>&#128179; ${esc(o.summary)}</b>
+    <div class="hint">Checked and ready. CJ needs your card's security code, so you pay this one: open CJ, choose your saved card, type the code, tick the terms box, press PAY. Jarvis then checks CJ shows it paid.</div>
+    <div class="actions"><a class="btn go" href="${esc(o.pay_url)}" target="_blank" rel="noopener">Open CJ to pay $${Number(o.amount_usd).toFixed(2)}</a>
+      <button class="btn" data-paycheck="${o.id}">I've paid it</button><button class="btn" data-payno="${o.id}">Not now</button></div></div>`;
+  }
   return `<div class="ask pay"><b>&#128179; ${esc(o.summary)}</b>
-    <div class="hint">Jarvis presses Pay on CJ with the card you saved there. He never types card details.</div>
+    <div class="hint">Paid from your CJ wallet: Jarvis presses Pay on CJ for this one order. No card involved.</div>
     <div class="actions"><button class="btn go" data-pay="${o.id}" data-amount="${o.amount_usd}" data-order="${esc(o.shop_order)}">Pay $${Number(o.amount_usd).toFixed(2)}</button>
       <button class="btn" data-payno="${o.id}">Not now</button><span class="hint">expires in ${mins} min</span></div></div>`;
 }
@@ -1350,7 +1356,7 @@ reportVisibility();
 
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-pay],[data-payno],[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
+  const t = e.target.closest("[data-pay],[data-payno],[data-paycheck],[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
   if (!t) return;
   const d = t.dataset;
   if (d.close) {
@@ -1369,6 +1375,7 @@ document.addEventListener("click", async e => {
     payKey = "";
     return renderPay();
   }
+  if (d.paycheck) return act(`/api/cj_pay/${d.paycheck}/check_paid`, {});
   if (d.payno) {
     t.closest(".ask").querySelectorAll("button").forEach(b => b.disabled = true);
     await act(`/api/cj_pay/${d.payno}/reject`, {});

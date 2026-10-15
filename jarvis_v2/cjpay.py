@@ -1,16 +1,22 @@
 """
 Paying CJdropshipping for a shop order, one tap at a time.
 
-When a Shopify order comes in, CJ gets a copy of it but only ships once it's paid. Jarvis prepares
-that payment and asks Danny: "Pay CJ $15.62 for order #1001: 2 x Ceramic Christmas Tree Light, to
-J Hoole, Barnsley. You make about £5." Danny taps Pay (in the Jarvis window, or on his phone) and
-Jarvis presses Pay on CJ's payment page with the card Danny SAVED ON CJ HIMSELF.
+When a Shopify order comes in, CJ gets a copy of it but only ships once it's paid. Jarvis checks the
+order, gets CJ's payment page ready and asks Danny ("Pay CJ $15.62 for order #1001: 2 x Ceramic
+Christmas Tree Light, to J Hoole, Barnsley. You make about £5."), in one of two ways:
+  - wallet one-tap: when Danny's CJ wallet balance covers the order, Danny taps Pay (Jarvis window or
+    phone) and Jarvis pays it with "Pay with CJ wallet". No card is involved at all.
+  - hand-off (the default while the wallet is short): CJ asks for the card's CVV on every card payment
+    (seen live 2026-10-15), and Jarvis never types that. So the card opens CJ's payment page for Danny,
+    who picks his saved card (ending 9336), types the CVV and presses PAY himself. Jarvis then checks
+    CJ's order list until it shows paid, and follows the shipping.
 
 The rules are enforced in this code, not left to a model:
-  - Jarvis never types, reads, stores or logs card numbers, CVVs or expiry dates. The CJ driver has
-    no way to type at all: it can open pages, click tabs, click one named button in one order's row,
-    choose "Pay with Card", tick the terms box and press PAY. If CJ asks for card details, a CVV, a
-    bank check (3-D Secure / one-time code) or a human check, Jarvis stops and tells Danny.
+  - Jarvis never types, reads, stores or logs card numbers, CVVs or expiry dates, and never pays by
+    card itself. The CJ driver has no way to type at all: it can open pages, click tabs, click one named
+    button in one order's row, choose "Pay with CJ wallet", tick the terms box and press PAY. If CJ asks
+    for card details, a CVV, a password, a bank check (3-D Secure / one-time code) or a human check,
+    Jarvis stops and tells Danny.
   - A payment happens only right after Danny's tap on that exact request (the window's UI token, or
     a phone answer carrying the request's one-off code and amount). One tap = one order, once: the
     request moves offered -> approved -> paying in single database steps, so a second tap does nothing.
@@ -37,9 +43,12 @@ from . import config
 CJ_LIST_URL = "https://www.cjdropshipping.com/mine/dropshipping/orderList"
 SHOPIFY_ORDER_URL = "https://admin.shopify.com/store/mwrfta-mh/orders/{id}"
 LIMITS_FILE = os.path.join(os.path.expanduser("~"), ".jarvis_v2", "cj_pay_limits.json")
-DEFAULT_LIMITS = {"enabled": True, "max_per_order_usd": 40.0, "max_per_day_usd": 60.0, "usd_to_gbp": 0.80}
+DEFAULT_LIMITS = {"enabled": True, "max_per_order_usd": 40.0, "max_per_day_usd": 60.0, "usd_to_gbp": 0.80,
+                  "card_last4": "9336", "low_wallet_usd": 20.0}
+WALLET_URL = "https://www.cjdropshipping.com/mine/wallet"
 ABSOLUTE_MAX_USD = 90.0          # under the £75 card limit whatever the settings file says
-OFFER_SECONDS = 30 * 60          # a Pay request expires after half an hour (it can be offered again)
+OFFER_SECONDS = 30 * 60          # a wallet Pay request expires after half an hour (it can be offered again)
+HANDOFF_SECONDS = 24 * 3600      # a "you pay it on CJ" card stays up for a day while Jarvis watches for it being paid
 REOFFER_SECONDS = 3 * 3600       # an order whose offer expired or was turned down is offered again after this
 RETRY_PREPARE_SECONDS = 30 * 60  # an order that couldn't be prepared is looked at again after this
 
@@ -48,7 +57,7 @@ UNPAID_TABS = ("Awaiting Payment", "Orders Picking", "Imported")
 PAID_TABS = ("Pending", "Processing", "Dispatched", "Completed")
 MOVE_ON_LABEL = r"^\s*add to orders? picking\s*$"
 TO_PAYMENT_LABEL = r"^\s*(pay|pay now|go to pay|to pay|payment|checkout|check out)\s*$"
-PAY_METHOD_LABEL = "Pay with Card"
+WALLET_LABEL = "Pay with CJ wallet"
 
 UK_POSTCODE_RE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b")
 USD_RE = re.compile(r"(?:US\s?\$|USD\s?\$?|\$)\s?(\d[\d,]*\.\d{2})")
@@ -56,7 +65,8 @@ GBP_RE = re.compile(r"(?:£|GBP\s?)\s?(\d[\d,]*\.\d{2})")
 CJ_ORDER_RE = re.compile(r"\b(?:DP|CJ)[A-Z]{0,3}\d{12,}\b")
 SKU_RE = re.compile(r"\bCJ[A-Z]{2,}\d+[A-Z0-9]*\b")
 QTY_RE = re.compile(r"(?i)(?:^|\s)(?:[x×]\s?(\d{1,3})|qty\.?:?\s*(\d{1,3})|quantity:?\s*(\d{1,3})|(\d{1,3})\s*(?:pcs|pieces|units?))(?:\s|$)")
-MASKED_CARD_RE = re.compile(r"(?i)((\*|•|·|x){2,}[\s*•·x-]*\d{4}\b|ending (in )?\d{4}\b)")
+WALLET_BALANCE_RE = re.compile(r"(?i)account\s*balance\s*\(\s*(?:US)?\$\s*\)\s*[:：]?\s*\$?\s*(\d[\d,]*(?:\.\d{1,2})?)")
+INSUFFICIENT_RE = re.compile(r"(?i)insufficient\s+balance")
 CARD_ENTRY_TEXT_RE = re.compile(r"(?i)(enter (your )?card (number|details)|cvv|cvc|security code|expir(y|ation) date|"
                                 r"3-?d ?secure|one[- ]time (pass)?code|verification code|enter (the )?code|"
                                 r"authenticat(e|ion) (this|your|the) (payment|purchase)|confirm (it'?s|it is) you|sms code)")
@@ -110,7 +120,14 @@ def limits(path=None):
     out["max_per_order_usd"] = max(0.0, min(out["max_per_order_usd"], ABSOLUTE_MAX_USD))
     out["max_per_day_usd"] = max(0.0, min(out["max_per_day_usd"], ABSOLUTE_MAX_USD))
     out["usd_to_gbp"] = max(0.6, min(out["usd_to_gbp"], 1.2))
+    out["card_last4"] = re.sub(r"\D", "", out["card_last4"])[-4:]
     return out
+
+
+def parse_wallet(text):
+    """CJ's wallet page: the account balance in dollars, or None if it can't be read."""
+    m = WALLET_BALANCE_RE.search(text or "")
+    return _money(m.group(1)) if m else None
 
 
 # ------------------------------------------------------------------ reading pages
@@ -298,7 +315,8 @@ CREATE TABLE IF NOT EXISTS cj_pay (
     result TEXT,
     folder TEXT,
     tracking TEXT,
-    shipped_told INTEGER DEFAULT 0
+    shipped_told INTEGER DEFAULT 0,
+    method TEXT DEFAULT 'wallet'       -- wallet (Jarvis pays on Danny's tap) | handoff (Danny pays on CJ himself)
 );
 CREATE TABLE IF NOT EXISTS cj_pay_seen (
     shop_order TEXT PRIMARY KEY,
@@ -319,6 +337,8 @@ class PayStore:
         self.lock = threading.Lock()
         with self._conn() as c:
             c.executescript(SCHEMA)
+            if "method" not in [row["name"] for row in c.execute("PRAGMA table_info(cj_pay)")]:
+                c.execute("ALTER TABLE cj_pay ADD COLUMN method TEXT DEFAULT 'wallet'")
 
     @contextlib.contextmanager
     def _conn(self):
@@ -353,12 +373,13 @@ class PayStore:
 
     def create(self, **fields):
         now = fields.pop("now", None) or time.time()
+        lasts = HANDOFF_SECONDS if fields.get("method") == "handoff" else OFFER_SECONDS
         with self.lock, self._conn() as c:
             busy = c.execute(f"SELECT id FROM cj_pay WHERE shop_order=? AND status IN ({','.join('?' * len(OPEN + FINAL_FOR_ORDER))})",
                              (fields["shop_order"], *OPEN, *FINAL_FOR_ORDER)).fetchone()
             if busy:
                 raise ValueError(f"Order {fields['shop_order']} already has a payment request (#{busy['id']}).")
-            cols = dict(fields, nonce=secrets.token_urlsafe(12), status="offered", created_at=now, expires_at=now + OFFER_SECONDS)
+            cols = dict(fields, nonce=secrets.token_urlsafe(12), status="offered", created_at=now, expires_at=now + lasts)
             cur = c.execute(f"INSERT INTO cj_pay ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(cols.values()))
             return cur.lastrowid
 
@@ -376,6 +397,8 @@ class PayStore:
             raise ValueError("No such payment request.")
         if r["status"] != "offered":
             raise ValueError(f"That payment request is already {r['status']}; nothing more will be paid.")
+        if r.get("method") == "handoff":
+            raise ValueError("This one needs your card's security code, so you pay it on CJ's page yourself; I'll check it went through.")
         if nonce is not None and not secrets.compare_digest(str(nonce), r["nonce"]):
             raise PermissionError("That approval doesn't match this payment request.")
         if amount_usd is not None and abs(float(amount_usd) - r["amount_usd"]) > 0.005:
@@ -410,6 +433,13 @@ class PayStore:
         with self.lock, self._conn() as c:
             c.execute(f"UPDATE cj_pay SET {','.join(k + '=?' for k in fields)} WHERE id=?", (*fields.values(), int(rid)))
         return self.get(rid)
+
+    def mark_paid_by_danny(self, rid, result):
+        """A hand-off order Danny paid on CJ himself (seen on CJ's list). Only from 'offered', once."""
+        now = time.time()
+        with self.lock, self._conn() as c:
+            return c.execute("UPDATE cj_pay SET status='paid', decided_at=?, decided_by='danny_on_cj', finished_at=?, result=? "
+                             "WHERE id=? AND status='offered' AND method='handoff'", (now, now, result, int(rid))).rowcount == 1
 
     def finish(self, rid, status, result):
         return self.update(rid, status=status, result=redact(result)[:1000], finished_at=time.time())
@@ -449,10 +479,12 @@ class PayStore:
 def public(r):
     """A request as the window and the phone see it (the nonce goes to the phone: its answer must carry it)."""
     keys = ("id", "shop_order", "cj_order", "amount_usd", "summary", "status", "created_at", "expires_at", "decided_at",
-            "decided_by", "finished_at", "result", "tracking", "nonce")
+            "decided_by", "finished_at", "result", "tracking", "nonce", "method", "pay_url")
     out = {k: r.get(k) for k in keys}
     if r.get("status") != "offered":
         out.pop("nonce")
+    if r.get("method") != "handoff" or r.get("status") != "offered":
+        out.pop("pay_url")
     return out
 
 
@@ -616,7 +648,7 @@ class CJBrowser:
             return new
         return page
 
-    def choose_method(self, label=PAY_METHOD_LABEL):
+    def choose_method(self, label=WALLET_LABEL):
         def act(page):
             loc = page.get_by_text(re.compile(r"^\s*" + re.escape(label) + r"\s*$", re.I))
             if loc.count() != 1:
@@ -693,6 +725,7 @@ class Payer:
         self.clock = clock
         self.busy = threading.Lock()                    # one CJ job at a time in this process
         self.told = set()
+        self.after_balance = {}                         # request id -> wallet balance after paying
 
     # -- small helpers
     def say(self, text, once_key=None):
@@ -789,8 +822,14 @@ class Payer:
         self.store.mark_seen(number, out.get("outcome") or ("offered" if out.get("ok") else "problem"), out.get("why") or "")
         if out.get("ok"):
             r = out["request"]
-            self.say(f"New order {number}, sir. {r['summary'].replace(' × ', ' of the ')} Tap Pay in the Jarvis window "
-                     f"or on your phone, or ignore it and nothing is paid.")
+            said = r["summary"].replace(" × ", " of the ")
+            if r["method"] == "wallet":
+                self.say(f"New order {number}, sir. {said} It can come from your CJ wallet: tap Pay in the Jarvis window "
+                         f"or on your phone, or ignore it and nothing is paid.")
+            else:
+                self.say(f"New order {number}, sir. {said} It all checks out. CJ needs your card's security code, so tap "
+                         f"Open CJ in the Jarvis window or on your phone, choose the card ending "
+                         f"{limits(self.limits_path)['card_last4']}, type the code and press Pay. I'll check it went through.")
             self.push()
         elif out.get("outcome") == "already_paid":
             pass
@@ -850,9 +889,11 @@ class Payer:
         if "/mine/payment" not in (snap.get("url") or ""):
             self._shot(folder, "unexpected-page")
             return {"ok": False, "outcome": "problem", "why": "CJ didn't open its payment page"}
-        why = needs_danny(dict(snap, text=""))         # the method list may mention card words; only fields/frames count here
-        if why:
-            return {"ok": False, "outcome": "problem", "why": why}
+        # Only a human check stops the preparing: the card tile may already show its CVV box, which is for Danny
+        # (hand-off) and is checked again, with everything else, before any wallet payment.
+        from .job_browser import page_blocked
+        if page_blocked(snap):
+            return {"ok": False, "outcome": "problem", "why": "CJ is showing a human check (\"are you a robot\")"}
         pay = parse_payment_page(snap.get("text"))
         self._shot(folder, "cj-payment-page")
         self.audit(folder, step="payment_page", url=snap["url"], orders=pay["orders"], amount_usd=pay["amount_usd"])
@@ -864,15 +905,19 @@ class Payer:
             return {"ok": False, "outcome": "blocked", "why": "; ".join(problems)}
 
         amount = pay["amount_usd"]
+        pay_url = snap["url"]
+        balance = self.wallet_balance()
+        method = "wallet" if balance is not None and balance >= amount else "handoff"
+        self.audit(folder, step="wallet", balance_usd=balance, method=method)
         net = order.get("net_gbp")
         profit = (net if net is not None else shop["paid_gbp"] * 0.97) - amount * lim["usd_to_gbp"]
         summary = summary_text(number, shop, amount, profit)
         check = {"items": shop["items"], "postcode": shop["postcode"], "surname": _surname(shop["name"]),
                  "paid_gbp": shop["paid_gbp"], "skus": row["skus"]}
         rid = self.store.create(shop_order=number, shopify_id=str(order["id"]), cj_order=row["cj_orders"][0],
-                                pay_order=pay["orders"][0], pay_url=snap["url"], amount_usd=amount, paid_gbp=shop["paid_gbp"],
-                                summary=summary, check_json=json.dumps(check), folder=folder)
-        self.audit(folder, step="offered", request=rid, amount_usd=amount, summary=summary)
+                                pay_order=pay["orders"][0], pay_url=pay_url, amount_usd=amount, paid_gbp=shop["paid_gbp"],
+                                summary=summary, check_json=json.dumps(check), folder=folder, method=method)
+        self.audit(folder, step="offered", request=rid, amount_usd=amount, summary=summary, method=method)
         return {"ok": True, "outcome": "offered", "request": self.store.get(rid)}
 
     # -- 2. Danny's tap
@@ -911,7 +956,11 @@ class Payer:
         self.store.mark_seen(r["shop_order"], "paid" if status == "paid" else ("problem" if status == "blocked" else status), why)
         number, amount = r["shop_order"], r["amount_usd"]
         if status == "paid":
-            self.say(f"Done, sir: CJ is paid ${amount:.2f} for order {number}, and they'll ship it. I'll tell you when it's dispatched.")
+            left = self.after_balance.pop(rid, None)
+            low = limits(self.limits_path)["low_wallet_usd"]
+            note = f" Your CJ wallet is down to ${left:.2f}." if left is not None and left < low else ""
+            self.say(f"Done, sir: CJ is paid ${amount:.2f} for order {number} from your wallet, and they'll ship it. "
+                     f"I'll tell you when it's dispatched.{note}")
         elif status == "blocked":
             self.say(f"I didn't pay CJ for order {number}, sir: {why}. Nothing was charged.")
         elif status == "failed":
@@ -963,6 +1012,16 @@ class Payer:
                 or abs(row["total_usd"] - amount) > 0.005:
             return "blocked", "CJ's order has changed since I offered it"
 
+        # The wallet still covers it (it may have paid something else since).
+        if r.get("method") != "wallet":
+            return "blocked", "this order is one you pay on CJ yourself"
+        balance = self.wallet_balance()
+        if balance is None:
+            return "blocked", "I couldn't read your CJ wallet balance"
+        if balance < amount:
+            return "blocked", f"your CJ wallet only has ${balance:.2f} now"
+        self.audit(folder, step="wallet_before", balance_usd=balance)
+
         # The payment page: same order, same amount, nothing asking for card details.
         snap = self.driver.open(r["pay_url"])
         pay = parse_payment_page((snap or {}).get("text"))
@@ -970,16 +1029,16 @@ class Payer:
                 or pay["amount_usd"] is None or abs(pay["amount_usd"] - amount) > 0.005:
             self._shot(folder, "payment-page-changed")
             return "blocked", "CJ's payment page doesn't show the same order and amount any more"
-        snap = self.driver.choose_method(PAY_METHOD_LABEL)
+        snap = self.driver.choose_method(WALLET_LABEL)
         if snap is None:
-            return "blocked", "I couldn't find 'Pay with Card' on CJ's payment page"
+            return "blocked", "I couldn't find 'Pay with CJ wallet' on CJ's payment page"
         why = needs_danny(snap)
         if why:
-            self._shot(folder, "card-details-asked")
-            return "blocked", why + " (Jarvis only pays with the card you saved on CJ)"
-        if not MASKED_CARD_RE.search(snap.get("text") or ""):
-            self._shot(folder, "no-saved-card")
-            return "blocked", "I can't see a saved card on CJ's payment page; save your card on CJ first"
+            self._shot(folder, "details-asked")
+            return "blocked", why + " (Jarvis never types those)"
+        if INSUFFICIENT_RE.search(snap.get("text") or ""):
+            self._shot(folder, "wallet-short")
+            return "blocked", "CJ says your wallet balance isn't enough for this order"
         ok, what, snap = self.driver.tick_terms()
         if not ok:
             return "blocked", f"I couldn't tick CJ's terms box ({what})"
@@ -1019,8 +1078,45 @@ class Payer:
         self._shot(folder, "status-after")
         self.audit(folder, step="status_after", tab=tab)
         if tab in PAID_TABS:
+            self.after_balance[r["id"]] = self.wallet_balance()
             return "paid", f"CJ now shows the order as {tab.lower()}"
         return "unclear", (f"CJ still lists it under {tab}" if tab else "I can't find the order on CJ's list now")
+
+    def wallet_balance(self):
+        """Danny's CJ wallet balance in dollars (None if it can't be read)."""
+        try:
+            snap = self.driver.open(WALLET_URL)
+        except Exception:
+            return None
+        if "login" in ((snap or {}).get("url") or "").lower():
+            return None
+        return parse_wallet((snap or {}).get("text"))
+
+    # -- 3b. hand-off orders: Danny pays on CJ himself; Jarvis watches for it
+    def verify_handoffs(self):
+        """For each open hand-off: has CJ's list moved it to a paid tab? Then it's paid (once). Never clicks anything."""
+        todo = [r for r in self.store.offered() if r.get("method") == "handoff"]
+        if not todo or not self.busy.acquire(blocking=False):
+            return []
+        paid = []
+        try:
+            with self.driver.hold():
+                if self._open_list():
+                    return []
+                for r in todo:
+                    tab, rows = self.find_on_cj(r["shop_order"])
+                    self.audit(r["folder"], step="handoff_check", tab=tab)
+                    if tab in PAID_TABS and self.store.mark_paid_by_danny(r["id"], f"you paid it on CJ; CJ shows it as {tab.lower()}"):
+                        self._shot(r["folder"], "paid-by-danny")
+                        self.audit(r["folder"], step="finished", request=r["id"], status="paid", by="danny_on_cj")
+                        self.store.mark_seen(r["shop_order"], "paid", "Danny paid it on CJ")
+                        self.say(f"CJ shows order {r['shop_order']} as paid, sir. I'll tell you when it's dispatched.")
+                        paid.append(r["shop_order"])
+        finally:
+            self.busy.release()
+        if paid:
+            self.push()
+        return paid
 
     # -- 4. later: dispatched?
     def check_shipping(self):
@@ -1079,7 +1175,10 @@ def describe(view):
     """One spoken-style paragraph for the brain's cj_pay_status tool."""
     parts = []
     for o in view.get("offers") or []:
-        parts.append(f"Waiting for Danny's tap: {o['summary']}")
+        if o.get("method") == "handoff":
+            parts.append(f"Waiting for Danny to pay it on CJ himself (CJ needs his card's security code): {o['summary']}")
+        else:
+            parts.append(f"Waiting for Danny's Pay tap (from his CJ wallet): {o['summary']}")
     for r in (view.get("recent") or [])[:5]:
         parts.append(f"Order {r['shop_order']} (${r['amount_usd']:.2f}): {r['status']}" + (f" ({r['result']})" if r.get("result") else "")
                      + (f", tracking {r['tracking']}" if r.get("tracking") else "") + ".")
