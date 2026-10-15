@@ -138,9 +138,25 @@ def _pick_profile():
     return spare if not _profile_in_use(spare) else os.path.join(config.DATA_DIR, f"webview_{os.getpid()}")
 
 
+def _tell(message):
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, "Jarvis", 0x40)
+    except Exception:
+        print(message)
+
+
 def main():
     import webview
-    srv, state = server.start()
+    if server.already_running():
+        _tell("Jarvis is already open. Look for the Jarvis window on your taskbar.\n\n"
+              "To restart him, close that window first, then run START_JARVIS_V2 again.")
+        return
+    try:
+        srv, state = server.start()
+    except OSError:
+        _tell("Jarvis couldn't start because another copy is still closing. Wait a few seconds and try again.")
+        return
     server.set_engine_brain(True)
     threading.Thread(target=_start_engine, daemon=True).start()
     api = WindowApi()

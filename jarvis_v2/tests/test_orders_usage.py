@@ -148,3 +148,29 @@ class BrowserLockTests(unittest.TestCase):
             mine.acquire(1)                          # re-entrant in this program
             mine.release(); mine.release()
             holder.wait(10)
+
+
+class SingleWindowTests(unittest.TestCase):
+    def test_a_second_server_cannot_share_the_port(self):
+        st = server.State(router=mock.Mock(), executor=mock.Mock())
+        first = server._Server(("127.0.0.1", 0), server.make_handler(st))
+        try:
+            with self.assertRaises(OSError):
+                server._Server(("127.0.0.1", first.server_address[1]), server.make_handler(st))
+        finally:
+            first.server_close()
+
+    def test_closing_window_only_switches_off_its_own_brain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_file, flag = os.path.join(tmp, "token"), os.path.join(tmp, "flag")
+            with mock.patch.object(server, "TOKEN_FILE", token_file), mock.patch.object(server, "ENGINE_FLAG_FILE", flag):
+                server.set_engine_brain(True)
+                with open(token_file, "w") as f:
+                    f.write("the-other-window")
+                mine = mock.Mock(token="mine", watcher=None, router=mock.Mock(brains={}, quick=None))
+                server.stop(mock.Mock(), mine)
+                self.assertEqual(open(flag).read(), "1", "another window's brain stays on")
+                with open(token_file, "w") as f:
+                    f.write("mine")
+                server.stop(mock.Mock(), mine)
+                self.assertEqual(open(flag).read(), "0")

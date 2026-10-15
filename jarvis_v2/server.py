@@ -661,6 +661,28 @@ def set_engine_brain(enabled):
         f.write("1" if enabled else "0")
 
 
+class _Server(http.server.ThreadingHTTPServer):
+    """Refuses a port another copy is already using. Python's default (allow_reuse_address)
+    let a second Jarvis window bind the SAME port on Windows (confirmed live 2026-10-15): it then
+    overwrote the first window's token and, on closing, switched the voice engine off Claude."""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        import socket
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def already_running(port=PORT):
+    """True if a Jarvis v2 server already answers on this port."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     """watch=None: watch sessions/proposals only for the real app (a passed-in test executor means no watcher)."""
     config.ensure_dirs()
@@ -669,8 +691,11 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     if executor is None:
         executor = runs.Executor()
         executor.listeners += [builds.on_run_change, selfimprove.on_run_change, alerts.on_run_change(announcer)]
-        executor.start()
     state = State(router or R.default_router(), executor)
+    # Claim the port FIRST: if another copy has it, fail here, before starting any work or touching its files.
+    server = _Server(("127.0.0.1", port), make_handler(state))
+    if real:
+        executor.start()
     state.announcer = announcer
     announcer.thinking = lambda: state.thinking
     state.router.on_handoff = announcer.urgent          # the quick voice's "On it, sir" is spoken at once
@@ -680,15 +705,23 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         threading.Thread(target=_keep_usage_fresh, args=(state,), daemon=True, name="jarvis-usage").start()
         from . import phone_sync
         phone_sync.start(state)               # the phone app's tabs (read-only copy)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
     threading.Thread(target=server.serve_forever, daemon=True, name="jarvis-v2-server").start()
     return server, state
 
 
+def owns_token(state):
+    try:
+        with open(TOKEN_FILE, encoding="utf-8") as f:
+            return f.read().strip() == state.token
+    except OSError:
+        return False
+
+
 def stop(server, state):
-    set_engine_brain(False)
+    if owns_token(state):            # never switch off a brain another window is running
+        set_engine_brain(False)
     try:
         if state.watcher:
             state.watcher.stop()
