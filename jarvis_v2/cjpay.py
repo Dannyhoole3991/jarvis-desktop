@@ -808,6 +808,8 @@ class Payer:
             return {"ok": False, "why": "not needed right now"}
         if any(r["status"] in OPEN + FINAL_FOR_ORDER for r in self.store.for_order(number)):
             return {"ok": False, "why": f"order {number} already has a payment request"}
+        if (self.store.seen(number) or {}).get("outcome") in ("already_paid", "paid"):
+            return {"ok": False, "why": f"order {number} is already paid on CJ"}
         if not self.busy.acquire(blocking=False):
             return {"ok": False, "why": "Jarvis is already busy with CJ"}
         folder = self._job_folder(number)

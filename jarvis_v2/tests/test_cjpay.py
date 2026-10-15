@@ -499,6 +499,13 @@ class PayTests(unittest.TestCase):
     def test_logged_out_of_cj(self):
         self.assertNotOffered(self.payer(FakeCJ(logged_in=False)), "logged out of CJdropshipping")
 
+    def test_an_order_recorded_as_paid_is_never_touched(self):
+        p = self.payer()
+        p.store.mark_seen("#1001", "already_paid", "Danny paid it himself")
+        self.assertFalse(p.wanted(dict(ORDER)))
+        self.assertFalse(p.prepare(dict(ORDER), force=True)["ok"], "not even when asked to offer it")
+        self.assertEqual((self.reads, self.cj.clicks, self.cj.tab), (0, [], None), "nothing was opened or clicked")
+
     def test_only_paid_unshipped_orders_are_looked_at(self):
         p = self.payer()
         self.assertFalse(p.wanted(dict(ORDER, payment="Pending")))
