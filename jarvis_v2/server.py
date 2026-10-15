@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import advertising, alerts, posting, builds, config, email_setup, jobs, mailbox, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
+from . import advertising, alerts, posting, builds, cjpay, config, email_setup, jobs, mailbox, memory, projects as P, router as R, runs, selfimprove, sessions as SS, tools
 
 # A voice/chat approval only counts if Danny's own latest message actually approves.
 APPROVAL_WORDS = re.compile(r"(?i)\b(approve[ds]?|go ahead|start (it|the build)|build it|do it|yes|looks good|ship it)\b")
@@ -53,6 +53,8 @@ class State:
         self.announcer = None            # alerts.Announcer, set by start()
         self.approvals = None            # jobs.ApprovalStore: what jobs asked Danny, and his answers
         self.push_phone = None           # sends the phone a fresh copy at once (set by start() for the real app)
+        self.cjpay = None                # cjpay.Payer: paying CJ for shop orders, one tap at a time
+        self.cjpay_watch = False         # look for new orders to pay (the real app only)
         self.watcher = None
 
 
@@ -208,6 +210,11 @@ def make_handler(state):
                 name = path.split("/")[3]
                 return self._json(api_panel(state, name, refresh=True))
             ui = secrets.compare_digest(self.headers.get("X-Jarvis-UI", ""), state.ui_token)
+            if path.startswith("/api/cj_pay/") and not path.endswith("/check"):
+                # Money: the press must come from the window page itself (a browser sends its Origin on POST).
+                origin = (self.headers.get("Origin") or "").rstrip("/")
+                port = self.server.server_address[1]
+                ui = ui and origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
             try:
                 out = api_post(state, path, body, from_ui=ui)
             except ValueError as error:
@@ -426,6 +433,10 @@ def api_get(state, path, query):
         return m
     if path == "/api/alerts":
         return {"alerts": list(reversed(state.announcer.history)) if state.announcer else []}
+    if path == "/api/cj_pay":
+        return state.cjpay.view()
+    if path == "/api/cj_pay/describe":
+        return {"text": cjpay.describe(state.cjpay.view())}
     if parts[:2] == ["api", "proposals"]:
         if len(parts) == 2:
             return {"proposals": selfimprove.listing()}
@@ -603,8 +614,79 @@ def _refresh_orders(state, force=False):
         reading["at"] = time.time()
         state.orders = reading
         state.orders_refreshing = False
+        if state.cjpay_watch and reading.get("ok"):
+            _cjpay_scan(state, reading)
     threading.Thread(target=work, daemon=True, name="jarvis-orders").start()
     return True
+
+
+# ------------------------------------------------------------- paying CJ (cjpay.py)
+def _with_net(order, reading):
+    """Adds what Shopify pays Danny for this order (from the payouts list), for 'you make about £X'."""
+    for t in ((reading or {}).get("payouts") or {}).get("transactions") or []:
+        if t.get("order") == order.get("number"):
+            try:
+                return dict(order, net_gbp=float(re.sub(r"[^\d.]", "", t.get("net") or "")))
+            except ValueError:
+                pass
+    return dict(order)
+
+
+def _cjpay_scan(state, reading, only=None, force=False):
+    """New paid Shopify orders: get each one ready to pay on CJ and offer it to Danny (never pays). One at a time."""
+    payer = state.cjpay
+    todo = [_with_net(o, reading) for o in (reading or {}).get("orders") or []
+            if (only is None or o.get("number") == only) and (force or payer.wanted(o))]
+    if not todo:
+        return False
+
+    def work():
+        for order in todo:
+            try:
+                payer.prepare(order, force=force)
+            except Exception as error:
+                cjpay_log(f"prepare {order.get('number')} failed: {error}")
+    threading.Thread(target=work, daemon=True, name="jarvis-cjpay-prepare").start()
+    return True
+
+
+def cjpay_log(line):
+    try:
+        with open(os.path.join(config.DATA_DIR, "cj_pay.log"), "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + cjpay.redact(line) + "\n")
+    except OSError:
+        pass
+
+
+CJPAY_POLL = 20               # seconds between looks for Danny's phone answers while a Pay request is waiting
+SHIPPING_CHECK = 2 * 3600     # how often to look whether CJ has dispatched a paid order
+
+
+def _cjpay_loop(state, interval=CJPAY_POLL):
+    """Expires old Pay requests, collects Danny's phone taps, and later says when CJ has dispatched."""
+    from . import phone_sync
+    payer, last_ship, had = state.cjpay, time.time(), set()
+    for r in payer.store.interrupted():
+        if r["status"] == "paying":
+            state.announcer.urgent(f"Jarvis stopped while paying CJ for order {r['shop_order']}, sir. Please check that order "
+                                   "on CJ yourself; I won't press Pay for it again.")
+    while not getattr(state, "stopping", False):
+        try:
+            offers = payer.store.offered()
+            ids = {o["id"] for o in offers}
+            if had - ids and state.push_phone:            # one expired or was answered: refresh the phone's copy
+                threading.Thread(target=state.push_phone, daemon=True).start()
+            had = ids
+            if offers:
+                answers = phone_sync.fetch_pay_answers()
+                if answers:
+                    payer.take_phone_answers(answers)
+            if time.time() - last_ship > SHIPPING_CHECK:
+                last_ship = time.time()
+                payer.check_shipping()
+        except Exception as error:
+            cjpay_log(f"loop: {error}")
+        time.sleep(interval)
 
 
 def trading_view():
@@ -706,6 +788,34 @@ def api_post(state, path, body, from_ui=False):
         words = {"approved": "Approved: the job will go ahead with it.", "rejected": "Rejected: the job won't do it.",
                  "done": "Thanks, sir: the job is carrying on.", "cant": "Understood: the job will carry on without it."}
         return {"approval": a, "text": words[a["status"]]}
+    m = re.match(r"^/api/cj_pay/(\d+)/(pay|reject)$", path)
+    if m:
+        if not from_ui:
+            raise PermissionError("Only Danny can pay CJ, with the Pay button in the Jarvis window or on his phone.")
+        rid = int(m.group(1))
+        if m.group(2) == "reject":
+            state.cjpay.reject(rid, "window")
+            return {"text": "OK, sir: I won't pay CJ for that order."}
+        try:
+            amount = float(body.get("amount_usd"))
+        except (TypeError, ValueError):
+            raise ValueError("The Pay button didn't say how much.")
+        r = state.cjpay.approve(rid, "window", amount_usd=amount)
+        return {"text": f"Paying CJ ${r['amount_usd']:.2f} for order {r['shop_order']} now, sir. I'll tell you when it's done."}
+    if path == "/api/cj_pay/check":
+        # Looks for orders to pay (or offers one again). Never pays: that needs Danny's tap.
+        only = str(body.get("order") or "").strip() or None
+        if only:
+            only = "#" + re.sub(r"\D", "", only)
+        reading = state.orders or {}
+        if not reading.get("ok"):
+            _refresh_orders(state)
+            return {"text": "I haven't read the Shopify orders yet; I'm reading them now, so ask again in a minute."}
+        started = _cjpay_scan(state, reading, only=only, force=bool(only))
+        if started:
+            return {"text": "Getting it ready on CJ now. Nothing is paid until you tap Pay."}
+        return {"text": "There's nothing new to pay CJ for." if not only else
+                f"I can't offer {only}: it isn't a paid, unshipped order in the latest Shopify list."}
     m = re.match(r"^/api/posts/(\d+)/(post|remove)$", path)
     if m:
         if not from_ui:
@@ -850,6 +960,11 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         executor.listeners += [builds.on_run_change, selfimprove.on_run_change, alerts.on_run_change(announcer)]
     state = State(router or R.default_router(), executor)
     state.approvals = jobs.ApprovalStore(executor.store.path)
+
+    def push_soon():
+        if state.push_phone:
+            threading.Thread(target=state.push_phone, daemon=True).start()
+    state.cjpay = cjpay.Payer(announcer=announcer, push=push_soon)
     executor.listeners.append(jobs.on_change(announcer, state.approvals))
     executor.extra_time = state.approvals.waiting_seconds
     # Claim the port FIRST: if another copy has it, fail here, before starting any work or touching its files.
@@ -868,6 +983,8 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         state.push_phone = lambda: phone_sync.push(state)
         threading.Thread(target=_watch_jobs, args=(state,), daemon=True, name="jarvis-jobs").start()
         threading.Thread(target=_poll_mail, args=(state,), daemon=True, name="jarvis-mail-poll").start()
+        state.cjpay_watch = True
+        threading.Thread(target=_cjpay_loop, args=(state,), daemon=True, name="jarvis-cjpay").start()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
     threading.Thread(target=server.serve_forever, daemon=True, name="jarvis-v2-server").start()

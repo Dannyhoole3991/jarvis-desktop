@@ -30,7 +30,7 @@ USAGE_TEXT = ("You are currently using your subscription to power your Claude Co
 class OrdersTests(unittest.TestCase):
     def test_orders_list(self):
         self.assertEqual(M.parse_orders(ORDERS_PAGE), [{
-            "number": "#1001", "date": "Yesterday at 10:23 pm", "customer": "Joanne Hoole", "total": "£18.98",
+            "number": "#1001", "id": "7991019995464", "date": "Yesterday at 10:23 pm", "customer": "Joanne Hoole", "total": "£18.98",
             "payment": "Paid", "fulfilment": "In progress", "items": "2 items"}])
         self.assertEqual(M.parse_orders("Your orders will show here"), [])
 

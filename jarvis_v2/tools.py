@@ -43,6 +43,14 @@ def needs_you():
     except Exception:
         pass
     try:
+        out = _server("/api/cj_pay", timeout=10)
+        offers = out.get("offers") or []
+        if offers:
+            parts.append("Waiting for your Pay tap (in the Jarvis window or on your phone):\n"
+                         + "\n".join(f"- {o['summary']}" for o in offers))
+    except Exception:
+        pass
+    try:
         from . import mailbox
         waiting = mailbox.needs_you_text()
         if waiting:
@@ -265,6 +273,14 @@ def _text(result):
     return result.get("error") or result.get("text") or json.dumps(result)[:3000]
 
 
+def cj_pay_status():
+    return _text(_server("/api/cj_pay/describe", timeout=15))
+
+
+def cj_pay_offer(order=""):
+    return _text(_server("/api/cj_pay/check", {"order": order}, timeout=30))
+
+
 def list_projects():
     from . import projects
     items = projects.discover()
@@ -426,6 +442,11 @@ TOOLS = {
     "shop_orders": (shop_orders, "Shopify orders (number, date, customer, total, payment and fulfilment status) and the pending payout with its "
                     "date. Instant: read from Shopify in the last 10 minutes. Use this for anything about orders, sales or payouts on the shop.",
                     _schema()),
+    "cj_pay_status": (cj_pay_status, "Paying CJdropshipping for shop orders: Pay requests waiting for Danny's tap, recent payments "
+                      "(paid, failed, stopped and why), tracking, and the spending limits. Read-only.", _schema()),
+    "cj_pay_offer": (cj_pay_offer, "Get a paid Shopify order ready to pay on CJ and offer Danny a Pay button for it (e.g. order '#1001'; "
+                     "empty = look for any new ones). It NEVER pays: only Danny's own tap on Pay in the window or phone app does. "
+                     "You cannot pay or approve payments yourself.", _schema({"order": _S})),
     "inbox_summary": (inbox_summary, "The shop's business inbox (support@collectivefinds.co.uk): emails waiting for Danny (with their #numbers), "
                       "customer emails, simple questions Jarvis answered automatically, spam blocked. Use it for anything about emails or customers writing in.",
                       _schema()),

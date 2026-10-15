@@ -150,6 +150,8 @@
   .ask { border: 1px solid rgba(255,179,71,.5); background: rgba(255,179,71,0.08); border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; font-size: 13px; line-height: 1.45; }
   .ask .actions { margin-top: 6px; align-items: center; }
   .ask .btn { font-size: 13px; padding: 6px 16px; }
+  .ask.pay { border-color: rgba(80,200,120,.6); background: rgba(80,200,120,0.08); }
+  .ask.payresult { border-color: rgba(140,160,190,.35); background: transparent; }
   .audit-bad { color: var(--red); }
 </style>
 </head>
@@ -173,6 +175,7 @@
   <section class="right">
     <div class="needs" id="needs">
       <h2 id="needsHead"><span>&#9888; Needs you</span><span class="hint" id="needsToggle">hide</span></h2>
+      <div id="payCards"></div>
       <div id="approvalCards"></div>
       <div class="body" id="needsBody">Loading…</div>
     </div>
@@ -852,6 +855,32 @@ function askCard(a) {
   return `<div class="ask"><b>Job #${a.run_id} ${a.kind === "approval" ? "asks to" : "needs you to"}:</b> ${esc(a.what)}
     ${a.why ? `<div class="hint">${esc(a.why)}</div>` : ""}<div class="actions">${buttons}<span class="hint">asked ${ago(a.created_at)}</span></div></div>`;
 }
+// ------------------------------------------------------------ paying CJ (one tap = one order, once)
+function payCard(o) {
+  const mins = Math.max(0, Math.round((o.expires_at - Date.now() / 1000) / 60));
+  return `<div class="ask pay"><b>&#128179; ${esc(o.summary)}</b>
+    <div class="hint">Jarvis presses Pay on CJ with the card you saved there. He never types card details.</div>
+    <div class="actions"><button class="btn go" data-pay="${o.id}" data-amount="${o.amount_usd}" data-order="${esc(o.shop_order)}">Pay $${Number(o.amount_usd).toFixed(2)}</button>
+      <button class="btn" data-payno="${o.id}">Not now</button><span class="hint">expires in ${mins} min</span></div></div>`;
+}
+function payResult(r) {
+  const words = { approved: "paying now…", paying: "paying now…", paid: "paid ✔", failed: "didn't go through", needs_danny: "needs you on CJ",
+                  unclear: "check on CJ yourself", blocked: "not paid", rejected: "you said not now", expired: "expired" };
+  return `<div class="ask payresult"><b>CJ, order ${esc(r.shop_order)}, $${Number(r.amount_usd).toFixed(2)}:</b> ${esc(words[r.status] || r.status)}
+    ${r.result ? `<div class="hint">${esc(r.result)}</div>` : ""}</div>`;
+}
+let payKey = "";
+async function renderPay() {
+  const data = await api("/api/cj_pay");
+  const offers = data.offers || [];
+  const day = Date.now() / 1000 - 86400;
+  const recent = (data.recent || []).filter(r => (r.decided_at || r.finished_at || 0) > day && !["expired", "rejected"].includes(r.status)).slice(0, 3);
+  const key = JSON.stringify([offers.map(o => o.id), recent.map(r => [r.id, r.status])]) + Math.floor(Date.now() / 60000);
+  if (key === payKey) return;
+  payKey = key;
+  el("payCards").innerHTML = offers.map(payCard).join("") + recent.map(payResult).join("");
+  if (offers.length) { el("needs").classList.remove("collapsed"); el("needsToggle").textContent = "hide"; }
+}
 let askKey = "";
 async function renderApprovals() {
   const data = await api("/api/approvals");
@@ -1321,7 +1350,7 @@ reportVisibility();
 
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
+  const t = e.target.closest("[data-pay],[data-payno],[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
   if (!t) return;
   const d = t.dataset;
   if (d.close) {
@@ -1332,6 +1361,19 @@ document.addEventListener("click", async e => {
     if (d.close === "jobDetail") openJob = null;
     if (d.close === "mailDetail") openMail = null;
     return;
+  }
+  if (d.pay) {
+    if (!confirm(`Pay CJ $${Number(d.amount).toFixed(2)} for order ${d.order}, with the card you saved on CJ?`)) return;
+    t.closest(".ask").querySelectorAll("button").forEach(b => b.disabled = true);
+    await act(`/api/cj_pay/${d.pay}/pay`, { amount_usd: Number(d.amount) });
+    payKey = "";
+    return renderPay();
+  }
+  if (d.payno) {
+    t.closest(".ask").querySelectorAll("button").forEach(b => b.disabled = true);
+    await act(`/api/cj_pay/${d.payno}/reject`, {});
+    payKey = "";
+    return renderPay();
   }
   if (d.answer) {
     const sure = { approve: "Approve this? The job will go ahead and do it." }[d.act];
@@ -1419,6 +1461,7 @@ loadPanel("needs_you");
 every(1500, pollState);
 every(1500, pollConversation);
 every(2000, renderApprovals);
+every(3000, renderPay);
 setInterval(() => loadPanel("needs_you"), 30000);
 every(30000, async () => { if (activePane !== "inbox") setInboxBadge(((await api("/api/inbox")).counts || {}).needs_you); });
 every(4000, () => {

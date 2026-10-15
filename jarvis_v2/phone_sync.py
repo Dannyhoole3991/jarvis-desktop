@@ -65,6 +65,7 @@ def snapshot(state):
         "posts": _section(lambda: S.api_get(state, "/api/posts", {})),
         "jobs": _section(lambda: jobs.phone_view(state.executor.store, state.approvals)),
         "inbox": _section(mailbox.phone_summary),         # counts + latest customer subjects, never email bodies
+        "cj_pay": _section(state.cjpay.view) if getattr(state, "cjpay", None) else {},   # Pay requests waiting for Danny's tap
     }
 
 
@@ -87,6 +88,24 @@ def push(state, post=requests.post):
     except Exception as error:
         _log(f"push failed: {error}")
         return False
+
+
+def fetch_pay_answers(post=requests.post):
+    """Danny's Pay / Not now taps from the phone (fetch-and-clear at the phone backend). The PC re-checks
+    each one against its own request (one-off code, amount, not expired, not already answered) before acting."""
+    url, secret = backend()
+    if not url:
+        return []
+    try:
+        r = post(url + "/api/cj_pay/answers", data="{}", timeout=15,
+                 headers={"Authorization": "Bearer " + secret, "Content-Type": "application/json"})
+        if r.status_code != 200:
+            return []
+        answers = r.json().get("answers")
+        return answers if isinstance(answers, list) else []
+    except Exception as error:
+        _log(f"pay answers fetch failed: {error}")
+        return []
 
 
 def _log(line):

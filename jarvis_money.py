@@ -69,7 +69,9 @@ def parse_orders(text):
             continue
         after = row[total_at + 1:]
         items = next((v for v in after if re.fullmatch(r"\d+ items?", v)), "")
-        orders.append({"number": ln, "date": row[0] if total_at > 0 else "",
+        prev = lines[i - 1] if i else ""
+        orders.append({"number": ln, "id": prev.rsplit("/", 1)[-1] if prev.startswith("Select gid://shopify/Order/") else "",
+                       "date": row[0] if total_at > 0 else "",
                        "customer": row[1] if total_at > 1 else "", "total": row[total_at],
                        "payment": after[0] if after else "", "fulfilment": after[1] if len(after) > 1 and after[1] != items else "",
                        "items": items})
