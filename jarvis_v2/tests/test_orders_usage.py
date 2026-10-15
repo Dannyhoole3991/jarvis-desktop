@@ -1,0 +1,101 @@
+"""
+Store tab orders (read from Shopify admin text) and the free Usage tab refresh.
+
+    py -3 -m unittest jarvis_v2.tests.test_orders_usage -v
+"""
+
+import datetime
+import json
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+import jarvis_money as M
+from jarvis_v2 import server, usage_check as U
+
+ORDERS_PAGE = ("Select all 1 on page\nOrder\nFlags\nDate\nCustomer\nFulfill by\nChannel\nTotal\nPayment status\n"
+               "Fulfillment status\nItems\nDelivery status\nDelivery method\nTags\nSelect gid://shopify/Order/7991019995464\n"
+               "#1001\nYesterday at 10:23\xa0pm\nJoanne Hoole\nOnline Store\n£18.98\nPaid\nIn progress\n2 items\nStandard\n\n"
+               "Learn more about orders")
+PAYOUTS_PAGE = ("Settings\nPending\n£18.35\nNo payouts yet\nPending\nTotal\n£18.35\nPending amounts may change\n"
+                "Showing 1 transaction\nAll\nToday\nDate\nType\nOrder\nPayout date\nCharge\nFee\nNet\n"
+                "Oct 14, 2026\nCharge\n#1001\nOct 23, 2026\n£18.98\n-£0.63\n£18.35 GBP")
+USAGE_TEXT = ("You are currently using your subscription to power your Claude Code usage\n\n"
+              "Current session: 6% used · resets Oct 15, 12pm (Europe/London)\n"
+              "Current week (all models): 24% used · resets Oct 17, 7pm (Europe/London)\n"
+              "Current week (Sonnet only): 100% used · resets Oct 17, 7:30pm (Europe/London)\n")
+
+
+class OrdersTests(unittest.TestCase):
+    def test_orders_list(self):
+        self.assertEqual(M.parse_orders(ORDERS_PAGE), [{
+            "number": "#1001", "date": "Yesterday at 10:23 pm", "customer": "Joanne Hoole", "total": "£18.98",
+            "payment": "Paid", "fulfilment": "In progress", "items": "2 items"}])
+        self.assertEqual(M.parse_orders("Your orders will show here"), [])
+
+    def test_payouts(self):
+        p = M.parse_payouts(PAYOUTS_PAGE)
+        self.assertEqual(p["pending"], "£18.35")
+        self.assertEqual(p["transactions"], [{"date": "Oct 14, 2026", "type": "Charge", "order": "#1001",
+                                              "payout_date": "Oct 23, 2026", "charge": "£18.98", "fee": "-£0.63", "net": "£18.35"}])
+
+    def test_money_check_summary(self):
+        with mock.patch.object(M, "_read", return_value=("https://admin.shopify.com/store/x/orders", ORDERS_PAGE)):
+            r = M.shopify_check()
+        self.assertTrue(r["ok"])
+        self.assertIn("£18.98 paid", r["summary"])
+        self.assertIn("still to ship: #1001", r["summary"])
+
+    def test_store_view_starts_one_background_read(self):
+        state = server.State(router=mock.Mock(), executor=mock.Mock())
+        with mock.patch.object(server, "_cached", return_value={"products": [], "collections": []}), \
+             mock.patch("jarvis_money.shopify_orders", return_value={"ok": True, "orders": [], "payouts": {}}) as read:
+            server.store_view(state)
+            for _ in range(50):
+                if state.orders:
+                    break
+                import time; time.sleep(0.05)
+            self.assertEqual(read.call_count, 1)
+            self.assertTrue(state.orders["ok"])
+            server.store_view(state)               # fresh reading: no second browser trip
+            self.assertEqual(read.call_count, 1)
+
+    def test_orders_wait_while_tiktok_uses_the_browser(self):
+        state = server.State(router=mock.Mock(), executor=mock.Mock())
+        state.posting_now = 3
+        self.assertFalse(server._refresh_orders(state))
+
+
+class UsageTests(unittest.TestCase):
+    NOW = datetime.datetime(2026, 10, 15, 7, 0)
+
+    def test_parse_usage(self):
+        w = U.parse(USAGE_TEXT, now=self.NOW)
+        self.assertEqual(set(w), {"five_hour", "seven_day", "seven_day_sonnet"})
+        self.assertAlmostEqual(w["five_hour"]["utilization"], 0.06)
+        self.assertEqual(datetime.datetime.fromtimestamp(w["five_hour"]["resets_at"]), datetime.datetime(2026, 10, 15, 12, 0))
+        self.assertEqual(datetime.datetime.fromtimestamp(w["seven_day_sonnet"]["resets_at"]), datetime.datetime(2026, 10, 17, 19, 30))
+        self.assertEqual(w["seven_day_sonnet"]["status"], "rejected")
+
+    def test_reset_without_a_date_is_the_next_time_it_comes_round(self):
+        self.assertEqual(datetime.datetime.fromtimestamp(U.parse_reset("3am", now=self.NOW)), datetime.datetime(2026, 10, 16, 3, 0))
+
+    def test_save_overwrites_stale_readings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "usage.json")
+            with open(path, "w") as f:
+                json.dump({"windows": {"five_hour": {"utilization": 1, "status": "rejected"}}, "status": "rejected"}, f)
+            U.save(U.parse(USAGE_TEXT, now=self.NOW), path)
+            saved = json.load(open(path))
+        self.assertAlmostEqual(saved["windows"]["five_hour"]["utilization"], 0.06)
+        self.assertEqual(saved["source"], "claude /usage")
+
+    def test_read_uses_the_free_slash_command(self):
+        run = mock.Mock(return_value=mock.Mock(stdout=json.dumps({"result": USAGE_TEXT})))
+        self.assertIn("seven_day", U.read(run=run))
+        self.assertEqual(run.call_args[0][0][1:3], ["-p", "/usage"])
+
+
+if __name__ == "__main__":
+    unittest.main()

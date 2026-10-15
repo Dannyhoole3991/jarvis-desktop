@@ -37,14 +37,75 @@ def shopify_check():
         return {"name": "Shopify store", "ok": False, "logged_out": True, "problem": "I'm logged out"}
     if "Your orders will show here" in text:
         return {"name": "Shopify store", "ok": True, "orders": 0, "summary": "no orders yet"}
-    numbers = sorted(set(re.findall(r"#(\d{4,})\b", text)))
-    if not numbers:
+    orders = parse_orders(text)
+    if not orders:
         return {"name": "Shopify store", "ok": False, "problem": "I couldn't read the orders list"}
-    unfulfilled = len(re.findall(r"\bUnfulfilled\b", text))
-    summary = f"{len(numbers)} order(s) on the orders page (latest #{numbers[-1]})"
-    if unfulfilled:
-        summary += f", {unfulfilled} still to fulfil"
-    return {"name": "Shopify store", "ok": True, "orders": len(numbers), "summary": summary}
+    takings = sum(float(re.sub(r"[^\d.]", "", o["total"]) or 0) for o in orders if o["payment"].lower() == "paid")
+    summary = f"{len(orders)} order(s), £{takings:.2f} paid (latest {orders[0]['number']}: {orders[0]['total']}, {orders[0]['fulfilment'] or 'not sent yet'})"
+    waiting = [o["number"] for o in orders if o["fulfilment"].lower() in ("unfulfilled", "in progress")]
+    if waiting:
+        summary += f"; still to ship: {', '.join(waiting)}"
+    return {"name": "Shopify store", "ok": True, "orders": len(orders), "summary": summary}
+
+
+SHOPIFY_PAYOUTS = "https://admin.shopify.com/store/mwrfta-mh/payments/payouts-next?selectedView=all"
+_ORDER_NO_RE = re.compile(r"^#\d{4,}$")
+
+
+def parse_orders(text):
+    """Rows of the Shopify admin orders list: number, date, customer, total, payment, fulfilment, items."""
+    lines = [ln.strip() for ln in text.replace("\xa0", " ").replace(" ", " ").splitlines() if ln.strip()]
+    orders = []
+    for i, ln in enumerate(lines):
+        if not _ORDER_NO_RE.match(ln):
+            continue
+        row = []
+        for nxt in lines[i + 1:i + 12]:
+            if _ORDER_NO_RE.match(nxt) or nxt.startswith("Select gid://") or nxt.startswith("Learn more"):
+                break
+            row.append(nxt)
+        total_at = next((k for k, v in enumerate(row) if _MONEY_RE.fullmatch(v)), None)
+        if total_at is None:
+            continue
+        after = row[total_at + 1:]
+        items = next((v for v in after if re.fullmatch(r"\d+ items?", v)), "")
+        orders.append({"number": ln, "date": row[0] if total_at > 0 else "",
+                       "customer": row[1] if total_at > 1 else "", "total": row[total_at],
+                       "payment": after[0] if after else "", "fulfilment": after[1] if len(after) > 1 and after[1] != items else "",
+                       "items": items})
+    return orders
+
+
+def parse_payouts(text):
+    """Pending total and each transaction's expected payout date from the Payouts page."""
+    lines = [ln.strip() for ln in text.replace("\xa0", " ").splitlines() if ln.strip()]
+    pending = None
+    for i, ln in enumerate(lines[:-1]):
+        if ln == "Total" and _MONEY_RE.fullmatch(lines[i + 1]):
+            pending = lines[i + 1]
+            break
+    rows = []
+    for i, ln in enumerate(lines):
+        if _ORDER_NO_RE.match(ln) and i >= 2 and i + 4 < len(lines):
+            rows.append({"date": lines[i - 2], "type": lines[i - 1], "order": ln, "payout_date": lines[i + 1],
+                         "charge": lines[i + 2], "fee": lines[i + 3], "net": lines[i + 4].replace(" GBP", "")})
+    return {"pending": pending, "transactions": rows}
+
+
+def shopify_orders():
+    """Reads the orders list and payouts in Jarvis's logged-in browser. Never changes anything."""
+    url, text = _read(SHOPIFY_ORDERS, settle=6.0)
+    if jb._looks_blocked(text):
+        return {"ok": False, "problem": "Shopify is showing a human check in Jarvis's browser"}
+    if "accounts.shopify.com" in url or "/login" in url:
+        return {"ok": False, "logged_out": True, "problem": "Jarvis's browser is logged out of Shopify"}
+    orders = [] if "Your orders will show here" in text else parse_orders(text)
+    try:
+        purl, ptext = _read(SHOPIFY_PAYOUTS, settle=8.0)
+        payouts = parse_payouts(ptext) if "accounts.shopify.com" not in purl else {}
+    except Exception:
+        payouts = {}
+    return {"ok": True, "orders": orders, "payouts": payouts}
 
 
 def fiverr_check():

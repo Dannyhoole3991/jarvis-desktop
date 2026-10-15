@@ -46,6 +46,8 @@ class State:
         self.panels = {}                 # name -> {"text", "at", "running"}
         self.panel_lock = threading.Lock()
         self.adv_refreshing = False
+        self.orders_refreshing = False   # reading Shopify orders in Jarvis's browser
+        self.orders = None               # last reading: {ok, orders, payouts, at}
         self.posting_now = None
         self.announcer = None            # alerts.Announcer, set by start()
         self.watcher = None
@@ -477,8 +479,46 @@ def store_view(state=None):
         shop = {"products": [], "collections": [], "error": f"Couldn't read the shop: {error}"}
     access = creds.status()
     money = (state.panels.get("money") if state else None) or {}
+    if state is not None:
+        orders = state.orders or {}
+        if not orders.get("at") or time.time() - orders["at"] > ORDERS_TTL:
+            _refresh_orders(state)
     return dict(shop, shop_url=base, access={"shopify": bool(access.get("shopify")), "cj": bool(access.get("cj"))},
-                money_text=money.get("text"), money_at=money.get("at"))
+                money_text=money.get("text"), money_at=money.get("at"),
+                orders=state.orders if state else None, orders_refreshing=bool(state and state.orders_refreshing))
+
+
+ORDERS_TTL = 600     # re-read Shopify orders at most every 10 minutes (it drives Jarvis's browser)
+
+
+def _keep_usage_fresh(state, interval=None):
+    """Claude's usage limits for the Usage tab, every couple of minutes, at no cost (claude -p /usage)."""
+    from . import usage_check
+    while not getattr(state, "stopping", False):
+        usage_check.refresh()
+        time.sleep(interval or usage_check.INTERVAL)
+
+
+def _refresh_orders(state, force=False):
+    """Reads the Shopify orders list + pending payout in the background, one browser job at a time."""
+    with state.panel_lock:
+        if state.orders_refreshing or state.adv_refreshing or state.posting_now:
+            return False
+        state.orders_refreshing = True
+
+    def work():
+        try:
+            import jarvis_money
+            reading = jarvis_money.shopify_orders()
+        except Exception as error:
+            reading = {"ok": False, "problem": f"couldn't read Shopify ({error})"}
+        if not reading.get("ok") and state.orders and state.orders.get("ok"):   # keep the last good list, say why it's old
+            reading = dict(state.orders, problem=reading.get("problem"), logged_out=reading.get("logged_out"))
+        reading["at"] = time.time()
+        state.orders = reading
+        state.orders_refreshing = False
+    threading.Thread(target=work, daemon=True, name="jarvis-orders").start()
+    return True
 
 
 def trading_view():
@@ -501,7 +541,7 @@ def trading_view():
 def _refresh_advertising(state):
     """Reads TikTok in the background (one read at a time: it drives Jarvis's browser window)."""
     with state.panel_lock:
-        if state.adv_refreshing or state.posting_now:
+        if state.adv_refreshing or state.posting_now or state.orders_refreshing:
             return
         state.adv_refreshing = True
 
@@ -519,7 +559,7 @@ def _start_post(state, item_id):
     if not item:
         raise ValueError("No such video in the list.")
     with state.panel_lock:
-        if state.posting_now or state.adv_refreshing:
+        if state.posting_now or state.adv_refreshing or state.orders_refreshing:
             raise ValueError("Jarvis's browser is busy with TikTok right now; try again in a minute.")
         state.posting_now = item_id
 
@@ -578,6 +618,9 @@ def api_post(state, path, body, from_ui=False):
     if path == "/api/advertising/refresh":
         _refresh_advertising(state)
         return {"text": "Checking TikTok now (about 20 seconds)."}
+    if path == "/api/orders/refresh":
+        started = _refresh_orders(state)
+        return {"text": "Checking Shopify orders now." if started else "Jarvis's browser is busy; try again in a minute."}
     if path == "/api/visibility":
         if state.announcer:
             state.announcer.window_visible = bool(body.get("visible", True))
@@ -634,6 +677,7 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     should_watch = real if watch is None else watch
     if should_watch:
         state.watcher = alerts.Watcher(announcer, proposals=selfimprove.listing).start()
+        threading.Thread(target=_keep_usage_fresh, args=(state,), daemon=True, name="jarvis-usage").start()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)

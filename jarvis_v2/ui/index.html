@@ -215,6 +215,8 @@
     </div>
     <div class="pane" id="pane-store">
       <div class="tiles" id="storeTiles"></div>
+      <div class="card"><h3>Orders <span class="sub" id="ordersAt"></span>
+        <button class="btn" id="ordersRefresh" style="float:right">Check now</button></h3><div id="storeOrders">Loading…</div></div>
       <div class="card"><h3>Live products <span class="sub" id="storeCount"></span></h3><div class="products" id="storeProducts">Loading…</div></div>
       <div class="card"><h3>Collections</h3><div class="chips" id="storeCollections"></div></div>
       <div class="card"><h3>Jarvis's store access</h3><div id="storeAccess"></div></div>
@@ -735,7 +737,7 @@ async function pollState() {
       const width = p === null ? 0 : Math.min(100, p);
       return `<div class="gauge"><div class="row"><span>${names[k] || k}</span><span>${label}${w.resets_at ? " · resets " + clock(w.resets_at) : ""}</span></div>
               <div class="bar ${p !== null && p >= 85 ? "hot" : ""}"><div style="width:${width}%"></div></div></div>`;
-    }).join("") + `<p class="hint">Measured ${ago(s.usage.observed_at)}. Updates whenever Claude answers.</p>`;
+    }).join("") + `<p class="hint">Measured ${ago(s.usage.observed_at)}. Checked every 2 minutes (free: it uses none of your allowance) and whenever Claude answers. Includes your other Claude Code sessions.</p>`;
   }
 }
 document.querySelectorAll("#pick .btn").forEach(btn => btn.addEventListener("click", async () => {
@@ -946,7 +948,8 @@ async function renderStore() {
     <div class="tile"><div class="label">Live products</div><div class="value">${products.length}</div><div class="note"><a href="${esc(s.shop_url)}" target="_blank" rel="noopener">${esc((s.shop_url || "").replace("https://", ""))}</a></div></div>
     <div class="tile"><div class="label">Christmas range</div><div class="value">${xmas}</div><div class="note">in The Christmas Collection</div></div>
     <div class="tile"><div class="label">Prices</div><div class="value">${prices.length ? gbp(Math.min(...prices)) : "—"}</div><div class="note">${prices.length ? "up to " + gbp(Math.max(...products.map(p => p.price_max || 0))) : ""}</div></div>
-    <div class="tile"><div class="label">Orders</div><div class="value" style="font-size:15px;line-height:1.3">${s.money_text ? (/no orders/i.test(s.money_text) ? "None yet" : "See Money tab") : "Not checked"}</div><div class="note">${s.money_at ? "checked " + ago(s.money_at) : "Money tab → Check all four now"}</div></div>`;
+    <div class="tile"><div class="label">Orders</div><div class="value" id="ordersTileValue">—</div><div class="note" id="ordersTileNote"></div></div>`;
+  renderOrders(s);
   el("storeCount").textContent = products.length ? `· ${products.length}` : "";
   el("storeProducts").innerHTML = s.error ? `<p class="hint">${esc(s.error)}</p>` : products.map(p => `
     <a class="product" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.title)}">
@@ -959,6 +962,34 @@ async function renderStore() {
     ? `<div class="check"><span class="mark pos">✔</span>Jarvis can research CJ products and add them to the store as drafts for you to review.</div>`
     : `<div class="check"><span class="mark neg">✘</span><span>Not set up yet: Jarvis can't add products until his store keys are in (${acc.shopify ? "" : "Shopify"}${!acc.shopify && !acc.cj ? " and " : ""}${acc.cj ? "" : "CJ"}). The steps are in the NEEDS YOU list.</span></div>`;
 }
+
+function renderOrders(s) {
+  const o = s.orders || {}, list = o.orders || [], pay = o.payouts || {};
+  el("ordersRefresh").disabled = !!s.orders_refreshing;
+  el("ordersRefresh").textContent = s.orders_refreshing ? "Checking…" : "Check now";
+  el("ordersAt").textContent = o.at ? "· checked " + ago(o.at) : "";
+  el("ordersTileValue").textContent = o.ok || list.length ? String(list.length) : "—";
+  el("ordersTileNote").textContent = pay.pending ? pay.pending + " on its way to your bank" : (o.ok ? "all orders" : "");
+  let html = "";
+  if (o.problem) html += `<div class="check"><span class="mark neg">!</span><span>${esc(o.problem)}.${o.logged_out ? " Log into Shopify again in Jarvis's browser window, then press Check now." : ""}${list.length ? " Showing the last good reading." : ""}</span></div>`;
+  if (!o.at) html += `<p class="hint">${s.orders_refreshing ? "Reading your Shopify orders…" : "Not checked yet."}</p>`;
+  else if (o.ok && !list.length) html += '<p class="hint">No orders yet.</p>';
+  if (list.length) {
+    const due = {};
+    (pay.transactions || []).forEach(t => { due[t.order] = t; });
+    html += `<table class="grid"><tr><th>Order</th><th>When</th><th>Customer</th><th>Total</th><th>Payment</th><th>Sent to CJ / shipping</th><th>Paid out</th></tr>` +
+      list.map(r => `<tr><td><b>${esc(r.number)}</b></td><td>${esc(r.date)}</td><td>${esc(r.customer)}</td><td>${esc(r.total)}</td>
+        <td>${esc(r.payment)}</td><td>${esc(r.fulfilment || "—")}</td>
+        <td>${due[r.number] ? esc(due[r.number].net) + " on " + esc(due[r.number].payout_date) : "—"}</td></tr>`).join("") + "</table>";
+  }
+  if (pay.pending) html += `<p class="hint">Pending payout: <b>${esc(pay.pending)}</b> (after Shopify's card fees). Shopify pays it into your bank automatically on the date shown; you don't need to do anything.</p>`;
+  el("storeOrders").innerHTML = html;
+  if (s.orders_refreshing) setTimeout(async () => renderOrders(await api("/api/store")), 3000);   // just the orders, no photo flicker
+}
+el("ordersRefresh").addEventListener("click", async () => {
+  await api("/api/orders/refresh", {});
+  renderOrders(await api("/api/store"));
+});
 
 // --------------------------------------------------------- advertising
 function changeNote(m) {
