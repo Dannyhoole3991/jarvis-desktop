@@ -23,6 +23,7 @@ from . import job_guard, jobs, mcp_server, tools
 
 WAIT_SECONDS = 10 * 60          # one request_approval call waits this long, then the job may wait again
 POLL_SECONDS = 3
+RELEASE_AFTER = 60              # waiting longer than this for Danny lets go of Jarvis's browser meanwhile
 PROGRESS_GAP = 20               # seconds between spoken updates
 
 _S = {"type": "string"}
@@ -42,8 +43,10 @@ class JobTools:
         self.job_id, self.job_dir = int(job_id), job_dir
         self.server = server or tools._server
         self.sleep, self.clock = sleep, clock
+        self.open_own = lambda url: tools.open_website(url, browser="danny")   # Danny's own Edge, opened (never driven)
         self.grants = {}                          # approval id -> {"id", "what", "expires_at"}
         self.last_said = 0.0
+        self.keep_hold = set()                    # questions Danny answers IN Jarvis's browser: keep it held for him
         from .job_browser import Toolkit
         self.browser = toolkit or Toolkit(job_dir, repo_dir, approved=self.grant, log=self._audit)
         b = self.browser
@@ -58,10 +61,13 @@ class JobTools:
                                  "or account settings, making things live, sending messages, deleting online). Say exactly what "
                                  "will happen and why. Waits for his answer and returns an approval_id to pass to the click/key.",
                                  _schema({"what": _S, "why": _S}, ["what", "why"])),
-            "ask_danny_to_do": (self.ask_danny_to_do, "Ask Danny to do ONE step himself in Jarvis's browser window (sign in, "
-                                "pass a human check, enter a code, or a click the site won't take from automation). Say exactly "
-                                "what and where. Waits until he presses Done (or says he can't).",
-                                _schema({"what": _S, "why": _S}, ["what"])),
+            "ask_danny_to_do": (self.ask_danny_to_do, "Ask Danny to do ONE step himself (sign in, pass a human check, enter a "
+                                "code, or a click the site won't take from automation). where='jarvis_browser' (default): in "
+                                "Jarvis's browser window. where='own_browser' + url: for sites that block Jarvis's browser, his "
+                                "OWN browser opens at url; then 'what' must say exactly what to click, type and upload (with full "
+                                "file paths). Waits until he presses Done (or says he can't).",
+                                _schema({"what": _S, "why": _S, "where": {"type": "string", "enum": ["jarvis_browser", "own_browser"]},
+                                         "url": _S}, ["what"])),
             "wait_for_answer": (self.wait_for_answer, "Keep waiting for Danny's answer to an earlier request_approval or "
                                 "ask_danny_to_do that hadn't been answered yet.", _schema({"approval_id": _I}, ["approval_id"])),
             "browser_open": (b.open, "Open a web address in Jarvis's browser (the current tab).", _schema({"url": _S}, ["url"])),
@@ -136,25 +142,43 @@ class JobTools:
         return "Said."
 
     # ----------------------------------------------------------- approvals
-    def _ask(self, kind, what, why):
+    def _ask(self, kind, what, why, keep_hold=False):
         what = " ".join(str(what or "").split())
         if len(what) < 5:
             return "Say exactly what you want Danny to approve or do."
         out = self.server(f"/api/jobs/{self.job_id}/ask", {"kind": kind, "what": what, "why": str(why or "")}, timeout=20)
         if out.get("error") or not out.get("approval_id"):
             return f"Couldn't ask Danny: {out.get('error') or 'no answer from the Jarvis window'}"
+        if keep_hold:
+            self.keep_hold.add(int(out["approval_id"]))
         return self.wait_for_answer(out["approval_id"])
 
     def request_approval(self, what, why=""):
         return self._ask("approval", what, why)
 
-    def ask_danny_to_do(self, what, why=""):
-        return self._ask("hand", what, why)
+    def ask_danny_to_do(self, what, why="", where="jarvis_browser", url=""):
+        if where == "own_browser":
+            opened = ""
+            if url:
+                if not str(url).startswith(("https://", "http://")):
+                    return "url must be a full web address."
+                opened = str(self.open_own(url))
+            self.browser.release()                # he isn't using Jarvis's window for this
+            self._audit({"hand_off": "own_browser", "url": url, "opened": opened[:200]})
+            what = f"In YOUR OWN browser{' (I opened ' + url + ')' if url else ''}: {what}"
+            return self._ask("hand", what, why, keep_hold=False)
+        return self._ask("hand", what, why, keep_hold=True)
 
     def wait_for_answer(self, approval_id):
         approval_id = int(approval_id)
-        end = self.clock() + WAIT_SECONDS
+        start = self.clock()
+        end = start + WAIT_SECONDS
+        released = False
         while True:
+            if not released and approval_id not in self.keep_hold and self.clock() - start >= RELEASE_AFTER:
+                self.browser.release()            # the orders reader and other work needn't wait on Danny
+                self._audit({"approval": approval_id, "browser": "released while waiting for Danny"})
+                released = True
             a = self.server(f"/api/approvals/{approval_id}", timeout=15)
             if a.get("error"):
                 return f"Couldn't check Danny's answer: {a['error']}"
@@ -198,10 +222,21 @@ def main():
         sys.stderr.write("job_mcp needs JARVIS_JOB_ID and JARVIS_JOB_DIR\n")
         return 2
     registry = JobTools(job_id, job_dir, os.environ.get("JARVIS_REPO_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    pid_file = jobs.helper_pid_file(job_id)
+    try:
+        os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+        with open(pid_file, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
     try:
         mcp_server.main(registry=registry, server_info={"name": "jobkit", "version": "1.0"})
     finally:
         registry.browser.release()
+        try:
+            os.remove(pid_file)
+        except OSError:
+            pass
     return 0
 
 

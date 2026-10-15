@@ -49,6 +49,9 @@ SEARCHY_RE = re.compile(r"(?i)search|query|\bq\b|find|filter|tag|hashtag|keyword
 CAPTCHA_FRAME_RE = re.compile(r"(?i)recaptcha|hcaptcha|turnstile|captcha|arkose|funcaptcha|challenges\.cloudflare")
 BLOCKED_TEXT_RE = re.compile(r"(?i)needs a human touch|are you a robot|are you human|verify you are (a )?human|press (&|and) hold|"
                              r"\bcaptcha\b|unusual traffic|i'm not a robot")
+CLOUDFLARE_RE = re.compile(r"(?i)performing security verification|just a moment\.\.\.|checking your browser|verifying you are human|"
+                           r"checking if the site connection is secure|enable javascript and cookies to continue")
+CLOUDFLARE_WAIT = 20            # seconds a security check may take to clear by itself
 MEDIA_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm", ".pdf", ".csv", ".txt")
 
 DESCRIBE_JS = r"""(el) => {
@@ -123,6 +126,20 @@ def _short(desc):
     return label if len(label) <= 60 else (desc.get("aria") or "")
 
 
+def site_wall(info):
+    """A security interstitial (Cloudflare) with NO box to tick showing. In Jarvis's debugger-driven browser
+    these loop forever (confirmed live 2026-10-15 on Redbubble), so Danny can't clear them there."""
+    return bool(CLOUDFLARE_RE.search(((info or {}).get("text") or "")[:1500])) and not any(
+        CAPTCHA_FRAME_RE.search(src or "") for src in (info or {}).get("frames") or [])
+
+
+def wall_message(url):
+    return ("BLOCKED BY THE SITE: " + (url or "this site") + " keeps Jarvis's browser on its security check and never shows a "
+            "box to tick, so Danny can't clear it in Jarvis's window. Don't ask him to. Hand this step to him in HIS OWN "
+            "browser: ask_danny_to_do(where='own_browser', url=<the page>, what=<exactly what to click, type and upload, with "
+            "full file paths>), then carry on when he presses Done.")
+
+
 def page_blocked(info):
     """A human check is showing (text or a captcha frame): Danny's job, not the toolkit's."""
     if BLOCKED_TEXT_RE.search((info or {}).get("text") or ""):
@@ -135,6 +152,8 @@ def click_verdict(desc, info):
     if desc is None:
         return "block", "There's nothing at that spot to click."
     label, href = _short(desc), desc.get("href") or ""
+    if site_wall(info):
+        return "block", wall_message((info or {}).get("url"))
     if page_blocked(info):
         return "block", "A human check (captcha) is showing. Only Danny can do that: use ask_danny_to_do."
     if desc.get("tag") == "iframe" and CAPTCHA_FRAME_RE.search(desc.get("src") or ""):
@@ -168,6 +187,8 @@ def secret_field(desc):
 def fill_verdict(desc, info):
     if desc is None:
         return "block", "I couldn't find that field."
+    if site_wall(info):
+        return "block", wall_message((info or {}).get("url"))
     if page_blocked(info):
         return "block", "A human check (captcha) is showing. Only Danny can do that: use ask_danny_to_do."
     if secret_field(desc):
@@ -280,6 +301,14 @@ class Toolkit:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
             self.sleep(2.5)
             info = page.evaluate(PAGE_INFO_JS)
+            waited = 0
+            while site_wall(info) and waited < CLOUDFLARE_WAIT:      # most clear themselves in a few seconds
+                self.sleep(2)
+                waited += 2
+                info = page.evaluate(PAGE_INFO_JS)
+            if site_wall(info):
+                self.log({"browser": f"open {url}", "blocked": "site security check loops in Jarvis's browser"})
+                return wall_message(info.get("url") or url)
             note = "\nA HUMAN CHECK is showing: ask_danny_to_do." if page_blocked(info) else ""
             return f"Opened: {info.get('title')} ({info.get('url')}){note}\n\n{info.get('text', '')[:1200]}"
         return self._run(act, timeout=80)

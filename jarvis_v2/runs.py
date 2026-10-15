@@ -244,6 +244,9 @@ class Executor:
             return False
         proc = self.procs.get(run_id)
         self.store.update(run_id, status="cancelled", finished_at=time.time(), error="Cancelled by Danny")
+        if run.get("kind") == "job":
+            from . import jobs
+            jobs.stop_helpers(run_id, proc)          # the whole process tree, so its browser hold goes too
         if proc is not None:
             try:
                 proc.kill()
@@ -383,6 +386,9 @@ class Executor:
                     extra = 0
                 if time.time() > deadline + extra:
                     timed_out.set()
+                    if run.get("kind") == "job":
+                        from . import jobs
+                        jobs.stop_helpers(run_id, proc)
                     try:
                         proc.kill()
                     except Exception:
@@ -434,6 +440,9 @@ class Executor:
             code, is_error, result = -1, True, f"Jarvis lost track of the run: {error}"
         finally:
             self.procs.pop(run_id, None)
+            if run.get("kind") == "job":
+                from . import jobs
+                jobs.stop_helpers(run_id)            # however it ended, nothing of it may keep holding the browser
 
         current = self.store.get(run_id)
         if run.get("kind") == "job":                 # a job's tokens and cost add up across its resumes

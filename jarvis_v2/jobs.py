@@ -64,6 +64,54 @@ def db_file():
     return os.path.join(config.DATA_DIR, "runs.db")
 
 
+def helper_pid_file(run_id):
+    """job_mcp writes its process id here, so the job's browser hold can always be ended."""
+    return os.path.join(config_dir(run_id), "jobkit.pid")
+
+
+def _command_line(pid):
+    import subprocess
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-Command",
+                               f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
+                              capture_output=True, text=True, timeout=20, creationflags=0x08000000).stdout
+    except Exception:
+        return ""
+
+
+def _kill_tree(pid):
+    import subprocess
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, timeout=20,
+                           creationflags=0x08000000)
+        else:
+            os.kill(int(pid), 9)
+    except Exception:
+        pass
+
+
+def stop_helpers(run_id, proc=None, cmdline=_command_line, kill=_kill_tree):
+    """Ends everything a job started (Claude Code and its tool server), so nothing of it keeps holding
+    Jarvis's browser. Confirmed live 2026-10-15: after a cancel the browser stayed locked.
+    Safe to call more than once; a stale pid is only killed if it really is a job tool server."""
+    pid = getattr(proc, "pid", None)
+    if isinstance(pid, int) and (proc.poll() is None if hasattr(proc, "poll") else True):
+        kill(pid)                                   # claude.exe and its children (the tool server)
+    path = helper_pid_file(run_id)
+    try:
+        with open(path, encoding="utf-8") as f:
+            helper = int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return
+    if helper and "jarvis_v2.job_mcp" in (cmdline(helper) or ""):
+        kill(helper)                                # an orphaned tool server (its claude already gone)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 # ------------------------------------------------------------------ approvals
 APPROVAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS approvals (
@@ -200,6 +248,8 @@ when something fails, try another way. Don't hand him instructions for things yo
 1. Never pay or start a payment, checkout, subscription, trial or ad spend; never enter card or bank details.
 2. Never type passwords, codes or keys; never sign in; never create accounts; never solve "are you human" checks.
    If a login, code or human check appears: ask_danny_to_do with exactly what he must do, then carry on.
+   If the browser says BLOCKED BY THE SITE (a security check that loops in Jarvis's browser), hand that step to
+   Danny in his OWN browser: ask_danny_to_do(where="own_browser", url=..., what=every click, word and file path).
 3. ASK FIRST for anything public, permanent or that grants permissions: publishing or posting (pins, videos,
    posts), installing or connecting apps, OAuth "Allow" screens, making store changes live, saving settings,
    sending messages or emails, deleting anything online. Call request_approval(what, why) with exactly what will

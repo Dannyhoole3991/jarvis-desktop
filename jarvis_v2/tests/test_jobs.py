@@ -366,6 +366,37 @@ class ToolkitTests(unittest.TestCase):
         page.goto = mock.Mock(side_effect=RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
         self.assertIn("didn't work", self.kit(page).open("https://nope.invalid/"))
 
+    def test_a_security_check_that_never_clears_is_handed_to_danny_s_own_browser(self):
+        wall = {"url": "https://www.redbubble.com/portfolio/images/new", "text": "www.redbubble.com\nPerforming security verification\nJust a moment...",
+                "frames": []}
+        page = FakePage({"button:Upload": desc(label="Upload")}, info=wall)
+        page.goto = mock.Mock()
+        kit = self.kit(page)
+        out = kit.open("https://www.redbubble.com/portfolio/images/new")
+        self.assertIn("BLOCKED BY THE SITE", out)
+        self.assertIn("own_browser", out)
+        self.assertIn("BLOCKED BY THE SITE", kit.click(text="Upload"))
+        # a real tick-box challenge is still Danny's job in Jarvis's window, not a wall
+        boxed = dict(wall, frames=["https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile"])
+        self.assertFalse(JB.site_wall(boxed))
+        self.assertTrue(JB.page_blocked(boxed))
+        # one that clears by itself is fine
+        cleared = [wall, wall, dict(PAGE, url=wall["url"], text="Upload new work")]
+        page2 = FakePage()
+        page2.goto = mock.Mock()
+        page2.evaluate = lambda js, arg=None: cleared.pop(0) if js == JB.PAGE_INFO_JS else None
+        self.assertIn("Opened", self.kit(page2).open(wall["url"]))
+
+    def test_after_letting_go_the_browser_is_taken_again_on_next_use(self):
+        page = FakePage()
+        kit = self.kit(page)
+        kit.read()
+        self.assertEqual(self.jb.holds, 1)
+        kit.release()
+        self.assertEqual(self.jb.holds, 0)
+        kit.read()
+        self.assertEqual(self.jb.holds, 1)
+
     def test_busy_browser_is_reported(self):
         page = FakePage()
         kit = self.kit(page)
@@ -437,6 +468,38 @@ class JobToolsTests(unittest.TestCase):
             return now[0]
         t, _ = self.make(["pending"], clock=clock)
         self.assertIn("hasn't answered yet", t.request_approval("Publish the pins", "x"))
+
+    def test_waiting_on_danny_lets_go_of_the_browser_after_a_minute(self):
+        now = [1000.0]
+
+        def clock():
+            now[0] += 30
+            return now[0]
+        t, _ = self.make(["pending", "pending", "pending", "pending", "approved"], clock=clock)
+        t.request_approval("Publish the pins", "x")
+        t.browser.release.assert_called_once()
+
+    def test_a_step_in_jarvis_s_window_keeps_the_browser_for_danny(self):
+        now = [1000.0]
+
+        def clock():
+            now[0] += 30
+            return now[0]
+        t, _ = self.make(["pending", "pending", "pending", "pending", "done"], clock=clock)
+        t.ask_danny_to_do("Sign in to Pinterest in Jarvis's browser window")
+        t.browser.release.assert_not_called()
+
+    def test_own_browser_hand_off_opens_his_edge_and_lets_go_at_once(self):
+        t, srv = self.make(["done"])
+        opened = []
+        t.open_own = lambda url: opened.append(url) or "Opened redbubble.com in Danny's normal browser."
+        out = t.ask_danny_to_do("Click Upload new work, choose C:\\x\\design.png, title it 'Robin'", "Redbubble blocks Jarvis's browser",
+                                where="own_browser", url="https://www.redbubble.com/portfolio/images/new")
+        self.assertIn("done it", out)
+        self.assertEqual(opened, ["https://www.redbubble.com/portfolio/images/new"])
+        t.browser.release.assert_called()
+        self.assertTrue(srv.calls[0][1]["what"].startswith("In YOUR OWN browser"))
+        self.assertIn("url must", t.ask_danny_to_do("x y z", where="own_browser", url="file:///C:/x"))
 
     def test_an_approval_runs_out(self):
         now = [time.time()]
@@ -571,6 +634,41 @@ class JobRunTests(unittest.TestCase):
         self.assertEqual(store.get(fresh)["status"], "waiting_for_claude")
         self.assertNotIn("resume_session", store.get(fresh)["meta"])
         self.assertEqual(store.get(run)["status"], "failed")
+
+    def test_every_job_ending_stops_its_helpers_so_the_browser_is_freed(self):
+        stopped = []
+        with mock.patch.object(jobs, "stop_helpers", lambda rid, proc=None, **k: stopped.append((rid, proc is not None))):
+            hold = threading.Event()
+            ex = self.executor([FakeRunProc([], hold=hold), FakeRunProc([_result("done")])])
+            with mock.patch.object(runs, "claude_available", lambda: True):
+                a, _ = jobs.start(ex, "A job Danny will cancel")
+                ex.tick()
+                wait_for(lambda: ex.store.get(a)["status"] == "running")
+                ex.cancel(a)
+                ex.join(a, 5)
+                self.assertIn((a, True), stopped)              # cancel: the live process tree
+                b, _ = jobs.start(ex, "A job that finishes normally")
+                ex.tick()
+                ex.join(b, 5)
+        self.assertIn((b, False), stopped)                       # a normal finish: any orphaned tool server
+        self.assertGreaterEqual(sum(1 for rid, _ in stopped if rid == a), 2)
+
+    def test_stop_helpers_kills_the_tree_and_only_a_real_orphaned_tool_server(self):
+        killed = []
+        proc = mock.Mock(pid=4242, poll=lambda: None)
+        os.makedirs(jobs.config_dir(9), exist_ok=True)
+        with open(jobs.helper_pid_file(9), "w") as f:
+            f.write("5151")
+        jobs.stop_helpers(9, proc, cmdline=lambda pid: "python -m jarvis_v2.job_mcp", kill=killed.append)
+        self.assertEqual(killed, [4242, 5151])
+        self.assertFalse(os.path.exists(jobs.helper_pid_file(9)))
+        with open(jobs.helper_pid_file(9), "w") as f:
+            f.write("6161")                                      # a stale pid now used by something else
+        killed.clear()
+        jobs.stop_helpers(9, None, cmdline=lambda pid: "notepad.exe", kill=killed.append)
+        self.assertEqual(killed, [])
+        jobs.stop_helpers(10, None, cmdline=lambda pid: "", kill=killed.append)   # nothing recorded: nothing to do
+        self.assertEqual(killed, [])
 
     def test_time_waiting_for_danny_doesnt_count(self):
         ex = self.executor([FakeRunProc([], hold=threading.Event())])
