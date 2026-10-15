@@ -174,3 +174,29 @@ class SingleWindowTests(unittest.TestCase):
                     f.write("mine")
                 server.stop(mock.Mock(), mine)
                 self.assertEqual(open(flag).read(), "0")
+
+
+class OpenWebsiteTests(unittest.TestCase):
+    def test_opens_and_confirms_a_new_window(self):
+        from jarvis_v2 import tools
+        titles = [["Inbox - Personal - Microsoft Edge"]]
+        opened = []
+        def launch(u):
+            opened.append(u)
+            titles.append(["Inbox - Personal - Microsoft Edge", "Account Settings | Redbubble - Personal - Microsoft Edge"])
+        out = tools.open_website("https://www.redbubble.com/account/settings", launch=launch,
+                                 windows=lambda: titles[-1], sleep=lambda s: None)
+        self.assertEqual(opened, ["https://www.redbubble.com/account/settings"])
+        self.assertIn("Opened www.redbubble.com", out)
+
+    def test_an_old_tab_is_not_taken_as_proof(self):
+        from jarvis_v2 import tools
+        same = ["Account Settings | Redbubble - Personal - Microsoft Edge"]
+        out = tools.open_website("https://www.redbubble.com/account/settings", launch=lambda u: None,
+                                 windows=lambda: same, sleep=lambda s: None)
+        self.assertIn("couldn't confirm", out)
+
+    def test_only_web_addresses(self):
+        from jarvis_v2 import tools
+        for bad in ("redbubble settings page", "file:///C:/Windows", "javascript:alert(1)", "https://a b.com"):
+            self.assertIn("full web address", tools.open_website(bad, launch=lambda u: self.fail("launched"), windows=lambda: [], sleep=lambda s: None))
