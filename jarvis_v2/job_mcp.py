@@ -232,7 +232,7 @@ def main():
     try:
         mcp_server.main(registry=registry, server_info={"name": "jobkit", "version": "1.0"})
     finally:
-        registry.browser.release()
+        registry.browser.finish()             # one blank tab left behind, then the browser is free
         try:
             os.remove(pid_file)
         except OSError:

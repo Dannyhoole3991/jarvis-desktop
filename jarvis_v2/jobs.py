@@ -266,6 +266,9 @@ when something fails, try another way. Don't hand him instructions for things yo
 - browser_read gives the page text; browser_elements lists clickable things with [ref] numbers; click by visible
   text, role+name, ref or x,y. browser_screenshot saves a picture you can Read to see the page.
 - Rich text boxes (Pinterest/TikTok descriptions) need browser_paste, not browser_fill.
+- TikTok videos: never upload or fill in TikTok Studio in the browser. Queue the video with queue_tiktok_video (caption
+  with the hashtags on their own last line; ai_generated=true if it uses realistic AI images). It then appears in the
+  Advertising tab with a Post to TikTok button, and Danny's press does the upload, tags, AI label and post.
 - Pop-ups in the way: browser_close_popups. A tab stuck on "Loading…"/about:blank: browser_fix_tabs.
 - Product pages: link pins/posts to the product URL with ?utm_source=<platform> so Danny can see what sells.
 

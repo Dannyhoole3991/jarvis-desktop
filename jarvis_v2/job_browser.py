@@ -239,6 +239,7 @@ class Toolkit:
         self.sleep = sleep
         self._hold = None
         self.shots = 0
+        self.used = False                     # touched the browser at all (so finish() tidies it)
 
     # -------------------------------------------------------------- plumbing
     @property
@@ -251,6 +252,7 @@ class Toolkit:
     def _run(self, fn, timeout=90):
         """Runs fn(page) on the browser thread, holding the browser for the rest of the job."""
         jb = self.jb
+        self.used = True
         if self._hold is None and hasattr(jb, "exclusive"):
             try:
                 hold = jb.exclusive(wait=120)
@@ -268,6 +270,15 @@ class Toolkit:
             return jb._worker.run(safe, timeout=timeout)
         except Exception as error:
             return f"The browser didn't respond: {error}"
+
+    def finish(self):
+        """End of the job: if it used the browser, leave it with one blank tab, then let go of it."""
+        if self.used and hasattr(self.jb, "tidy_tabs"):
+            try:
+                self.jb.tidy_tabs()
+            except Exception:
+                pass
+        self.release()
 
     def release(self):
         if self._hold is not None:

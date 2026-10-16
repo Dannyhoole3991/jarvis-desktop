@@ -453,9 +453,9 @@ def tiktok_post_list():
     return posting.describe()
 
 
-def queue_tiktok_video(video, caption, title):
+def queue_tiktok_video(video, caption, title, ai_generated=False):
     from . import posting
-    item = posting.add(video, caption, title, source="jarvis")
+    item = posting.add(video, caption, title, source="jarvis", ai_generated=ai_generated)
     return f"Added '{item['title']}' to the Ready to post list. Danny posts it with the button in the Advertising tab."
 
 
@@ -581,8 +581,11 @@ TOOLS = {
                            _schema({"refresh": {"type": "boolean"}})),
     "tiktok_post_list": (tiktok_post_list, "The videos waiting in the Ready to post list, what's been posted, and any that failed.", _schema()),
     "queue_tiktok_video": (queue_tiktok_video, "Add a video Jarvis made (from generated_videos) with its caption to the Ready to post list. "
-                           "It is NOT posted: only Danny can post it, with the button in the Advertising tab. Captions must be honest (no fake reviews or discounts).",
-                           _schema({"video": _S, "caption": _S, "title": _S}, ["video", "caption", "title"])),
+                           "It is NOT posted: only Danny can post it, with the button in the Advertising tab; pressing it uploads, types the caption, "
+                           "picks each hashtag from TikTok's dropdown, sets the AI label and posts. This is THE way to get a video onto TikTok: never "
+                           "upload or fill in TikTok Studio yourself. ai_generated=true when the video uses realistic AI images or footage "
+                           "(TikTok requires the label). Captions must be honest (no fake reviews or discounts).",
+                           _schema({"video": _S, "caption": _S, "title": _S, "ai_generated": {"type": "boolean"}}, ["video", "caption", "title"])),
     "say_now": (say_now, "Say one short sentence out loud to Danny RIGHT NOW, before you carry on working (e.g. 'On it, sir, "
                 "checking the store now.'). Use it first when a job will take more than a few seconds; not for quick answers.",
                 _schema({"text": _S}, ["text"])),

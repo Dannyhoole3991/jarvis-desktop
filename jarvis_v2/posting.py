@@ -70,8 +70,11 @@ def _safe_video(path):
     return real
 
 
-def add(video, caption, title, platform="tiktok", source=""):
-    """Puts a prepared video in the Ready-to-post list. Never posts."""
+def add(video, caption, title, platform="tiktok", source="", ai_generated=False):
+    """Puts a prepared video in the Ready-to-post list. Never posts.
+
+    ai_generated: the video shows realistic AI-made images/footage, so TikTok's "AI-generated content"
+    label is switched on when it's posted (TikTok requires it since July 2026)."""
     from jarvis_store import copywriter
     video = _safe_video(video)
     caption = (caption or "").strip()
@@ -83,7 +86,8 @@ def add(video, caption, title, platform="tiktok", source=""):
         if any(os.path.normcase(it["video"]) == os.path.normcase(video) and it["status"] != "failed" for it in items):
             raise ValueError("That video is already in the list.")
         item = {"id": max([it["id"] for it in items] + [0]) + 1, "platform": platform, "title": title, "video": video,
-                "caption": caption, "status": "ready", "created_at": time.time(), "source": source}
+                "caption": caption, "status": "ready", "created_at": time.time(), "source": source,
+                "ai_generated": bool(ai_generated)}
         _save(items + [item])
     return item
 
@@ -238,6 +242,11 @@ def _post(item_id, browser=None, sleep=time.sleep, progress=None):
         if got["missing"]:
             _update(item["id"], note="TikTok didn't offer these tags, so they were left out: " + " ".join(got["missing"]))
             tell("TikTok wouldn't take " + " and ".join(t.lstrip("#") for t in got["missing"]) + " as a tag, so I left it out.")
+        if item.get("ai_generated"):
+            if not jb._worker.run(_label_ai_generated, timeout=30):
+                discard(jb)
+                raise RuntimeError("I couldn't switch on TikTok's AI-generated label, so I didn't post it.")
+            tell("AI-generated label switched on.")
         tell("Caption checked word for word. Posting it now.")
 
         def press_post(page):
@@ -264,6 +273,42 @@ def _post(item_id, browser=None, sleep=time.sleep, progress=None):
     except Exception as error:
         _update(item["id"], status="failed", error=str(error)[:300])
         return get(item["id"])
+
+
+AI_SWITCH_JS = """() => {
+    // The switch's nearest labelled container reads "AI-generated content".
+    for (const el of document.querySelectorAll('input[role=switch]')) {
+        let p = el;
+        for (let k = 0; k < 7 && p; k++) {
+            p = p.parentElement;
+            if (p && p.innerText && p.innerText.trim().length > 8) break;
+        }
+        if (p && p.innerText.trim().startsWith('AI-generated content')) return el.checked;
+    }
+    return null;
+}"""
+
+
+def _label_ai_generated(page):
+    """Opens the advanced settings and switches "AI-generated content" on. Returns True once it reads on."""
+    if page.evaluate(AI_SWITCH_JS) is None:
+        more = page.get_by_text("Show more", exact=True)
+        if more.count():
+            more.first.click()
+            time.sleep(1.5)
+    state = page.evaluate(AI_SWITCH_JS)
+    if state is None:
+        return False
+    if not state:
+        page.evaluate(AI_SWITCH_JS.replace("return el.checked;", "{ el.click(); return true; }"))
+        time.sleep(1.5)
+        for label in ("Turn on", "Confirm", "OK"):      # TikTok may ask to confirm the label
+            b = page.get_by_role("button", name=label, exact=True)
+            if b.count() and b.last.is_visible():
+                b.last.click()
+                time.sleep(1)
+                break
+    return page.evaluate(AI_SWITCH_JS) is True
 
 
 def discard(jb):

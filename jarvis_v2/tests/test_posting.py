@@ -121,6 +121,37 @@ class FakePage:
         self.editor_text = (text[:-10] if self.mangle else text)
 
 
+class AILabelPage(FakePage):
+    """TikTok's upload page with the "AI-generated content" switch behind Show more."""
+    def __init__(self, has_switch=True, **kw):
+        super().__init__(**kw)
+        self.has_switch, self.more_open, self.ai_on = has_switch, False, False
+
+    def get_by_text(self, text, exact=True):
+        page = self
+
+        class More:
+            first = property(lambda s: s)
+
+            def count(self):
+                return 1
+
+            def click(self):
+                page.more_open = True
+        return More()
+
+    def evaluate(self, script, text=None):
+        if "AI-generated content" not in script:
+            return super().evaluate(script, text)
+        if not (self.has_switch and self.more_open):
+            return None
+        if "el.click()" in script:
+            self.ai_on = True
+            self.clicked.append("AI")
+            return True
+        return self.ai_on
+
+
 class FakeBrowser:
     def __init__(self, page, blocked=False, appears=True):
         self.page, self.blocked, self.appears = page, blocked, appears
@@ -188,6 +219,25 @@ class PostingTests(unittest.TestCase):
         self.assertEqual(page.clicked.count("POST"), 1)
         self.assertEqual(page.mentions, ["#christmasdecor", "#collective"], "each tag picked from the dropdown")
         self.assertEqual(page.editor_text, "The finishing touch 🎀 From £18.99\n#christmasdecor #collective ")
+
+    def test_ai_generated_video_gets_tiktoks_label_before_posting(self):
+        item = PO.add(self.video, "Velvet bow 🎀\n#christmasdecor", "Bow", ai_generated=True)
+        self.assertTrue(item["ai_generated"])
+        page = AILabelPage()
+        with mock.patch.object(PO.time, "sleep"):
+            result = PO.post(item["id"], browser=FakeBrowser(page), sleep=lambda s: None)
+        self.assertEqual(result["status"], "posted")
+        self.assertTrue(page.ai_on, "AI-generated content switched on")
+        self.assertLess(page.clicked.index("AI"), page.clicked.index("POST"), "label set before Post")
+
+    def test_no_post_when_the_ai_label_cannot_be_set(self):
+        item = PO.add(self.video, "Velvet bow 🎀\n#christmasdecor", "Bow", ai_generated=True)
+        page = AILabelPage(has_switch=False)
+        with mock.patch.object(PO.time, "sleep"):
+            result = PO.post(item["id"], browser=FakeBrowser(page), sleep=lambda s: None)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("AI-generated", result["error"])
+        self.assertNotIn("POST", page.clicked)
 
     def test_a_tag_tiktok_does_not_offer_is_left_out_and_noted(self):
         item = PO.seed_christmas()[0]

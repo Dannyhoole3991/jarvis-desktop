@@ -96,6 +96,37 @@ def show_window(title_hint="Fiverr"):
         pass
 
 
+def _no_restore(profile_dir=None):
+    """
+    Makes the next start a fresh one: one blank tab, never last session's tabs (Edge brings them back
+    after "continue where you left off" or a crash/force-close, and jobs then open the same pages again,
+    two or three copies deep). Logins live in the profile's cookies, which are untouched.
+    """
+    import json
+    default = os.path.join(profile_dir or PROFILE_DIR, "Default")
+    sessions = os.path.join(default, "Sessions")
+    if os.path.isdir(sessions):
+        for name in os.listdir(sessions):
+            try:
+                os.remove(os.path.join(sessions, name))
+            except OSError:
+                pass
+    prefs_path = os.path.join(default, "Preferences")
+    try:
+        with open(prefs_path, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except (OSError, ValueError):
+        return
+    prefs.setdefault("session", {})["restore_on_startup"] = 5      # 5 = open the new tab page
+    prefs.setdefault("profile", {}).update({"exit_type": "Normal", "exited_cleanly": True})
+    try:
+        with open(prefs_path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(prefs, f)
+        os.replace(prefs_path + ".tmp", prefs_path)
+    except OSError:
+        pass
+
+
 def launch_browser(start_url="about:blank", visible=False):
     """
     Starts the dedicated Edge window if it isn't already running. Returns (ok, message).
@@ -108,9 +139,15 @@ def launch_browser(start_url="about:blank", visible=False):
     if not edge:
         return False, "Microsoft Edge isn't installed where I expected."
     os.makedirs(PROFILE_DIR, exist_ok=True)
+    _no_restore()
     args = [
         edge, f"--remote-debugging-port={DEBUG_PORT}", f"--user-data-dir={PROFILE_DIR}",
         "--no-first-run", "--no-default-browser-check",
+        # The window lives minimized, and Edge throttles/pauses minimized pages: TikTok's upload then
+        # hangs at 99% (it finished whenever the window was on screen). Keep background pages running.
+        "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--hide-crash-restore-bubble",
     ]
     if not visible:
         args.append("--start-minimized")
@@ -255,6 +292,7 @@ class _Worker:
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         pages = [p for p in context.pages if not p.url.startswith("devtools")]
         self._page = pages[0] if pages else context.new_page()
+        _close_others(context, self._page)        # a fresh connection starts with one tab (we hold the lock here)
         return self._page
 
     def run(self, action, timeout=60):
@@ -285,7 +323,41 @@ class _Worker:
                 raise value
 
 
+def _close_others(context, keep):
+    """Closes every tab but `keep`, including tabs other programs (jobs) opened over their own connection,
+    which this connection's context never sees. Returns how many it closed."""
+    import json
+    import urllib.request
+    try:
+        cdp = context.new_cdp_session(keep)
+        keep_id = cdp.send("Target.getTargetInfo")["targetInfo"]["targetId"]
+        cdp.detach()
+        base = f"http://127.0.0.1:{DEBUG_PORT}/json"
+        targets = json.load(urllib.request.urlopen(base + "/list", timeout=5))
+    except Exception:
+        return 0
+    closed = 0
+    for t in targets:
+        if t.get("type") != "page" or t.get("id") == keep_id or t.get("url", "").startswith("devtools"):
+            continue
+        try:
+            urllib.request.urlopen(f"{base}/close/{t['id']}", timeout=5).read()
+            closed += 1
+        except Exception:
+            pass
+    return closed
+
+
 _worker = _Worker()
+
+
+def tidy_tabs():
+    """Leaves Jarvis's browser with ONE blank tab (run when a job finishes, so tabs don't pile up)."""
+    def action(page):
+        closed = _close_others(page.context, page)
+        page.goto("about:blank")
+        return closed
+    return _worker.run(action, timeout=60)
 
 
 def goto(url, settle=2.0):

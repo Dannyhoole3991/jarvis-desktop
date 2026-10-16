@@ -43,6 +43,11 @@
   .msg { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4;
     white-space: pre-wrap; word-wrap: break-word; user-select: text; }
   .msg.user { align-self: flex-end; background: rgba(255,179,71,0.13); }
+  .restore { align-self: center; margin: 4px auto 0; background: none; border: 1px solid var(--border); color: var(--muted, #9aa);
+    font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer; opacity: 0.75; }
+  .restore:hover { opacity: 1; }
+  .restore[hidden] { display: none; }
+  .msg.restored { opacity: 0.7; }
   .msg.jarvis { align-self: flex-start; background: rgba(255,255,255,0.05); border: 1px solid var(--border); }
   .msg .meta { display: block; font-size: 10px; color: var(--dimmer); margin-top: 3px; }
   .input-row { width: 100%; display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,0.05);
@@ -165,6 +170,7 @@
     <canvas id="orbCanvas" width="360" height="360"></canvas>
     <div class="status-text" id="statusText">Standing by</div>
     <div class="chat" id="chat"></div>
+    <button class="restore" id="restoreSession" hidden title="Bring back the last conversation and hear Jarvis's last reply">Restore last session</button>
     <div class="input-row">
       <input id="input" type="text" placeholder="Tell Jarvis…" autocomplete="off" />
       <button class="round" id="send" title="Send">&#10148;</button>
@@ -706,21 +712,54 @@ function addMsg(role, text, meta) {
 }
 
 let lastConvId = 0, firstPoll = true;
+let lastSession = [];      // the recent past, kept off screen until Danny asks for it
 async function pollConversation() {
   try {
     const data = await api("/api/conversation?since=" + lastConvId);
     const msgs = data.messages || [];
-    // On first load show only the recent past, not the whole day.
-    for (const m of (firstPoll ? msgs.slice(-12) : msgs)) addMsg(m.role, m.message);
+    if (firstPoll) {
+      // Every open starts with a clear chat. The last session waits behind a quiet "Restore last session" button.
+      lastSession = msgs.slice(-12).filter(m => (m.message || "").trim());
+      el("restoreSession").hidden = !lastSession.length;
+    } else {
+      for (const m of msgs) addMsg(m.role, m.message);
+      if (msgs.some(m => m.role === "user")) hideRestore();     // he's talking to Jarvis (voice or phone): moved on
+    }
     for (const m of msgs) lastConvId = Math.max(lastConvId, m.id || 0);
     firstPoll = false;
   } catch (e) {}
 }
+function hideRestore() { el("restoreSession").hidden = true; lastSession = []; }
+function speakable(text) {
+  // A spoken version of a chat reply: no markdown, and short (the first sentences up to ~300 characters).
+  const plain = (text || "").replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>|]/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ").trim();
+  if (plain.length <= 300) return plain;
+  const cut = plain.slice(0, 300), end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return end > 80 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "") + "…";
+}
+el("restoreSession").addEventListener("click", async () => {
+  const items = lastSession;
+  hideRestore();
+  const chat = el("chat"), first = chat.firstChild;
+  const frag = document.createDocumentFragment();
+  for (const m of items) {
+    const div = document.createElement("div");
+    div.className = "msg " + (m.role === "user" ? "user" : "jarvis") + " restored";
+    if (m.role === "user") div.textContent = m.message.trim(); else div.innerHTML = md(m.message.trim());
+    frag.appendChild(div);
+  }
+  chat.insertBefore(frag, first);
+  chat.scrollTop = chat.scrollHeight;
+  const last = [...items].reverse().find(m => m.role !== "user");
+  if (last) { try { await api("/api/say", { text: speakable(last.message) }); } catch (e) {} }
+});
 
 async function send() {
   const text = el("input").value.trim();
   if (!text) return;
   el("input").value = "";
+  hideRestore();
   addMsg("user", text);
   setOrbState("thinking");
   try {
@@ -1177,6 +1216,7 @@ async function renderPosts() {
       <div><b>${esc(i.title)}</b> <span class="pill ${i.status === "posted" ? "good" : i.status === "failed" ? "bad" : i.status === "posting" ? "busy" : ""}">${esc(POST_STATUS[i.status] || i.status)}</span>
         ${i.error ? `<div class="kv" style="color:var(--red)">${esc(i.error)}</div>` : ""}
         ${i.note ? `<div class="kv" style="color:#e0a030">${esc(i.note)}</div>` : ""}
+        ${i.ai_generated ? `<div class="kv">TikTok's "AI-generated content" label will be switched on.</div>` : ""}
         <div class="cap">${esc(i.caption)}</div>
         <div class="actions" style="margin-top:0">
           ${["ready", "failed"].includes(i.status) ? `<button class="btn go" data-postnow="${i.id}" ${data.posting_now ? "disabled" : ""}>Post to TikTok</button>

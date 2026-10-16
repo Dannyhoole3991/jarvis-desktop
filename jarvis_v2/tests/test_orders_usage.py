@@ -200,3 +200,66 @@ class OpenWebsiteTests(unittest.TestCase):
         from jarvis_v2 import tools
         for bad in ("redbubble settings page", "file:///C:/Windows", "javascript:alert(1)", "https://a b.com"):
             self.assertIn("full web address", tools.open_website(bad, launch=lambda u: self.fail("launched"), windows=lambda: [], sleep=lambda s: None))
+
+
+class FreshBrowserTests(unittest.TestCase):
+    """Jarvis's browser starts with one tab, never last session's tabs, and tidies up after itself."""
+
+    def test_no_restore_clears_last_session_but_keeps_everything_else(self):
+        import json
+        import jarvis_browser as jb
+        with tempfile.TemporaryDirectory() as tmp:
+            default = os.path.join(tmp, "Default")
+            os.makedirs(os.path.join(default, "Sessions"))
+            for name in ("Session_1", "Tabs_1"):
+                open(os.path.join(default, "Sessions", name), "w").close()
+            open(os.path.join(default, "Cookies"), "w").close()
+            with open(os.path.join(default, "Preferences"), "w", encoding="utf-8") as f:
+                json.dump({"session": {"restore_on_startup": 1}, "profile": {"exit_type": "Crashed", "name": "Jarvis"}}, f)
+            jb._no_restore(tmp)
+            self.assertEqual(os.listdir(os.path.join(default, "Sessions")), [])
+            self.assertTrue(os.path.exists(os.path.join(default, "Cookies")), "logins stay")
+            with open(os.path.join(default, "Preferences"), encoding="utf-8") as f:
+                prefs = json.load(f)
+            self.assertEqual(prefs["session"]["restore_on_startup"], 5)
+            self.assertEqual(prefs["profile"], {"exit_type": "Normal", "exited_cleanly": True, "name": "Jarvis"})
+
+    def test_no_restore_on_a_brand_new_profile_does_nothing(self):
+        import jarvis_browser as jb
+        with tempfile.TemporaryDirectory() as tmp:
+            jb._no_restore(tmp)            # no Default folder yet: no error
+
+    def test_launch_never_restores_and_keeps_minimised_pages_running(self):
+        import jarvis_browser as jb
+        with mock.patch.object(jb, "_port_open", side_effect=[False] + [True] * 5), \
+             mock.patch.object(jb, "find_edge", return_value="edge.exe"), \
+             mock.patch.object(jb, "_no_restore") as fresh, \
+             mock.patch.object(jb.subprocess, "Popen") as popen, mock.patch.object(jb.os, "makedirs"):
+            self.assertTrue(jb.launch_browser()[0])
+        fresh.assert_called_once()
+        args = popen.call_args[0][0]
+        for flag in ("--hide-crash-restore-bubble", "--disable-backgrounding-occluded-windows",
+                     "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--start-minimized"):
+            self.assertIn(flag, args)
+
+    def test_tidy_closes_every_other_tab_even_ones_jobs_opened(self):
+        import io
+        import json
+        import jarvis_browser as jb
+        targets = [{"id": "KEEP", "type": "page", "url": "https://tiktok.com"},
+                   {"id": "A", "type": "page", "url": "https://cj.com"},          # opened by a job's own connection
+                   {"id": "B", "type": "page", "url": "https://cj.com"},
+                   {"id": "SW", "type": "service_worker", "url": "https://x/sw.js"}]
+        closed = []
+
+        def fake_open(url, timeout=None):
+            if url.endswith("/list"):
+                return io.StringIO(json.dumps(targets))
+            closed.append(url.rsplit("/", 1)[1])
+            return io.BytesIO(b"Target is closing")
+        page = mock.Mock(url="https://tiktok.com")
+        page.context.new_cdp_session.return_value.send.return_value = {"targetInfo": {"targetId": "KEEP"}}
+        with mock.patch.object(jb._worker, "run", lambda fn, timeout=None: fn(page)),              mock.patch("urllib.request.urlopen", fake_open):
+            self.assertEqual(jb.tidy_tabs(), 2)
+        self.assertEqual(closed, ["A", "B"], "only other PAGES; Jarvis's own tab and workers stay")
+        page.goto.assert_called_once_with("about:blank")

@@ -37,3 +37,8 @@
   - Faulty or damaged items: a photo, then a refund or replacement, with no return needed.
   - Remove "[INSERT RETURN ADDRESS]" and the wrong "30 days" from the live policy page.
 - [ ] Pick the best 2 of Jarvis's 6 unused designs (in generated_print_on_demand) and upload them to Redbubble, so it has the 5 designs it needs.
+
+## Christmas hero candidates saved for later (16 Oct 2026)
+From Jarvis's shortlist (generated_videos/christmas_hero/SHORTLIST.md). Danny picked the apple rose necklace box first; do these two after it:
+- Climbing chimney Santa (CJ F4098D71-A4CC-42AC-837A-CE75A4469B0D, variant Red, CJJJJRSD00167-Red). Amazon UK has it at £9.89-14.99, so price about £16.99 (~£7 profit). CJ sells it as a kids' toy (3+): get UKCA/CE paperwork or skip it.
+- USB Christmas ceiling projector (CJ 2103035533571502082, SKU CJTY319325404DW). Amazon UK has one at £8.49; the supplier is new with no reviews.

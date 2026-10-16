@@ -290,6 +290,22 @@ class ToolkitTests(unittest.TestCase):
         self.jb = FakeJB(page)
         return JB.Toolkit(self.job, config.REPO_DIR, jb=self.jb, approved=lambda a: self.grants.get(a), log=self.log.append, sleep=lambda s: None)
 
+    def test_a_job_that_used_the_browser_leaves_one_blank_tab_and_lets_go(self):
+        page = FakePage({})
+        kit = self.kit(page)
+        self.jb.tidy_tabs = mock.Mock(return_value=2)
+        kit.read() if hasattr(kit, "read") else kit._run(lambda p: "x")
+        self.assertEqual(self.jb.holds, 1)
+        kit.finish()
+        self.jb.tidy_tabs.assert_called_once()
+        self.assertEqual(self.jb.holds, 0)
+
+    def test_a_job_that_never_used_the_browser_leaves_it_alone(self):
+        kit = self.kit(FakePage({}))
+        self.jb.tidy_tabs = mock.Mock()
+        kit.finish()
+        self.jb.tidy_tabs.assert_not_called()
+
     def test_publish_is_held_until_danny_approves_and_the_approval_is_logged(self):
         page = FakePage({"button:Publish": desc(label="Publish")})
         kit = self.kit(page)
