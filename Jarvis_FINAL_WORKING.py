@@ -11465,13 +11465,18 @@ def run_print_on_demand_experiment(experiment_id, opportunity):
         "insight", f"'{opportunity['name']}' is ready to list, but not listed anywhere yet -- real demand/sales still unmeasured.",
         opportunity_id=opportunity["id"], experiment_id=experiment_id,
     )
-    if not jbiz.has_human_action_like("print-on-demand shop account"):
-        jbiz.queue_human_action(
-            "create_account",
-            "Jarvis has designs ready to sell but no print-on-demand shop account (e.g. Redbubble, Etsy, Printful) to actually list them on -- "
-            "set one up and tell me which, and I'll start preparing listings for it.",
-            opportunity_id=opportunity["id"], experiment_id=experiment_id,
-        )
+    # Danny's Redbubble shop is open: get the design upload-ready (clean background, title, tags) and keep one
+    # up-to-date line on his to-do list. The upload itself happens in Danny's own Edge, because Redbubble's
+    # Cloudflare check blocks Jarvis's automated browser (see jarvis_redbubble_prep).
+    try:
+        import jarvis_redbubble_prep as rbprep
+        rbprep.prepare(file_path, opportunity["name"], image_prompt)
+        count = len(rbprep.waiting())
+        jbiz.resolve_human_actions_like("ready for Redbubble", status="done")
+        jbiz.queue_human_action("upload_designs", rbprep.todo_text(count),
+                                opportunity_id=opportunity["id"], experiment_id=experiment_id)
+    except Exception as error:
+        print("PRINT-ON-DEMAND: couldn't prepare the Redbubble listing:", error)
     return True
 
 

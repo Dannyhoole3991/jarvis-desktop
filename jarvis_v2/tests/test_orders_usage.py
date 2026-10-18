@@ -263,3 +263,31 @@ class FreshBrowserTests(unittest.TestCase):
             self.assertEqual(jb.tidy_tabs(), 2)
         self.assertEqual(closed, ["A", "B"], "only other PAGES; Jarvis's own tab and workers stay")
         page.goto.assert_called_once_with("about:blank")
+
+
+class StuckBrowserReadTests(unittest.TestCase):
+    """A background browser read that hangs must not block Danny's Post button for good."""
+
+    def state(self):
+        from jarvis_v2 import server as SV
+        st = mock.Mock(orders_refreshing=False, adv_refreshing=False, posting_now=None)
+        st.busy_since = {}
+        return SV, st
+
+    def test_a_fresh_read_is_busy_and_says_what(self):
+        SV, st = self.state()
+        st.orders_refreshing = True
+        self.assertEqual(SV._browser_busy(st, now=1000), "reading your Shopify orders")
+        self.assertEqual(SV._browser_busy(st, now=1000 + 60), "reading your Shopify orders")
+
+    def test_a_read_stuck_for_ten_minutes_is_let_go(self):
+        SV, st = self.state()
+        st.adv_refreshing = True
+        SV._browser_busy(st, now=1000)
+        self.assertEqual(SV._browser_busy(st, now=1000 + SV.BUSY_STALE), "")
+        self.assertFalse(st.adv_refreshing)
+        self.assertEqual(st.busy_since, {})
+
+    def test_nothing_running_is_not_busy(self):
+        SV, st = self.state()
+        self.assertEqual(SV._browser_busy(st), "")

@@ -97,7 +97,9 @@ def money_check(fresh=False):
                 return cached["text"] + f"\n(Checked {max(1, round(age / 60))} minute(s) ago. Ask for a fresh check to re-read the sites.)"
         except Exception:
             pass
-    text = jarvis_money.describe(jarvis_money.money_status())
+    results = jarvis_money.money_status()
+    text = jarvis_money.describe(results)
+    _save_money_results(results)             # the Business tab shows these, account by account
     if "couldn't check" in text.lower():       # a failed read isn't worth reusing
         return text
     try:
@@ -106,6 +108,35 @@ def money_check(fresh=False):
     except Exception:
         pass
     return text
+
+
+def _money_results_path():
+    return os.path.join(config.DATA_DIR, "money_results.json")
+
+
+def _save_money_results(results):
+    """Keeps the last good reading of each account (a failed read doesn't wipe the previous figures)."""
+    import time
+    old = money_results().get("accounts") or {}
+    for r in results:
+        if r.get("ok") or r["name"] not in old:
+            old[r["name"]] = dict(r, at=time.time())
+        else:
+            old[r["name"]] = dict(old[r["name"]], problem=r.get("problem"), logged_out=r.get("logged_out"))
+    try:
+        with open(_money_results_path(), "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "accounts": old}, f)
+    except Exception:
+        pass
+
+
+def money_results():
+    """The last per-account money reading ({"at", "accounts": {name: {...}}}), without reading any website."""
+    try:
+        with open(_money_results_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def shop_orders():

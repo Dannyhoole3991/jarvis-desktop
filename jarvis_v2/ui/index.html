@@ -257,6 +257,10 @@
     </div>
     <div class="pane" id="pane-business">
       <div class="tiles" id="bizTiles"></div>
+      <div class="card"><h3>Real earnings <span class="sub" id="bizEarnAt"></span>
+          <button class="btn" style="float:right" id="bizEarnCheck">Check now</button></h3>
+        <div id="bizEarnings">Loading…</div>
+        <p class="hint">Read off each account's own pages in Jarvis's browser, about every 6 hours. Nothing is guessed: if a page can't be read, it says why.</p></div>
       <div class="card"><h3>What Jarvis is running <span class="sub" id="bizExpCount"></span></h3><div id="bizExperiments">Loading…</div></div>
       <div class="card"><h3>Ideas pipeline</h3><div class="chips" id="bizPipeline"></div>
         <p class="hint">Ideas Jarvis finds are scored, the best are tested as experiments, and ones that don't work out are dropped.</p></div>
@@ -833,6 +837,7 @@ async function loadPanel(name, refresh) {
   return p;
 }
 el("money-refresh").addEventListener("click", () => loadPanel("money", true));
+el("bizEarnCheck").addEventListener("click", async () => { el("bizEarnCheck").disabled = true; await loadPanel("money", true); setTimeout(renderBusiness, 1500); });
 document.querySelectorAll("[data-refresh]").forEach(b => b.addEventListener("click", () => loadPanel(b.dataset.refresh, true)));
 
 // ------------------------------------------- runs / projects / specs / memory / changes
@@ -1077,12 +1082,21 @@ async function renderBusiness() {
   if (b.error) { el("bizExperiments").textContent = b.error; return; }
   const bud = b.budget || {}, target = b.target || [0, 0];
   const spentPct = bud.daily_cap ? Math.min(100, 100 * (bud.spent_today || 0) / bud.daily_cap) : 0;
+  const earn = b.earnings || {}, shop = earn.shop || {};
   el("bizTiles").innerHTML = `
-    <div class="tile"><div class="label">Money in</div><div class="value ${b.revenue > 0 ? "pos" : ""}">${gbp(b.revenue)}</div><div class="note">Target ${gbp(target[0])}–${gbp(target[1])} a day</div></div>
-    <div class="tile"><div class="label">Costs so far</div><div class="value">${gbp(b.cost)}</div><div class="note">AI used to make things</div></div>
-    <div class="tile"><div class="label">Profit</div><div class="value ${b.profit < 0 ? "neg" : b.profit > 0 ? "pos" : ""}">${gbp(b.profit)}</div><div class="note">Money in minus costs</div></div>
+    <div class="tile"><div class="label">Shop sales</div><div class="value ${shop.total > 0 ? "pos" : ""}">${gbp(shop.total)}</div><div class="note">${shop.orders || 0} Shopify order${shop.orders === 1 ? "" : "s"}${shop.pending_payout ? " · " + esc(shop.pending_payout) + " on the way" : ""}</div></div>
+    <div class="tile"><div class="label">Side projects in</div><div class="value ${b.revenue > 0 ? "pos" : ""}">${gbp(b.revenue)}</div><div class="note">Target ${gbp(target[0])}–${gbp(target[1])} a day</div></div>
+    <div class="tile"><div class="label">Actually live</div><div class="value">${b.listed || 0}</div><div class="note">${b.not_listed || 0} more made but not listed anywhere yet</div></div>
     <div class="tile"><div class="label">AI spend today</div><div class="value">${gbp(bud.spent_today)}</div>
-      <div class="progress"><div style="width:${spentPct}%;background:var(--gold)"></div></div><div class="note">of ${gbp(bud.daily_cap)} daily limit</div></div>`;
+      <div class="progress"><div style="width:${spentPct}%;background:var(--gold)"></div></div><div class="note">of ${gbp(bud.daily_cap)} daily limit · ${gbp(b.cost)} in total</div></div>`;
+
+  el("bizEarnAt").textContent = earn.checking ? "· checking now…" : earn.at ? "· checked " + when(new Date(earn.at * 1000).toISOString()) : "· not checked yet";
+  el("bizEarnCheck").disabled = !!earn.checking;
+  if (earn.checking) setTimeout(() => { if (document.querySelector("#pane-business.active, #pane-business:not([hidden])")) renderBusiness(); }, 6000);
+  const accs = earn.accounts || [];
+  el("bizEarnings").innerHTML = accs.length ? accs.map(a => `<div class="event"><span class="pill ${a.ok ? "" : "busy"}">${esc(a.name)}</span>
+      <span class="what">${a.ok ? esc(a.summary || "") : "Couldn't check: " + esc(a.problem || "unknown")}${a.ok && a.problem ? ' <span class="hint">(latest check failed: ' + esc(a.problem) + ")</span>" : ""}</span></div>`).join("")
+    : `<p class="hint">${earn.checking ? "Reading the four accounts now, this takes a minute or two…" : "Not checked yet. Press Check now."}</p>`;
 
   const exps = b.experiments || [];
   el("bizExpCount").textContent = exps.length ? `· ${exps.length} experiments` : "";
@@ -1094,7 +1108,7 @@ async function renderBusiness() {
       groups[type].map(e => `<div class="exp"><span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>
         <span class="num">${when(e.started)}</span>
         <span class="num">${gbp(e.revenue)} in${e.traffic ? " · " + e.traffic + " visits" : ""}</span>
-        <span>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">view</a> ` : ""}<span class="pill ${e.status === "review" ? "busy" : ""}">${esc(EXP_STATUS[e.status] || e.status)}</span></span></div>`).join("");
+        <span>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">view</a> ` : ""}<span class="pill ${e.listed ? "busy" : ""}">${e.status === "review" ? (e.listed ? "live" : "made · not listed yet") : esc(EXP_STATUS[e.status] || e.status)}</span></span></div>`).join("");
   }).join("") || '<p class="hint">No experiments yet.</p>';
 
   const op = b.opportunities || {};

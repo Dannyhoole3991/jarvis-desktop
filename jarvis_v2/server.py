@@ -49,6 +49,7 @@ class State:
         self.orders_refreshing = False   # reading Shopify orders in Jarvis's browser
         self.orders = None               # last reading: {ok, orders, payouts, at}
         self.posting_now = None
+        self.busy_since = {}             # "orders"/"adverts"/"posting" -> when that browser read started
         self.mail_checking = False       # the business inbox is being read right now
         self.announcer = None            # alerts.Announcer, set by start()
         self.approvals = None            # jobs.ApprovalStore: what jobs asked Danny, and his answers
@@ -404,7 +405,7 @@ def api_get(state, path, query):
         with open(full, encoding="utf-8") as f:
             return {"name": name, "text": f.read()}
     if path == "/api/business":
-        return business_view()
+        return business_view(state)
     if path == "/api/store":
         return store_view(state)
     if path == "/api/posts":
@@ -452,8 +453,40 @@ _URL_RE = re.compile(r"https?://[^\s'\"<>)]+")
 _NAME_RE = re.compile(r"^(?:Testing:\s*)?(.*?)(?:\s*\(score\s*([\d.]+)/10\))?$")
 
 
-def business_view():
-    """The business tracker shaped for the Business tab: totals, what's live (with links), activity, lessons."""
+MONEY_AUTO_REFRESH = 6 * 3600     # re-read Shopify/Fiverr/Redbubble/AdSense earnings for the Business tab this often
+
+
+def _listed(e):
+    """Is this experiment actually somewhere a customer can buy/read it, or only saved as a file?"""
+    notes = (e.get("notes") or "").lower()
+    return "published live" in notes or "listed on" in notes
+
+
+def _money_float(text):
+    try:
+        return float(re.sub(r"[^\d.]", "", text or ""))
+    except ValueError:
+        return 0.0
+
+
+def _earnings(state):
+    """Real money, read off each account's own pages (the Money tab's check), plus Shopify sales."""
+    reading = tools.money_results()
+    panel = (state.panels.get("money") if state else None) or {}
+    stale = not reading.get("at") or time.time() - reading["at"] > MONEY_AUTO_REFRESH
+    if state is not None and stale and not panel.get("running") and not _browser_busy(state):
+        api_panel(state, "money", refresh=True)        # background read; the tab shows "checking" meanwhile
+        panel = state.panels.get("money") or {}
+    orders = (state.orders if state else None) or {}
+    rows = orders.get("orders") or []
+    return {"at": reading.get("at"), "checking": bool(panel.get("running")), "accounts": list((reading.get("accounts") or {}).values()),
+            "shop": {"ok": bool(orders.get("ok")), "at": orders.get("at"), "orders": len(rows),
+                     "total": round(sum(_money_float(r.get("total")) for r in rows), 2),
+                     "pending_payout": ((orders.get("payouts") or {}).get("pending"))}}
+
+
+def business_view(state=None):
+    """The business tracker shaped for the Business tab: real earnings, totals, what's live (with links), activity, lessons."""
     import jarvis_business as jbiz
     s = jbiz.summary()
     links = {}
@@ -469,12 +502,13 @@ def business_view():
         experiments.append({"id": e["id"], "name": e.get("opportunity_name") or name, "score": float(score) if score else None,
                             "type": (e.get("business_model_type") or "").replace("_", " "), "status": e.get("status"),
                             "started": e.get("started_at"), "cost": e.get("cost_spent") or 0.0, "revenue": e.get("revenue_earned") or 0.0,
-                            "traffic": e.get("latest_traffic"), "url": links.get(e["id"])})
+                            "traffic": e.get("latest_traffic"), "url": links.get(e["id"]), "listed": _listed(e)})
     activity = [{"ts": d.get("timestamp"), "type": (d.get("decision_type") or "").replace("_", " "), "text": d.get("reasoning") or "",
                  "url": (_URL_RE.search(d.get("reasoning") or "") or [None])[0] if _URL_RE.search(d.get("reasoning") or "") else None}
                 for d in s.get("recent_decisions") or []]
     lessons = [{"ts": l.get("created_at"), "category": l.get("category"), "text": l.get("lesson_text") or ""} for l in s.get("recent_lessons") or []]
-    return {"target": s.get("target_daily_revenue"), "budget": s.get("budget"), "revenue": s.get("revenue_total") or 0.0,
+    return {"earnings": _earnings(state), "listed": sum(1 for e in experiments if e["listed"]), "not_listed": sum(1 for e in experiments if not e["listed"]),
+            "target": s.get("target_daily_revenue"), "budget": s.get("budget"), "revenue": s.get("revenue_total") or 0.0,
             "cost": s.get("cost_total") or 0.0, "profit": s.get("profit_total") or 0.0,
             "opportunities": s.get("opportunity_counts") or {}, "experiment_counts": s.get("experiment_counts") or {},
             "experiments": experiments, "activity": activity, "lessons": lessons,
@@ -596,12 +630,34 @@ def _poll_mail(state, interval=MAIL_INTERVAL):
         time.sleep(interval)
 
 
+BUSY_STALE = 600   # a background browser read that has been "busy" this long is stuck, not busy
+
+
+def _browser_busy(state, now=None):
+    """What's using Jarvis's browser right now ("" if nothing). A read stuck for 10+ minutes (e.g. a hung page)
+    is let go, so it can never block Danny's Post button for good."""
+    now = now or time.time()
+    flags = (("orders", "orders_refreshing", False), ("adverts", "adv_refreshing", False), ("posting", "posting_now", None))
+    for name, attr, idle in flags:
+        if getattr(state, attr):
+            since = state.busy_since.setdefault(name, now)
+            if now - since >= BUSY_STALE:
+                setattr(state, attr, idle)
+                state.busy_since.pop(name, None)
+                continue
+            return {"orders": "reading your Shopify orders", "adverts": "reading your TikTok stats",
+                    "posting": "posting a TikTok video"}[name]
+        state.busy_since.pop(name, None)
+    return ""
+
+
 def _refresh_orders(state, force=False):
     """Reads the Shopify orders list + pending payout in the background, one browser job at a time."""
     with state.panel_lock:
-        if state.orders_refreshing or state.adv_refreshing or state.posting_now:
+        if _browser_busy(state):
             return False
         state.orders_refreshing = True
+        state.busy_since["orders"] = time.time()
 
     def work():
         try:
@@ -713,9 +769,10 @@ def trading_view():
 def _refresh_advertising(state):
     """Reads TikTok in the background (one read at a time: it drives Jarvis's browser window)."""
     with state.panel_lock:
-        if state.adv_refreshing or state.posting_now or state.orders_refreshing:
+        if _browser_busy(state):
             return
         state.adv_refreshing = True
+        state.busy_since["adverts"] = time.time()
 
     def work():
         try:
@@ -731,9 +788,11 @@ def _start_post(state, item_id):
     if not item:
         raise ValueError("No such video in the list.")
     with state.panel_lock:
-        if state.posting_now or state.adv_refreshing or state.orders_refreshing:
-            raise ValueError("Jarvis's browser is busy with TikTok right now; try again in a minute.")
+        busy = _browser_busy(state)
+        if busy:
+            raise ValueError(f"Jarvis's browser is busy {busy}; try again in a minute.")
         state.posting_now = item_id
+        state.busy_since["posting"] = time.time()
 
     def work():
         try:
