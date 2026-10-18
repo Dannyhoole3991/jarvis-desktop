@@ -1013,7 +1013,8 @@ async function renderSpecs() {
   el("buildsList").innerHTML = (data.builds || []).map(b => `<div class="item" data-doc="${esc(b.status === "awaiting_approval" ? b.spec : b.plan)}" data-docproject="${esc(b.project)}">
       <span class="main"><b>${esc(b.title)}</b> <span class="sub">${esc(b.project)}</span>
       ${b.total ? `<div class="progress"><div style="width:${Math.round(100 * b.done / b.total)}%"></div></div>` : ""}</span>
-      <span class="sub">${b.total ? b.done + "/" + b.total + " tasks" : ""}</span>${pill(b.status)}</div>`).join("") || '<p class="hint">No builds yet. Talk a project through with Jarvis and he will write the spec.</p>';
+      <span class="sub">${b.total ? b.done + "/" + b.total + " tasks" : ""}${b.where ? " · " + (b.where === "cloud" ? "cloud" : "this PC") : ""}</span>${pill(b.status)}
+      ${b.where === "cloud" && String(b.status).startsWith("stopped") ? `<button class="btn" data-build-local="${b.id}">Run it on this PC instead</button>` : ""}</div>`).join("") || '<p class="hint">No builds yet. Talk a project through with Jarvis and he will write the spec.</p>';
   el("docsList").innerHTML = (data.documents || []).map(d => `<div class="item" data-doc="${esc(d.doc)}" data-docproject="${esc(d.project)}">
       <span class="main"><b>${esc(d.project)}</b> · ${esc(d.doc)}</span><span class="sub">${d.total ? d.done + "/" + d.total : ""}</span>
       ${d.approved ? pill("approved") : ""}</div>`).join("") || '<p class="hint">No specs or plans found in your projects.</p>';
@@ -1042,7 +1043,7 @@ let openChange = null;
 async function renderChanges() {
   const data = await api("/api/proposals");
   el("changesList").innerHTML = (data.proposals || []).map(p => `<div class="item" data-change="${p.id}"><span class="main">${esc(p.goal)}</span>
-      <span class="sub">${ago(p.created_at)}</span>${pill(p.status)}</div>`).join("") || '<p class="hint">None yet.</p>';
+      <span class="sub">${ago(p.created_at)} · ${p.where === "cloud" ? "cloud" : "this PC"}</span>${pill(p.status)}</div>`).join("") || '<p class="hint">None yet.</p>';
   if (openChange) renderChange(openChange);
 }
 async function renderChange(id) {
@@ -1053,6 +1054,8 @@ async function renderChange(id) {
   const diff = ["ready_for_review", "tests_failed", "blocked"].includes(p.status) ? (await api(`/api/proposals/${id}/diff`)).diff : "";
   el("changeDetail").innerHTML = `<div class="card detail"><h3>Change ${p.id} ${pill(p.status)} <button class="btn" style="float:right" data-close="changeDetail">Close</button></h3>
     <div class="kv">Asked for: <b>${esc(p.goal)}</b></div>
+    <div class="kv">Worked on: <b>${p.where === "cloud" ? "in the cloud" : "this PC"}</b>${p.cloud && p.cloud.url ? ` · <a href="${esc(p.cloud.url)}" target="_blank">cloud session</a>` : ""}${p.cloud && p.cloud.starting && p.status === "working" ? " (starting)" : ""}</div>
+    ${p.cloud_fallback ? `<div class="kv">Ran on this PC because ${esc(p.cloud_fallback)}.</div>` : ""}
     ${p.detail ? `<div class="kv" style="color:var(--red)">${esc(p.detail)}</div>` : ""}
     ${p.summary ? `<div class="kv">Jarvis's summary:</div><div class="text-block" style="max-height:16vh;overflow:auto">${md(p.summary)}</div>` : ""}
     ${p.files ? `<div class="kv">Files changed: <b>${esc(p.files.join(", "))}</b></div>` : ""}
@@ -1060,6 +1063,7 @@ async function renderChange(id) {
     ${p.test_output && !p.tests_passed ? `<div class="transcript" style="max-height:18vh">${esc(p.test_output)}</div>` : ""}
     ${diff ? `<div class="kv">The exact change:</div><div class="transcript">${esc(diff)}</div>` : ""}
     <div class="actions">
+      ${p.status === "run_failed" && p.where === "cloud" ? `<button class="btn" data-change-act="local" data-id="${p.id}">Run it on this PC instead</button>` : ""}
       ${p.status === "ready_for_review" ? `<button class="btn go" data-change-act="approve" data-id="${p.id}">Apply this change</button>` : ""}
       ${!["applied", "undone", "rejected"].includes(p.status) ? `<button class="btn danger" data-change-act="reject" data-id="${p.id}">Reject</button>` : ""}
       ${p.status === "applied" ? `<button class="btn danger" data-change-act="undo" data-id="${p.id}">Undo this change</button>` : ""}
@@ -1410,7 +1414,7 @@ reportVisibility();
 
 // One click handler for every list/button in the new tabs.
 document.addEventListener("click", async e => {
-  const t = e.target.closest("[data-pay],[data-payno],[data-paycheck],[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-session],[data-mail],[data-mail-act],[data-close]");
+  const t = e.target.closest("[data-pay],[data-payno],[data-paycheck],[data-answer],[data-job],[data-job-stop],[data-run],[data-cancel],[data-retry],[data-project],[data-open],[data-doc],[data-approve],[data-memory],[data-change],[data-change-act],[data-build-local],[data-session],[data-mail],[data-mail-act],[data-close]");
   if (!t) return;
   const d = t.dataset;
   if (d.close) {
@@ -1464,8 +1468,12 @@ document.addEventListener("click", async e => {
   if (d.doc) return renderDoc(d.docproject, d.doc);
   if (d.project) return renderProjectDetail(d.project);
   if (d.memory) return renderMemoryFile(d.memory);
+  if (d.buildLocal) {
+    await act(`/api/builds/${d.buildLocal}/local`, {}, "Run this build on this PC instead? It uses this PC's Claude allowance.");
+    return renderSpecs();
+  }
   if (d.changeAct) {
-    const msgs = { approve: "Apply this change to Jarvis? You'll need to restart Jarvis afterwards.", reject: "Throw this change away?", undo: "Undo this change? You'll need to restart Jarvis afterwards." };
+    const msgs = { approve: "Apply this change to Jarvis? You'll need to restart Jarvis afterwards.", reject: "Throw this change away?", undo: "Undo this change? You'll need to restart Jarvis afterwards.", local: "Run this change on this PC instead? It uses this PC's Claude allowance." };
     await act(`/api/proposals/${d.id}/${d.changeAct}`, {}, msgs[d.changeAct]);
     return renderChanges();
   }

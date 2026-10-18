@@ -78,6 +78,7 @@ class TmpMixin:
             mock.patch.object(builds, "BUILDS_FILE", os.path.join(self.dir, "builds.json")),
             mock.patch.object(builds, "APPROVALS_FILE", os.path.join(self.dir, "approvals.jsonl")),
             mock.patch.object(P, "discover", lambda: [{"name": "Demo", "path": self.project, "source": "test"}]),
+            mock.patch.object(config, "CODE_JOBS", "local"),     # the run-on-this-PC path (cloud: test_cloud_jobs)
         ]
         for p in self.patches:
             p.start()
