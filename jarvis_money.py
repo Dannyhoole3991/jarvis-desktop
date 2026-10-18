@@ -148,6 +148,9 @@ def adsense_check():
         todo = f" -- still needs: {', '.join(required)}" if required else ""
         return {"name": "Blog ads (AdSense)", "ok": True, "earning": False,
                 "summary": f"not earning yet, the account isn't fully set up{todo}"}
+    if "getting your site ready to show ads" in text.lower() or "completed all the steps" in text.lower():
+        return {"name": "Blog ads (AdSense)", "ok": True, "earning": False,
+                "summary": "all set up, waiting for Google to approve the blog before ads can show (no earnings until then)"}
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     found = []
     for i, ln in enumerate(lines):
