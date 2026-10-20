@@ -70,3 +70,11 @@ trading_lab/*
 jarvis_store/**/__pycache__/
 !jarvis_christmas_video.py
 !jarvis_video.py
+
+# Marketing department (docs/MARKETING_DEPT_PLAN.md). Its data/ folder (the mock and live
+# databases, rendered assets, the laptop-login hash and businesses.json) is runtime state.
+!jarvis_marketing/
+!jarvis_marketing/**
+jarvis_marketing/data/
+jarvis_marketing/**/__pycache__/
+!docs/MARKETING_DEPT_PLAN.md

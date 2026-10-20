@@ -24,6 +24,12 @@
     3. Tell Claude "keys done".
 
 - [x] **Other advertising accounts.** Create them when you're ready (Instagram for the shop first, then any others), and log into each one once in Jarvis's browser window. Each one then appears in the Advertising tab. — DONE: Instagram connected 16 Oct 2026.
+- [ ] **Marketing department: switch it on (when you're ready).** It runs on SIMULATED data until you do this. Full steps: docs/MARKETING_DEPT_PLAN.md, section 11.
+  1. Restart Jarvis, open the Marketing tab, and look around the simulated run (everything there is marked SIMULATED).
+  2. To use the laptop: install Tailscale on this PC and the laptop (same account), then in PowerShell in the Jarvis folder run `py -3 -m jarvis_marketing set-password --bind <this PC's Tailscale address>` and restart Jarvis. On the laptop open `http://<that address>:8790`.
+  3. Optional: add competitor shop addresses to `jarvis_marketing\data\businesses.json` (Claude will write the file for you).
+  4. Optional, for order attribution: add the `read_orders` scope to the "Jarvis" Shopify app (dev.shopify.com > Apps > Jarvis > Versions), release it, approve it in the store, then set `"orders_source": "api"`.
+  5. When happy, tell Claude "switch marketing to live". Paid ads stay off until you set limits.
 - [ ] **TikTok developer account (optional, later).** This is the safer, official way for Jarvis to post videos. Claude will give you the steps when you want to do it.
 
 ## Claude will do these once the above is done

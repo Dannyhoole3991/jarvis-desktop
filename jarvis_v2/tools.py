@@ -51,6 +51,15 @@ def needs_you():
     except Exception:
         pass
     try:
+        out = _server("/api/marketing", timeout=10)
+        for b in out.get("businesses") or []:
+            if b.get("pending"):
+                sim = " (SIMULATED test data)" if b.get("profile") == "mock" else ""
+                parts.append(f"Marketing posts waiting for your approval{sim}, in the Marketing tab:\n"
+                             + "\n".join(f"- {p}" for p in b["pending"][:10]))
+    except Exception:
+        pass
+    try:
         from . import mailbox
         waiting = mailbox.needs_you_text()
         if waiting:
@@ -490,6 +499,15 @@ def queue_tiktok_video(video, caption, title, ai_generated=False):
     return f"Added '{item['title']}' to the Ready to post list. Danny posts it with the button in the Advertising tab."
 
 
+def marketing_status():
+    out = _server("/api/marketing", timeout=20)
+    return out.get("describe") or _text(out)
+
+
+def marketing_stop(reason=""):
+    return _text(_server("/api/marketing/stop", {"reason": reason or "Danny asked Jarvis to stop marketing"}, timeout=20))
+
+
 def say_now(text):
     out = _server("/api/say", {"text": text}, timeout=15)
     return "Said." if out.get("ok") else out.get("error", "Couldn't say that.")
@@ -617,6 +635,11 @@ TOOLS = {
                            "upload or fill in TikTok Studio yourself. ai_generated=true when the video uses realistic AI images or footage "
                            "(TikTok requires the label). Captions must be honest (no fake reviews or discounts).",
                            _schema({"video": _S, "caption": _S, "title": _S, "ai_generated": {"type": "boolean"}}, ["video", "caption", "title"])),
+    "marketing_status": (marketing_status, "The marketing department (Marketing tab): mode, products in play, posts waiting for Danny's "
+                         "approval, orders attributed to posts. Read-only; SIMULATED data is labelled. Only Danny approves posts or "
+                         "changes the mode, in the Marketing tab.", _schema()),
+    "marketing_stop": (marketing_stop, "STOP all marketing activity at once (the dashboard's emergency stop). Use it when Danny asks to stop "
+                       "marketing or posting. Only Danny can resume, from the Marketing tab.", _schema({"reason": _S})),
     "say_now": (say_now, "Say one short sentence out loud to Danny RIGHT NOW, before you carry on working (e.g. 'On it, sir, "
                 "checking the store now.'). Use it first when a job will take more than a few seconds; not for quick answers.",
                 _schema({"text": _S}, ["text"])),

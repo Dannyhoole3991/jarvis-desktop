@@ -57,6 +57,8 @@ class State:
         self.cjpay = None                # cjpay.Payer: paying CJ for shop orders, one tap at a time
         self.cjpay_watch = False         # look for new orders to pay (the real app only)
         self.watcher = None
+        self.marketing = None            # jarvis_marketing.api.Department (created on first use, or by start())
+        self.marketing_remote = None     # the laptop server, when Danny has set its password
 
 
 PANEL_SOURCES = {
@@ -161,6 +163,36 @@ def make_handler(state):
                 self.send_header("X-Frame-Options", "DENY")
                 self.end_headers()
                 return self.wfile.write(body)
+            if url.path == "/marketing":
+                # The Marketing tab's page (shown in an iframe of the window): same tokens as the window itself.
+                with open(marketing_config().UI_FILE, encoding="utf-8") as f:
+                    page = (f.read().replace("__JM_MODE__", "window").replace("__JM_CSRF__", "")
+                            .replace("__JARVIS_TOKEN__", state.token).replace("__JARVIS_UI_TOKEN__", state.ui_token))
+                body = page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Frame-Options", "SAMEORIGIN")
+                self.end_headers()
+                return self.wfile.write(body)
+            mm = re.match(r"^/api/marketing/([\w-]+)/creatives/(\d+)/media$", url.path)
+            if mm:
+                t = urllib.parse.parse_qs(url.query).get("t", [""])[0]
+                if not (secrets.compare_digest(t, state.token) or self._authorized()):
+                    return self._json({"error": "unauthorized"}, 401)
+                from jarvis_marketing import api as MA
+                try:
+                    path = MA.media_path(marketing(state), mm.group(1), int(mm.group(2)))
+                except ValueError as error:
+                    return self._json({"error": str(error)}, 404)
+                with open(path, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             m = re.match(r"^/api/posts/(\d+)/video$", url.path)
             if m and self._host_ok():
                 # A <video> tag can't send headers, so this one GET takes the token in the query string.
@@ -211,7 +243,7 @@ def make_handler(state):
                 name = path.split("/")[3]
                 return self._json(api_panel(state, name, refresh=True))
             ui = secrets.compare_digest(self.headers.get("X-Jarvis-UI", ""), state.ui_token)
-            if path.startswith("/api/cj_pay/") and not path.endswith(("/check", "/check_paid")):
+            if (path.startswith("/api/cj_pay/") and not path.endswith(("/check", "/check_paid"))) or path.startswith("/api/marketing/"):
                 # Money: the press must come from the window page itself (a browser sends its Origin on POST).
                 origin = (self.headers.get("Origin") or "").rstrip("/")
                 port = self.server.server_address[1]
@@ -404,6 +436,9 @@ def api_get(state, path, query):
             raise ValueError("No such memory.")
         with open(full, encoding="utf-8") as f:
             return {"name": name, "text": f.read()}
+    if path.startswith("/api/marketing"):
+        from jarvis_marketing import api as MA
+        return MA.handle_get(marketing(state), path, query)
     if path == "/api/business":
         return business_view(state)
     if path == "/api/store":
@@ -921,6 +956,12 @@ def api_post(state, path, body, from_ui=False):
                 threading.Thread(target=state.push_phone, daemon=True).start()
             return out
         return mailbox.mark(msg_id, action)
+    if path.startswith("/api/marketing"):
+        # Danny's buttons in the Marketing tab carry the window's UI token; Jarvis's brain (server token only)
+        # can read and press STOP, nothing else.
+        from jarvis_marketing import api as MA, controls as MC
+        principal = MC.HumanPrincipal("Danny", "window") if from_ui else None
+        return MA.handle_post(marketing(state), path, body, principal=principal)
     if path == "/api/visibility":
         if state.announcer:
             state.announcer.window_visible = bool(body.get("visible", True))
@@ -951,6 +992,38 @@ def api_post(state, path, body, from_ui=False):
         fn = {"approve": selfimprove.approve, "reject": selfimprove.reject, "undo": selfimprove.undo}[parts[3]]
         return {"text": fn(int(parts[2]))}
     return None
+
+
+def marketing_config():
+    from jarvis_marketing import config as MC
+    return MC
+
+
+def marketing(state, start=False):
+    """The marketing department (one per window). start=True also recovers interrupted work and starts its schedulers."""
+    with state.panel_lock:
+        if state.marketing is None:
+            from jarvis_marketing import api as MA
+            state.marketing = MA.Department()
+            if start:
+                state.marketing.start(notify=state.announcer.urgent if state.announcer else None)
+        return state.marketing
+
+
+def _start_marketing(state):
+    """Background start for the real app: the department, then the laptop server if Danny has set its password."""
+    try:
+        marketing(state, start=True)
+        from jarvis_marketing import remote
+        server, info = remote.start(state.marketing)
+        if server is not None:
+            state.marketing_remote = server
+    except Exception as error:
+        try:
+            with open(os.path.join(config.DATA_DIR, "marketing.log"), "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"start failed: {error}\n")
+        except OSError:
+            pass
 
 
 def _job_post(state, run_id, action, body):
@@ -1053,6 +1126,7 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
         threading.Thread(target=_poll_mail, args=(state,), daemon=True, name="jarvis-mail-poll").start()
         state.cjpay_watch = True
         threading.Thread(target=_cjpay_loop, args=(state,), daemon=True, name="jarvis-cjpay").start()
+        threading.Thread(target=_start_marketing, args=(state,), daemon=True, name="jarvis-marketing-start").start()
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(state.token)
     threading.Thread(target=server.serve_forever, daemon=True, name="jarvis-v2-server").start()
@@ -1073,6 +1147,10 @@ def stop(server, state):
     try:
         if state.watcher:
             state.watcher.stop()
+        if state.marketing:
+            state.marketing.stop()
+        if state.marketing_remote:
+            state.marketing_remote.shutdown()
         state.executor.stop()
         server.shutdown()
     finally:

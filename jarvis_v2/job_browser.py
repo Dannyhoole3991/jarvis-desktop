@@ -217,9 +217,25 @@ def key_verdict(key, focused):
     return "approve", "Enter here would submit the form."
 
 
+def _local_address(url):
+    """This PC, the home network or Tailscale: where Jarvis's own windows and dashboards live."""
+    import ipaddress
+    import urllib.parse
+    host = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+    if host in ("localhost", "") or host.endswith((".localhost", ".local", ".internal", ".lan", ".ts.net")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip in ipaddress.ip_network("100.64.0.0/10")
+
+
 def url_verdict(url):
     if not re.match(r"(?i)^https?://", url or ""):
         return "block", "Only http(s) web addresses."
+    if _local_address(url):
+        return "block", "Jarvis's own windows and anything on this PC or home network are off limits to jobs (only Danny presses those buttons)."
     if CHECKOUT_URL_RE.search(url):
         return "block", "That's a checkout, billing or payment page. Jobs never go there: tell Danny."
     if SIGNUP_URL_RE.search(url):
