@@ -247,9 +247,10 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(r["verdict"], "inconclusive")
         self.assertIsNone(r["winner"])
 
-    def test_thin_data_or_open_window_is_insufficient(self):
-        self.assertEqual(stats.evaluate([self.v(1, 100, 5), self.v(2, 1000, 1)], self.CRIT, self.NOW, self.ENDED)["verdict"],
-                         "insufficient_data")
+    def test_thin_data_after_the_test_is_inconclusive_and_open_window_is_insufficient(self):
+        r = stats.evaluate([self.v(1, 100, 5), self.v(2, 1000, 1)], self.CRIT, self.NOW, self.ENDED)
+        self.assertEqual(r["verdict"], "inconclusive")
+        self.assertIsNone(r["winner"])
         self.assertEqual(stats.evaluate([self.v(1, 1000, 40), self.v(2, 1000, 10)], self.CRIT, self.NOW, self.NOW - 3600)["verdict"],
                          "insufficient_data")
 

@@ -92,6 +92,9 @@ class Controls:
     def caps(self, business_id):
         return self._get(f"caps:{business_id}", {"total": 0.0, "per_campaign": 0.0})
 
+    def schedule(self, business_id):
+        return self._get(f"schedule:{business_id}", {"enabled": False, "every_hours": 24})
+
     def spent(self, business_id, campaign_id=None):
         return 0.0          # nothing can be spent in this milestone; real spend comes from the ad platform later
 
@@ -105,7 +108,7 @@ class Controls:
     def summary(self, business_id):
         mode = self.mode(business_id)
         return {"mode": mode, "max_mode": MAX_MODE, "emergency_stop": self.stopped(), "caps": self.caps(business_id),
-                "spent": self.spent(business_id),
+                "schedule": self.schedule(business_id), "spent": self.spent(business_id),
                 "hard_off": {"paid_ads": not PAID_ADS_ENABLED, "purchases": not PURCHASES_ENABLED,
                              "price_changes": not PRICE_CHANGES_ENABLED},
                 "allowed": sorted(a for a in PERMISSIONS if self.allowed(business_id, a)),
@@ -137,6 +140,14 @@ class Controls:
             raise PermissionDenied("Paid spend is disabled in this milestone, so caps stay at 0.")
         self._set(f"caps:{business_id}", {"total": total, "per_campaign": per_campaign}, principal)
         self.store.audit(principal, "set_caps", "ok", business_id=business_id, total=total, per_campaign=per_campaign)
+
+    def set_schedule(self, principal, business_id, enabled, every_hours=24):
+        _require_human(principal)
+        every_hours = float(every_hours)
+        if not 6 <= every_hours <= 24 * 7:
+            raise ValueError("The cycle can run every 6 hours at most, and at least once a week.")
+        self._set(f"schedule:{business_id}", {"enabled": bool(enabled), "every_hours": every_hours}, principal)
+        self.store.audit(principal, "set_schedule", "ok", business_id=business_id, enabled=bool(enabled), every_hours=every_hours)
 
     def emergency_stop(self, by, reason="", business_id=None):
         """Anyone (Danny, the director's watchdog) may STOP. Only Danny may resume."""

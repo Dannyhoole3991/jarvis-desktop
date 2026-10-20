@@ -52,6 +52,7 @@ DEFAULT_TESTING = {
     "significance": 0.05,
     "experiment_days": 7,
     "posts_per_experiment": 3,
+    "max_active_experiments": 2,     # so Danny is never asked to approve a flood of posts at once
     "max_revisions": 2,
     "analytics_ttl_hours": 26,       # a reading older than this is stale and never used for a verdict
 }
@@ -78,7 +79,10 @@ COLLECTIVE_FINDS = {
     "platforms": ["tiktok"],
     "competitor_stores": [],          # Shopify stores whose public /products.json may be read for prices
     "seed_keywords": [],              # empty = jarvis_store's everyday seed list
-    "orders_source": "browser",       # "api" needs the read_orders scope on the Shopify app
+    "orders_source": "browser",
+    "free_uk_delivery": True,         # the store's own delivery policy (its product pages say so)
+    "ai_label": True,                 # switch on TikTok's AI-generated label (the voice-over is synthetic)
+    "hashtags": ["#homefinds", "#usefulgadgets", "#ukshop", "#collectivefinds"],       # "api" needs the read_orders scope on the Shopify app
     "thresholds": {},
     "weights": {},
     "economics": {},

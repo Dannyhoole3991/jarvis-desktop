@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS qa_reviews (
 CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, candidate_id INTEGER NOT NULL, kind TEXT NOT NULL,
     status TEXT NOT NULL, idem_key TEXT UNIQUE NOT NULL, data_json TEXT NOT NULL, verdict TEXT,
-    verdict_json TEXT, created_at REAL NOT NULL, started_at REAL, ended_at REAL, simulated INTEGER NOT NULL);
+    result_json TEXT, created_at REAL NOT NULL, started_at REAL, ended_at REAL, simulated INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, experiment_id INTEGER NOT NULL, creative_id INTEGER NOT NULL,
@@ -148,11 +148,12 @@ def _decode(row):
     out = {}
     for key in row.keys():
         value = row[key]
-        if key.endswith("_json") and value is not None:
-            try:
-                value = json.loads(value)
-            except ValueError:
-                pass
+        if key.endswith("_json"):
+            if value is not None:
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    pass
             key = key[:-5]
         out[key] = value
     return out

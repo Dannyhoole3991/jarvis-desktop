@@ -3,8 +3,9 @@ Experiment verdicts. The objective is profitable sales: views and likes never pi
 
 Verdicts:
   insufficient_data  the data isn't final yet (inside the reporting delay / attribution window),
-                     a needed metric is missing or stale, or a variant is below the minimum sessions
-  inconclusive       enough data, but the difference isn't statistically clear
+                     or a needed metric is missing or stale
+  inconclusive       the test is over but a variant stayed below the minimum sessions, or the
+                     difference isn't statistically clear
   winner             one variant converts significantly better AND makes positive contribution profit
   no_winner          all variants clearly fail the success criteria (e.g. no profitable variant)
 Per variant, `stop` is recommended when the evidence says it can't reach the goal
@@ -77,13 +78,16 @@ def evaluate(variants, criteria, now, ended_at=None):
     if len(usable) < len(variants):
         return result("insufficient_data", ["Sessions/orders aren't available for every variant (never guessed)."])
     thin = [v["id"] for v in usable if v["sessions"] < criteria["min_sessions_per_variant"]]
-    if thin:
-        reasons.append(f"Variants {thin} are below {criteria['min_sessions_per_variant']} sessions.")
+    stops = [p["id"] for p in per if p["stop"]]
     if not data_final:
         reasons.append("The attribution window and reporting delay haven't passed yet.")
-    if reasons:
-        stops = [p["id"] for p in per if p["stop"]]
+        if thin:
+            reasons.append(f"Variants {thin} are below {criteria['min_sessions_per_variant']} sessions so far.")
         return result("insufficient_data", reasons + ([f"Recommend stopping {stops} already."] if stops else []))
+    if thin:
+        # The test is over and the evidence is still thin: say so plainly. Never a winner.
+        return result("inconclusive", [f"The test ended with variants {thin} below {criteria['min_sessions_per_variant']} sessions: "
+                                       "too little traffic to tell the concepts apart."])
     profitable = [v for v in usable if (v.get("contribution") or 0) - (v.get("spend") or 0) > 0 and v["orders"] > 0]
     if not profitable:
         return result("no_winner", ["No variant made a contribution profit."])
