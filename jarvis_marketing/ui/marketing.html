@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis Marketing</title>
+<style>
+  :root { --bg:#050508; --panel:rgba(255,179,71,.04); --border:rgba(255,179,71,.16); --gold:#ffb347; --gold2:#ffe0a3;
+          --text:#fff3e0; --dim:rgba(255,230,200,.6); --dimmer:rgba(255,230,200,.36); --green:#35e08a; --red:#ff6a6a; --blue:#6cb8ff; --sim:#c38bff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.45 "Segoe UI",system-ui,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--border); padding:10px 14px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  h1 { font-size:15px; margin:0; color:var(--gold); letter-spacing:.5px; }
+  h2 { font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--dim); margin:0 0 8px; font-weight:600; }
+  main { padding:12px 14px 40px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+  .btn { background:rgba(255,179,71,.12); border:1px solid var(--border); color:var(--gold2); border-radius:8px; padding:5px 11px; cursor:pointer; font:inherit; font-size:12px; }
+  .btn:disabled { opacity:.4; cursor:default; } .btn.on { background:rgba(255,179,71,.32); }
+  .btn.go { color:var(--green); border-color:rgba(53,224,138,.4); } .btn.danger { color:var(--red); border-color:rgba(255,106,106,.45); }
+  .stop { background:rgba(255,106,106,.18); color:#fff; border:1px solid var(--red); font-weight:600; }
+  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; border:1px solid var(--border); white-space:nowrap; }
+  .good { color:var(--green); border-color:rgba(53,224,138,.4); } .bad { color:var(--red); border-color:rgba(255,106,106,.4); }
+  .busy { color:var(--blue); border-color:rgba(108,184,255,.45); } .simp { color:var(--sim); border-color:rgba(195,139,255,.5); }
+  .banner { border:1px solid var(--sim); color:var(--sim); background:rgba(195,139,255,.08); border-radius:10px; padding:8px 12px; margin:8px 0 0; font-weight:600; }
+  .estop { border:1px solid var(--red); color:#fff; background:rgba(255,106,106,.22); border-radius:10px; padding:8px 12px; margin:8px 0 0; font-weight:600; }
+  nav { display:flex; gap:2px; flex-wrap:wrap; margin-top:8px; }
+  nav button { background:none; border:none; border-bottom:2px solid transparent; color:var(--dim); padding:6px 10px; cursor:pointer; font:inherit; }
+  nav button.active { color:var(--gold2); border-bottom-color:var(--gold); }
+  .pane { display:none; } .pane.active { display:block; }
+  table { width:100%; border-collapse:collapse; } th { text-align:left; font-weight:500; font-size:11px; color:var(--dim); text-transform:uppercase; padding:4px 6px; }
+  td { padding:6px; border-top:1px solid rgba(255,179,71,.07); vertical-align:top; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+  .tile { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:10px 12px; }
+  .tile .l { font-size:10px; letter-spacing:.8px; text-transform:uppercase; color:var(--dim); } .tile .v { font-size:20px; font-weight:600; margin-top:3px; }
+  .tile .n { font-size:11px; color:var(--dimmer); }
+  .label { font-size:10px; text-transform:uppercase; letter-spacing:.8px; padding:1px 6px; border-radius:6px; margin-left:6px; }
+  .l-actual { background:rgba(53,224,138,.12); color:var(--green); } .l-estimate { background:rgba(108,184,255,.12); color:var(--blue); }
+  .l-prediction { background:rgba(255,179,71,.12); color:var(--gold2); } .l-hypothesis { background:rgba(255,255,255,.07); color:var(--dim); }
+  .l-fact { background:rgba(53,224,138,.08); color:var(--green); } .l-verified { background:rgba(53,224,138,.2); color:var(--green); }
+  .hint { color:var(--dimmer); font-size:11px; } .dim { color:var(--dim); } .err { color:var(--red); }
+  .ask { border:1px solid rgba(255,179,71,.5); background:rgba(255,179,71,.06); border-radius:10px; padding:10px 12px; margin-bottom:10px; display:grid; grid-template-columns:120px 1fr; gap:12px; }
+  .ask video, .ask .novideo { width:120px; height:213px; border-radius:8px; background:#000; object-fit:cover; }
+  .novideo { display:flex; align-items:center; justify-content:center; text-align:center; font-size:11px; color:var(--sim); border:1px dashed var(--sim); padding:6px; }
+  pre { white-space:pre-wrap; font:12px/1.4 Consolas,monospace; background:rgba(0,0,0,.35); border-radius:8px; padding:8px; margin:6px 0; max-height:260px; overflow:auto; }
+  details > summary { cursor:pointer; color:var(--gold2); } a { color:var(--gold2); }
+  .scenes td { font-size:12px; }
+  @media (max-width: 700px) { header { position:static; } .ask { grid-template-columns:1fr; } .ask video, .ask .novideo { width:100%; height:auto; aspect-ratio:9/16; max-height:60vh; } }
+  #toast { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); background:#1a1408; border:1px solid var(--gold); border-radius:10px; padding:8px 14px; display:none; max-width:90vw; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row" style="justify-content:space-between">
+    <div class="row"><h1>Marketing</h1><select id="biz" class="btn"></select><span id="modePill" class="pill"></span><span id="bg" class="hint"></span></div>
+    <div class="row">
+      <button class="btn" id="runCycle">Run a cycle now</button>
+      <button class="btn" id="schedule"></button>
+      <button class="btn stop" id="estop">EMERGENCY STOP</button>
+      <button class="btn go" id="resume" hidden>Resume</button>
+      <button class="btn" id="logout" hidden>Sign out</button>
+    </div>
+  </div>
+  <div class="row" id="modes" style="margin-top:6px"></div>
+  <div id="banners"></div>
+  <nav id="nav">
+    <button data-p="overview" class="active">Overview</button><button data-p="approvals">Approvals</button>
+    <button data-p="discovery">Discovery</button><button data-p="products">Products</button><button data-p="creatives">Creatives</button>
+    <button data-p="experiments">Experiments</button><button data-p="learning">Lessons &amp; reports</button><button data-p="activity">Activity &amp; audit</button>
+  </nav>
+</header>
+<main>
+  <div class="pane active" id="p-overview">
+    <div class="tiles" id="tiles"></div>
+    <div class="card"><h2>Waiting for you</h2><div id="ovPending"></div></div>
+    <div class="card"><h2>Guard rails (enforced in code)</h2><div id="guard"></div></div>
+    <div class="card"><h2>Data sources</h2><div id="sources"></div></div>
+    <div class="card"><h2>Latest</h2><div id="ovNotes"></div></div>
+  </div>
+  <div class="pane" id="p-approvals"><div class="card"><h2>Posts waiting for your approval</h2>
+    <p class="hint">Approving a post allows exactly that video, caption and link to be posted once, within 24 hours, and only in TEST mode. Any change needs a new approval.</p>
+    <div id="approvals"></div></div>
+    <div class="card"><h2>Answered</h2><div id="answered"></div></div></div>
+  <div class="pane" id="p-discovery"><div class="card"><h2>Discovery queue (ranked by evidence)</h2><div id="opps"></div></div></div>
+  <div class="pane" id="p-products"><div class="card"><h2>Shortlist and reserve</h2><div id="shortlist"></div></div>
+    <div class="card"><h2>Rejected (with reasons)</h2><div id="rejected"></div></div><div id="candDetail"></div></div>
+  <div class="pane" id="p-creatives"><div class="card"><h2>Briefs and renders</h2><div id="creatives"></div></div></div>
+  <div class="pane" id="p-experiments"><div class="card"><h2>Experiments</h2>
+    <p class="hint">Verdicts use sessions, orders and contribution profit only. Views and likes are shown as diagnostics and never pick a winner. Thin evidence is marked inconclusive.</p>
+    <div id="experiments"></div></div></div>
+  <div class="pane" id="p-learning"><div class="card"><h2>Lessons</h2><div id="lessons"></div></div><div class="card"><h2>Reports</h2><div id="reports"></div></div></div>
+  <div class="pane" id="p-activity"><div class="card"><h2>Errors</h2><div id="errors"></div></div><div class="card"><h2>Tasks</h2><div id="tasks"></div></div>
+    <div class="card"><h2>Audit log (decisions and external actions)</h2><div id="audit"></div></div><div class="card"><h2>Reconciliation</h2><div id="recon"></div></div></div>
+</main>
+<div id="toast"></div>
+<script>
+const MODE = "__JM_MODE__";                 // "window" (inside Jarvis) or "laptop" (signed in)
+const TOKEN = "__JARVIS_TOKEN__", UI_TOKEN = "__JARVIS_UI_TOKEN__", CSRF = "__JM_CSRF__";
+let SLUG = null, DATA = null;
+
+async function api(path, body) {
+  const headers = {};
+  if (MODE === "window") { headers["X-Jarvis-Token"] = TOKEN; headers["X-Jarvis-UI"] = UI_TOKEN; } else { headers["X-CSRF"] = CSRF; }
+  const opts = { headers, credentials: "same-origin" };
+  if (body !== undefined) { opts.method = "POST"; headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  if (res.status === 401 && MODE === "laptop") { location.href = "/login"; return {}; }
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || ("HTTP " + res.status));
+  return out;
+}
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = v => v === null || v === undefined ? "n/a" : "£" + Number(v).toFixed(2);
+const num = v => v === null || v === undefined ? '<span class="dim">not available</span>' : esc(v);
+const lab = l => `<span class="label l-${esc(String(l).split(" ")[0])}">${esc(l)}</span>`;
+const when = t => t ? new Date(t * 1000).toLocaleString([], {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}) : "";
+const pill = (s) => { const g = ["done","qa_passed","published","approved","winner","shortlisted","concluded","learned"], b = ["failed","rejected","timed_out","no_winner","render_failed"], y = ["running","publishing","pending_approval","pending","awaiting_approval","testing","in_creative","insufficient_data"];
+  return `<span class="pill ${g.includes(s) ? "good" : b.includes(s) ? "bad" : y.includes(s) ? "busy" : ""}">${esc(String(s).replace(/_/g, " "))}</span>`; };
+function toast(t) { const el = $("toast"); el.textContent = t; el.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.display = "none", 5000); }
+async function act(path, body, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  try { const r = await api(path, body || {}); toast(r.text || "Done."); } catch (e) { toast("Refused: " + e.message); }
+  load();
+}
+function mediaUrl(id) { return `/api/marketing/${SLUG}/creatives/${id}/media` + (MODE === "window" ? "?t=" + encodeURIComponent(TOKEN) : ""); }
+
+document.querySelectorAll("#nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === "p-" + b.dataset.p));
+});
+$("estop").onclick = () => act("/api/marketing/stop", {reason: "Stop pressed in the dashboard"}, "Stop ALL marketing activity now?");
+$("resume").onclick = () => act("/api/marketing/resume", {}, "Resume? Modes and approvals stay exactly as they are.");
+$("runCycle").onclick = () => act(`/api/marketing/${SLUG}/cycle`, {});
+$("schedule").onclick = () => { const on = DATA.controls.schedule.enabled;
+  act(`/api/marketing/${SLUG}/schedule`, {enabled: !on, every_hours: DATA.controls.schedule.every_hours}, on ? "Pause the daily cycle?" : "Run the cycle automatically every 24 hours?"); };
+$("biz").onchange = () => { SLUG = $("biz").value; load(); };
+if (MODE === "laptop") { $("logout").hidden = false; $("logout").onclick = async () => { await api("/logout", {}); location.href = "/login"; }; }
+
+function renderHeader(d) {
+  const c = d.controls;
+  $("modePill").outerHTML = `<span id="modePill" class="pill busy">Mode: ${esc(c.mode)}</span>`;
+  $("modes").innerHTML = c.modes.map(m => `<button class="btn ${m.mode === c.mode ? "on" : ""}" ${m.available ? "" : "disabled"} data-mode="${m.mode}"
+      title="${esc(m.available ? "Allows: " + m.allowed.join(", ") : "Disabled in this milestone")}">${esc(m.mode)}${m.available ? "" : " (off)"}</button>`).join("")
+    + `<span class="hint">Only you can change the mode, one step up at a time.</span>`;
+  document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => b.dataset.mode !== c.mode &&
+    act(`/api/marketing/${SLUG}/mode`, {mode: b.dataset.mode}, `Switch to ${b.dataset.mode}?`));
+  $("schedule").textContent = c.schedule.enabled ? `Auto: every ${c.schedule.every_hours}h (pause)` : "Auto-run: off (switch on)";
+  $("estop").hidden = c.emergency_stop.on; $("resume").hidden = !c.emergency_stop.on;
+  let b = "";
+  if (d.simulated) b += `<div class="banner">SIMULATED: this business runs on mock adapters. Every product, number and post here is simulated, not real.</div>`;
+  if (c.emergency_stop.on) b += `<div class="estop">EMERGENCY STOP is ON (${esc(c.emergency_stop.reason)}, by ${esc(c.emergency_stop.by)}). Nothing external runs until you resume.</div>`;
+  $("banners").innerHTML = b;
+  $("bg").textContent = d.background ? `${d.background.what}: ${d.background.status}` : "";
+}
+
+function renderOverview(d) {
+  const a = d.actual, e = d.estimated, active = d.candidates.filter(c => ["shortlisted","in_creative","testing"].includes(c.status)).length;
+  $("tiles").innerHTML = [
+    ["Orders", a.orders, "actual"], ["Revenue", money(a.revenue), "actual"], ["Attributed to posts", `${a.attributed_orders} · ${money(a.attributed_revenue)}`, "actual"],
+    ["Spend", money(a.spend), "actual"], ["Sessions from posts", a.sessions ?? "not available", "actual"], ["CVR", a.cvr === null ? "n/a" : (a.cvr * 100).toFixed(2) + "%", "actual"],
+    ["CAC", "n/a", "actual"], ["Contribution (attributed)", money(e.contribution_from_attributed_orders), "estimate"],
+    ["Products in play", active, ""], ["Waiting for you", d.approvals_pending.length, ""],
+    ["Winners / losers", `${d.verdicts.winner} / ${d.verdicts.no_winner}`, ""], ["Inconclusive", d.verdicts.inconclusive + d.verdicts.insufficient_data, ""],
+  ].map(([l, v, k]) => `<div class="tile"><div class="l">${esc(l)}${k ? lab(k) : ""}</div><div class="v">${esc(v)}</div></div>`).join("");
+  $("ovPending").innerHTML = d.approvals_pending.length ? d.approvals_pending.map(p => `<div>• ${esc(p.summary)} <span class="hint">${when(p.requested_at)}</span></div>`).join("")
+    + `<p><button class="btn" onclick="document.querySelector('[data-p=approvals]').click()">Review them</button></p>` : '<span class="hint">Nothing waiting.</span>';
+  const h = d.controls.hard_off;
+  $("guard").innerHTML = `<div>Paid ads: <b class="err">${h.paid_ads ? "OFF (in code)" : "on"}</b> · Purchases: <b class="err">${h.purchases ? "OFF" : "on"}</b> · Price changes: <b class="err">${h.price_changes ? "OFF" : "on"}</b></div>
+    <div>Spend caps: total ${money(d.controls.caps.total)}, per campaign ${money(d.controls.caps.per_campaign)} · spent ${money(d.controls.spent)}</div>
+    <div>Organic posts: only after you approve each one, and only in TEST mode. Highest mode available now: ${esc(d.controls.max_mode)}.</div>`;
+  $("sources").innerHTML = "<table>" + Object.entries(d.adapters).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v.adapter)}</td><td>${v.simulated ? '<span class="pill simp">SIMULATED</span>' : v.available ? '<span class="pill good">live</span>' : '<span class="pill bad">unavailable</span>'}</td><td class="hint">${esc(v.note || "")}</td></tr>`).join("") + "</table>";
+  $("ovNotes").innerHTML = d.notifications.slice(0, 12).map(n => `<div class="${n.level === "urgent" ? "err" : ""}">${esc(n.text)} <span class="hint">${when(n.ts)}</span></div>`).join("") || '<span class="hint">Nothing yet.</span>';
+}
+
+function renderApprovals(d) {
+  const cr = Object.fromEntries(d.creatives.map(c => [c.id, c]));
+  $("approvals").innerHTML = d.approvals_pending.map(a => { const p = a.post || {}, c = cr[p.creative_id] || {};
+    const media = c.has_video ? `<video src="${mediaUrl(c.id)}" controls preload="metadata"></video>` : `<div class="novideo">${c.simulated ? "SIMULATED render: no video file" : "No video file"}</div>`;
+    return `<div class="ask">${media}<div><b>${esc(a.summary)}</b> ${c.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}
+      <pre>${esc(p.caption)}</pre><div class="hint">Link (put it in your TikTok bio while this post is live): ${esc(p.link)}</div>
+      <div class="hint">QA ${c.qa ? (c.qa.passed ? "passed" : "failed") + " · " + c.qa.overall + "/5" : "n/a"} ${c.qa ? lab("prediction") : ""} · creative ${esc(c.creative_uid)}</div>
+      <div class="row" style="margin-top:8px"><button class="btn go" data-ap="${a.id}" data-d="approve">Approve this post</button>
+      <button class="btn danger" data-ap="${a.id}" data-d="reject">Reject</button></div></div></div>`; }).join("") || '<span class="hint">Nothing waiting for approval.</span>';
+  document.querySelectorAll("[data-ap]").forEach(b => b.onclick = () => act(`/api/marketing/${SLUG}/approvals/${b.dataset.ap}/${b.dataset.d}`, {},
+    b.dataset.d === "approve" ? "Approve this exact post? It is posted once, as shown." : "Reject this post?"));
+  $("answered").innerHTML = "<table><tr><th>When</th><th>What</th><th>Answer</th><th>By</th><th>Used</th></tr>" + d.approvals_recent.map(a =>
+    `<tr><td>${when(a.decided_at)}</td><td>${esc(a.summary)}</td><td>${pill(a.status)}</td><td>${esc(a.decided_by || "")}</td><td>${a.used_at ? "posted " + when(a.used_at) : ""}</td></tr>`).join("") + "</table>";
+}
+
+function renderDiscovery(d) {
+  $("opps").innerHTML = "<table><tr><th>#</th><th>Keyword</th><th>Score</th><th>Facts</th><th>Products</th><th>Gaps (never filled in)</th></tr>" + d.opportunities.map(o =>
+    `<tr><td>${o.rank}</td><td>${esc(o.keyword)} ${o.simulated ? '<span class="pill simp">SIM</span>' : ""}</td><td>${o.score}</td><td>${o.data.facts}</td><td>${o.data.candidate_ids.length}</td>
+     <td class="hint">${esc((o.data.gaps || []).join("; "))}</td></tr>`).join("") + "</table>";
+}
+
+function econRow(e) {
+  if (!e) return '<span class="hint">costs unknown</span>';
+  return `${money(e.price)} <span class="hint">(${esc(e.price_source)})</span> − cost ${money(e.product_cost)} − shipping ${money(e.shipping)} − fees ${money(e.payment_fees)} − returns ${money(e.expected_returns)}
+    = <b>${money(e.contribution)}</b>${lab("estimate")} · margin ${(e.margin_pct * 100).toFixed(0)}% · break-even CAC ${money(e.break_even_cac)} · break-even ROAS ${e.break_even_roas ?? "n/a"}`;
+}
+function renderProducts(d) {
+  const live = d.candidates.filter(c => ["shortlisted","reserve","in_creative","testing"].includes(c.status));
+  $("shortlist").innerHTML = "<table><tr><th>Product</th><th>Status</th><th>Score</th><th>Economics</th><th></th></tr>" + live.map(c =>
+    `<tr><td>${esc(c.title)} ${c.simulated ? '<span class="pill simp">SIM</span>' : ""}<div class="hint">${esc(c.keyword)} · ${c.listing ? "listed in store" : "NOT in store yet"}</div></td>
+     <td>${pill(c.status)}</td><td>${c.score ?? ""}<div class="hint">conf ${c.card ? c.card.score.confidence : ""}</div></td><td>${econRow(c.card && c.card.economics)}</td>
+     <td><button class="btn" data-cand="${c.id}">Evidence</button> <button class="btn danger" data-rej="${c.id}">Reject</button></td></tr>`).join("") + "</table>";
+  $("rejected").innerHTML = "<table><tr><th>Product</th><th>Reasons</th></tr>" + d.candidates.filter(c => c.status === "rejected").map(c =>
+    `<tr><td>${esc(c.title)}<div class="hint">${esc(c.keyword)}</div></td><td>${(c.reasons || []).map(r => `<div>• ${esc(r)}</div>`).join("")}</td></tr>`).join("") + "</table>";
+  document.querySelectorAll("[data-cand]").forEach(b => b.onclick = () => showCandidate(b.dataset.cand));
+  document.querySelectorAll("[data-rej]").forEach(b => b.onclick = () => act(`/api/marketing/${SLUG}/candidates/${b.dataset.rej}/reject`, {note: prompt("Why? (optional)") || ""}));
+}
+async function showCandidate(id) {
+  const r = await api(`/api/marketing/${SLUG}/candidates/${id}`), c = r.candidate, card = c.data.card || {};
+  $("candDetail").innerHTML = `<div class="card"><h2>${esc(c.title)}</h2>
+    <div>Target ${lab("hypothesis")}: ${esc(card.target?.customer)}: ${esc(card.target?.problem)}</div>
+    <div>Competitors: ${card.competitor_pricing ? `${card.competitor_pricing.count} found, median ${money(card.competitor_pricing.median)}` : "n/a"}</div>
+    <div>${econRow(card.economics)}</div><div class="hint">${esc(card.score?.explanation)}</div>
+    <div>Test budget: ${esc(card.test_budget?.note)}</div><div>Risks: ${esc((card.risks || []).join("; ") || "none recorded")}</div>
+    <div>Next step: ${esc(card.next_step || "ready for creatives")}</div>
+    <table><tr><th>Field</th><th>Claim</th><th>Label</th><th>Confidence</th><th>Source</th><th>When</th></tr>${r.evidence.map(e =>
+      `<tr><td>${esc(e.field)}</td><td>${esc(e.claim)}${e.basis ? `<div class="hint">basis: ${esc(e.basis)}</div>` : ""}</td><td>${lab(e.label)}${e.simulated ? ' <span class="pill simp">SIM</span>' : ""}</td>
+       <td>${e.confidence}</td><td class="hint">${esc(e.source_url || "")}</td><td class="hint">${when(e.observed_at || e.collected_at)}</td></tr>`).join("")}</table></div>`;
+  $("candDetail").scrollIntoView({behavior: "smooth"});
+}
+
+function renderCreatives(d) {
+  const byBrief = {}; d.creatives.forEach(c => (byBrief[c.brief_id] = byBrief[c.brief_id] || []).push(c));
+  const title = Object.fromEntries(d.candidates.map(c => [c.id, c.title]));
+  $("creatives").innerHTML = d.briefs.map(b => `<details><summary>${esc(title[b.candidate_id] || "product " + b.candidate_id)} · <b>${esc(b.concept.replace(/_/g, " "))}</b> · "${esc(b.hook)}" ${pill(b.status)}</summary>
+    <div class="card"><div>Hypothesis ${lab("hypothesis")}: ${esc(b.hypothesis)}</div><div class="hint">Testing: ${esc(b.test_variable)} · ${b.duration_s}s · 9:16 · ${esc(b.destination || "")}</div>
+    <table class="scenes"><tr><th>#</th><th>s</th><th>Visual</th><th>On screen</th><th>Voice-over</th></tr>${b.scenes.map(s => `<tr><td>${s.n}</td><td>${s.seconds}</td><td>${esc(s.visual)}</td><td>${esc(s.on_screen_text)}</td><td>${esc(s.vo)}</td></tr>`).join("")}</table>
+    ${(byBrief[b.id] || []).map(c => `<div style="margin-top:6px">Render r${c.revision} ${pill(c.status)} ${c.simulated ? '<span class="pill simp">SIMULATED</span>' : ""} <span class="hint">${esc(c.provider)} · ${esc(c.creative_uid)}</span>
+      ${c.has_video ? `<div><video src="${mediaUrl(c.id)}" controls preload="none" style="width:140px;border-radius:8px"></video></div>` : ""}
+      ${c.qa ? `<div>QA ${c.qa.passed ? '<span class="pill good">passed</span>' : '<span class="pill bad">rejected</span>'} ${c.qa.overall}/5 ${lab(c.qa.label)}
+        <table>${Object.entries(c.qa.scores).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.score}/5</td><td class="hint">${esc(v.why)}</td></tr>`).join("")}</table>
+        ${c.qa.fixes.length ? `<div class="err">Fixes: ${esc(c.qa.fixes.join(" "))}</div>` : ""}</div>` : ""}</div>`).join("")}</div></details>`).join("") || '<span class="hint">No briefs yet (they start in REVIEW mode).</span>';
+}
+
+function renderExperiments(d) {
+  $("experiments").innerHTML = d.experiments.map(e => { const r = e.result || {}, dt = e.data;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><div><b>Experiment ${e.id}</b> ${pill(e.status)} ${e.verdict ? pill(e.verdict) : ""} ${e.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}</div>
+      ${["designed","awaiting_approval","running"].includes(e.status) ? `<button class="btn danger" data-stopexp="${e.id}">Stop experiment</button>` : ""}</div>
+      <div>${esc(dt.hypothesis)}</div><div class="hint">Audience: ${esc(dt.audience)} · ${esc(dt.placement)} · budget ${money(dt.budget.money)} (${esc(dt.budget.note)}) · ${dt.duration_days} days ·
+        attribution: ${esc(dt.attribution.model)}, ${dt.attribution.window_days}-day window</div>
+      <div class="hint">Success: ${esc(dt.success_criteria.primary)}. Stopping rules: ${esc(dt.stopping_rules.join("; "))}</div>
+      ${r.variants ? `<table><tr><th>Post</th><th>Sessions ${lab("actual")}</th><th>Orders ${lab("actual")}</th><th>Contribution ${lab("estimate")}</th><th>CVR (95% range)</th><th>Stop?</th><th>Diagnostics only (views / likes)</th></tr>${r.variants.map(v => { const dg = (r.diagnostics || {})[v.id] || {};
+        return `<tr><td>${v.id}</td><td>${num(v.sessions)}</td><td>${num(v.orders)}</td><td>${v.contribution === null || v.contribution === undefined ? "n/a" : money(v.contribution)}</td><td>${v.cvr === undefined ? '<span class="dim">n/a</span>' : (v.cvr === null ? "n/a" : (v.cvr * 100).toFixed(2) + "% (" + (v.cvr_interval[0] * 100).toFixed(1) + "–" + (v.cvr_interval[1] * 100).toFixed(1) + "%)")}</td>
+          <td>${v.stop ? '<span class="pill bad">stop</span>' : ""} <span class="hint">${esc(v.why.join("; "))}</span></td><td class="hint">${num(dg.views)} / ${num(dg.likes)}</td></tr>`; }).join("")}</table>
+        <div>Attributed: ${r.attributed_orders} orders, ${money(r.attributed_revenue)} ${lab("actual")} · Incremental: ${r.incremental && r.incremental.incremental_orders !== null ? r.incremental.incremental_orders + " orders" : "n/a"} ${lab("estimate")}
+        <div class="hint">${esc(r.incremental ? r.incremental.basis : "")}</div></div>
+        <div><b>${esc((r.reasons || []).join(" "))}</b></div><div>Recommendation: ${esc(r.recommendation || "")}</div>` : '<div class="hint">No results yet.</div>'}
+      <div class="hint">${esc(dt.attribution.limitation)}</div></div>`; }).join("") || '<span class="hint">No experiments yet.</span>';
+  document.querySelectorAll("[data-stopexp]").forEach(b => b.onclick = () => act(`/api/marketing/${SLUG}/experiments/${b.dataset.stopexp}/stop`, {}, "Stop this experiment? Its waiting posts are rejected."));
+}
+
+function renderLearning(d) {
+  $("lessons").innerHTML = d.lessons.map(l => `<div style="margin-bottom:6px">${lab(l.label)} ${l.simulated ? '<span class="pill simp">SIM</span>' : ""} ${esc(l.text)}
+    <div class="hint">${esc(l.topic || "")} · ${when(l.created_at)} · ${esc(l.model_version)} · evidence: ${esc(JSON.stringify(l.evidence).slice(0, 200))}</div></div>`).join("") || '<span class="hint">No lessons yet.</span>';
+  $("reports").innerHTML = d.reports.map(r => `<div style="margin-bottom:6px"><b>${esc(r.kind)} ${esc(r.period)}</b>: ${esc(r.text)}</div>`).join("") || '<span class="hint">No reports yet.</span>';
+}
+
+function renderActivity(d) {
+  $("errors").innerHTML = d.errors.map(t => `<div class="err">Task ${t.id} (${esc(t.kind)}) ${esc(t.status)}: ${esc(t.error)}</div>`).join("") || '<span class="hint">No errors.</span>';
+  $("tasks").innerHTML = "<table><tr><th>#</th><th>Stage</th><th>Status</th><th>Tries</th><th>Finished</th><th>Note</th></tr>" + d.tasks.map(t =>
+    `<tr><td>${t.id}</td><td>${esc(t.kind)}</td><td>${pill(t.status)}</td><td>${t.attempts}/${t.max_attempts}</td><td>${when(t.finished_at)}</td><td class="hint">${esc(t.error || "")}</td></tr>`).join("") + "</table>";
+  $("audit").innerHTML = "<table><tr><th>When</th><th>Who</th><th>Action</th><th>Outcome</th><th>Subject</th></tr>" + d.audit.map(a =>
+    `<tr><td>${when(a.ts)}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td>${pill(a.outcome)}</td><td class="hint">${esc(a.subject || "")} ${esc(a.details && a.details.reason || "")}</td></tr>`).join("") + "</table>";
+  $("recon").innerHTML = d.reconcile_problems.length ? d.reconcile_problems.map(p => `<div class="err">${esc(p)}</div>`).join("") : '<span class="pill good">Dashboard numbers match the records</span>';
+}
+
+async function load() {
+  try {
+    if (!SLUG) { const list = await api("/api/marketing"); $("biz").innerHTML = list.businesses.map(b => `<option value="${esc(b.slug)}">${esc(b.name)} (${esc(b.profile)})</option>`).join(""); SLUG = list.businesses[0].slug; }
+    DATA = await api(`/api/marketing/${SLUG}`);
+    renderHeader(DATA); renderOverview(DATA); renderApprovals(DATA); renderDiscovery(DATA); renderProducts(DATA);
+    renderCreatives(DATA); renderExperiments(DATA); renderLearning(DATA); renderActivity(DATA);
+  } catch (e) { toast("Couldn't load: " + e.message); }
+}
+load(); setInterval(() => { if (!document.querySelector("details[open]") && !document.activeElement?.matches("video")) load(); }, 15000);
+</script>
+</body>
+</html>

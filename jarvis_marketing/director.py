@@ -12,6 +12,7 @@ After a restart, recover() retries or fails interrupted tasks; a post interrupte
 never posted again automatically.
 """
 
+import re
 import secrets
 import threading
 
@@ -209,7 +210,9 @@ class Director:
         text = f"Marketing cycle {cid} {status}." + (f" Waiting for your approval on {pending} post(s)." if pending else "") \
             + (f" Problems in: {', '.join(failed)}." if failed else "") \
             + (f" Not allowed in {self.controls.mode(self.bid)} mode: {', '.join(blocked)}." if blocked else "")
-        self.store.notify(text, "urgent" if failed else "info", self.bid)
+        last = self.store.find("notifications", business_id=self.bid, order="id DESC", limit=1)
+        if not (last and re.sub(r"cycle \d+", "", last[0]["text"]) == re.sub(r"cycle \d+", "", text)):   # no repeats of the same news
+            self.store.notify(text, "urgent" if failed else "info", self.bid)
         if self.notify_hook and (pending or failed):
             try:
                 self.notify_hook(text)

@@ -133,7 +133,8 @@ def concepts_for(ctx, cand):
     for key, b in out.items():
         b.update(common, concept=key)
         b["vo_lines"] = [s["vo"] for s in b["scenes"]]
-        b["caption"] = f"{b['hook']} {name}" + (f" {_money(price)}" if price is not None else "") + (" with free UK delivery." if free else ".")
+        tail = "" if key == "price_reveal" or price is None else f" {_money(price)}" + (" with free UK delivery" if free else "")
+        b["caption"] = f"{b['hook']} {name}{tail}."
     return out
 
 

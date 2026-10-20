@@ -193,6 +193,7 @@
       <button class="tab" data-pane="inbox" id="inboxTab">Inbox</button>
       <button class="tab" data-pane="business">Business</button>
       <button class="tab" data-pane="advertising">Advertising</button>
+      <button class="tab" data-pane="marketing">Marketing</button>
       <button class="tab" data-pane="trading">Trading</button>
       <button class="tab" data-pane="jobs">Jobs</button>
       <button class="tab" data-pane="sessions">Sessions</button>
@@ -254,6 +255,9 @@
         <div id="inboxList">Loading…</div></div>
       <div class="card"><h3>Answered automatically</h3><div id="inboxAuto"><p class="hint">None yet.</p></div>
         <p class="hint">Jarvis only answers simple customer questions himself (delivery times, where's my order, the returns policy, product details), only from the shop's own pages and the customer's own order, at most twice a day per customer and ten an hour. Refunds, complaints, payment problems and anything he isn't sure of come to you as a draft. He never answers spam.</p></div>
+    </div>
+    <div class="pane" id="pane-marketing" style="overflow:hidden">
+      <iframe id="marketingFrame" title="Marketing" style="width:100%;height:100%;border:0;border-radius:10px;background:#050508"></iframe>
     </div>
     <div class="pane" id="pane-business">
       <div class="tiles" id="bizTiles"></div>
@@ -1479,7 +1483,9 @@ el("improveBtn").addEventListener("click", async () => {
   renderChanges();
 });
 
-const RENDERERS = { inbox: renderInbox, jobs: renderJobs, advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
+// The Marketing tab is its own page (jarvis_marketing/ui/marketing.html), loaded once and refreshing itself.
+function renderMarketing() { const f = el("marketingFrame"); if (!f.getAttribute("src")) f.setAttribute("src", "/marketing"); }
+const RENDERERS = { marketing: renderMarketing, inbox: renderInbox, jobs: renderJobs, advertising: () => Promise.all([renderAdvertising(), renderPosts()]), store: renderStore, trading: renderTrading, business: renderBusiness, sessions: renderSessions, runs: renderRuns, projects: renderProjects, specs: renderSpecs, memory: renderMemory, changes: renderChanges };
 const PANELS = ["money"];
 function refreshPane(name) {
   if (PANELS.includes(name)) return loadPanel(name);

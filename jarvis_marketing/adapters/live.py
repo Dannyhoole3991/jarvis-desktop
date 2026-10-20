@@ -58,6 +58,11 @@ class CJSupplier(Adapter):
         return opts, self.record(f"{SC.CJ_API}/logistic/freightCalculate?vid={vid}&to=GB", opts)
 
 
+def _spelling(text):
+    """US/UK spellings and plurals compare equal ("organizers" ~ "organiser")."""
+    return re.sub(r"s\b", "", text.replace("iz", "is").replace("yz", "ys"))
+
+
 class ShopifyPublicCompetitors(Adapter):
     """Prices from competitor Shopify stores' public /products.json (only stores Danny lists in config)."""
     name = "shopify_public_competitors"
@@ -84,7 +89,7 @@ class ShopifyPublicCompetitors(Adapter):
     def prices(self, keyword):
         if not self.stores:
             raise Unavailable("No competitor stores are listed in businesses.json yet.")
-        words = [w for w in re.split(r"\W+", keyword.lower()) if len(w) > 2]
+        words = [_spelling(w) for w in re.split(r"\W+", keyword.lower()) if len(w) > 2]
         found, fids = [], []
         for store in self.stores:
             try:
@@ -92,7 +97,7 @@ class ShopifyPublicCompetitors(Adapter):
             except Exception as error:
                 self.record(f"https://{store}/products.json", {"error": str(error)[:200]}, ok=False)
                 continue
-            hits = [i for i in items if all(w.rstrip("s") in i["title"].lower() for w in words)]
+            hits = [i for i in items if all(w in _spelling(i["title"].lower()) for w in words)]
             for h in hits:
                 found.append(dict(h, fetch_id=fid))
             fids.append(fid)

@@ -49,8 +49,8 @@ def evaluate(variants, criteria, now, ended_at=None):
     final_after = (ended_at or now) + 3600 * criteria["data_delay_hours"] + 86400 * criteria["attribution_window_days"]
     data_final = ended_at is not None and now >= final_after
     for v in variants:
-        row = {"id": v["id"], "stop": False, "why": []}
         sessions, orders = v.get("sessions"), v.get("orders")
+        row = {"id": v["id"], "sessions": sessions, "orders": orders, "contribution": v.get("contribution"), "stop": False, "why": []}
         if sessions is None or orders is None:
             row["why"].append("sessions or orders not available")
         else:
