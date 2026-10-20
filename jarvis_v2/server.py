@@ -243,7 +243,7 @@ def make_handler(state):
                 name = path.split("/")[3]
                 return self._json(api_panel(state, name, refresh=True))
             ui = secrets.compare_digest(self.headers.get("X-Jarvis-UI", ""), state.ui_token)
-            if path.startswith("/api/cj_pay/") and not path.endswith(("/check", "/check_paid")):
+            if (path.startswith("/api/cj_pay/") and not path.endswith(("/check", "/check_paid"))) or path.startswith("/api/marketing/"):
                 # Money: the press must come from the window page itself (a browser sends its Origin on POST).
                 origin = (self.headers.get("Origin") or "").rstrip("/")
                 port = self.server.server_address[1]

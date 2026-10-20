@@ -51,6 +51,15 @@ def needs_you():
     except Exception:
         pass
     try:
+        out = _server("/api/marketing", timeout=10)
+        for b in out.get("businesses") or []:
+            if b.get("pending"):
+                sim = " (SIMULATED test data)" if b.get("profile") == "mock" else ""
+                parts.append(f"Marketing posts waiting for your approval{sim}, in the Marketing tab:\n"
+                             + "\n".join(f"- {p}" for p in b["pending"][:10]))
+    except Exception:
+        pass
+    try:
         from . import mailbox
         waiting = mailbox.needs_you_text()
         if waiting:

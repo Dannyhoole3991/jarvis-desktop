@@ -166,6 +166,10 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(JB.url_verdict("https://collectivefinds.co.uk/checkout")[0], "block")
         self.assertEqual(JB.url_verdict("https://www.paypal.com/pay")[0], "block")
         self.assertEqual(JB.url_verdict("https://www.pinterest.co.uk/signup")[0], "block")
+        for local in ("http://127.0.0.1:8780/marketing", "http://localhost:8780/", "http://[::1]:8780/", "http://192.168.1.5:8790/",
+                      "http://100.101.102.103:8790/", "http://10.0.0.2/", "http://jarvis-pc.tail1234.ts.net:8790/", "http://0.0.0.0:8780/"):
+            self.assertEqual(JB.url_verdict(local)[0], "block", local)
+        self.assertEqual(JB.url_verdict("https://100.example.com/")[0], "ok")
 
 
 # ------------------------------------------------------------ fake browser

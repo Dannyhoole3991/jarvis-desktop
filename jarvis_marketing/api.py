@@ -182,8 +182,10 @@ def handle_get(dept, path, query):
     if parts[:2] != ["api", "marketing"]:
         return None
     if len(parts) == 2:
-        return {"businesses": [{"slug": s, "name": d.business["name"], "profile": d.business["profile"]}
-                               for s, d in dept.directors.items()], "describe": describe(dept)}
+        return {"businesses": [{"slug": s, "name": d.business["name"], "profile": d.business["profile"],
+                                "pending": [a["summary"] for a in d.approvals.pending(d.bid)],
+                                "stopped": d.controls.stopped()["on"]} for s, d in dept.directors.items()],
+                "describe": describe(dept)}
     slug = parts[2]
     if len(parts) == 3:
         return overview(dept, slug)

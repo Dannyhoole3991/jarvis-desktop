@@ -247,6 +247,7 @@ class WindowServerTests(unittest.TestCase):
             h["X-Jarvis-Token"] = self.state.token
         if ui:
             h["X-Jarvis-UI"] = self.state.ui_token
+            h["Origin"] = f"http://127.0.0.1:{self.port}"          # a button press comes from the window page itself
         r = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode() if body is not None else None,
                                    headers=h, method="POST" if body is not None else "GET")
         try:
@@ -278,6 +279,15 @@ class WindowServerTests(unittest.TestCase):
         self.assertEqual(self.call("/api/marketing/resume", {})[0], 403)
         self.assertEqual(self.call("/api/marketing/resume", {}, ui=True)[0], 200)
 
+    def test_a_press_without_the_windows_origin_is_refused(self):
+        h = {"Content-Type": "application/json", "X-Jarvis-Token": self.state.token, "X-Jarvis-UI": self.state.ui_token}
+        r = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/marketing/{self.slug}/mode", data=b'{"mode": "TEST"}',
+                                   headers=h, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(r, timeout=10)
+        self.assertEqual(caught.exception.code, 403)
+        self.assertEqual(self.d.controls.mode(self.d.bid), C.REVIEW)
+
     def test_dannys_window_buttons_work(self):
         status, out = self.call(f"/api/marketing/{self.slug}/mode", {"mode": "TEST"}, ui=True)
         self.assertEqual(status, 200, out)
@@ -302,3 +312,32 @@ class WindowServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        from jarvis_marketing import config
+        self.config, self.old = config, config.DATA_ROOT
+        config.DATA_ROOT = tempfile.mkdtemp()
+
+    def tearDown(self):
+        self.config.DATA_ROOT = self.old
+
+    def test_terminal_commands_and_plain_refusals(self):
+        from jarvis_marketing.__main__ import run
+        self.assertEqual(run(["status"]), 0)
+        self.assertEqual(run(["mode", "TEST"]), 2)            # one step at a time
+        self.assertEqual(run(["mode", "REVIEW"]), 0)
+        self.assertEqual(run(["stop", "test"]), 0)
+        self.assertEqual(run(["cycle"]), 2)                    # refused while stopped
+        self.assertEqual(run(["resume"]), 0)
+        self.assertEqual(run(["serve"]), 1)                    # no laptop password yet: it says so and doesn't start
+
+
+class NeedsYouTests(unittest.TestCase):
+    def test_pending_posts_are_listed_for_the_needs_you_panel(self):
+        d, _, _ = prepared()
+        out = api.handle_get(dept_for(d), "/api/marketing", {})
+        b = out["businesses"][0]
+        self.assertEqual(len(b["pending"]), len(d.approvals.pending(d.bid)))
+        self.assertEqual(b["profile"], "mock")

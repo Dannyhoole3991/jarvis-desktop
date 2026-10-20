@@ -1,6 +1,9 @@
 # Jarvis Marketing Department: audit and plan
 
-**Status:** milestone 1 is being built on branch `claude/sleepy-hypatia-y3xua6`. Mock mode works end to end. Live adapters exist but need Danny's configuration (section 9).
+**Status (20 Oct 2026):**
+- All 7 phases are built on branch `claude/sleepy-hypatia-y3xua6` (not merged).
+- Mock mode works end to end: 104 marketing tests pass, and no existing Jarvis test newly fails.
+- Live adapters are built and tested with stand-in transports. They need Danny's setup (section 11) before real use.
 **First business:** Collective Finds (Shopify `mwrfta-mh.myshopify.com`, public site `collectivefinds.co.uk`).
 **Milestone 1 decision (Danny):**
 - Research and review run freely.
@@ -161,9 +164,82 @@ Sources: [TikTok Direct Post reference](https://developers.tiktok.com/doc/conten
 - **Supplier data can change** (price/stock). Readings carry a timestamp and are re-checked before any post is approved.
 - **Laptop access exposes a login page.** Bind it to a private network (Tailscale recommended) or enable TLS. It is off by default.
 
-## 9. What Danny must do (exact steps are in the final report)
+## 9. What Danny must do (exact steps in section 11)
 - Set the laptop dashboard password: `py -3 -m jarvis_marketing set-password`.
 - Choose how the laptop reaches the PC (Tailscale recommended).
 - Optionally add the `read_orders` scope to the Shopify app for API order attribution.
 - List competitor store URLs in `jarvis_marketing/data/businesses.json`.
 - Switch the business profile from `mock` to `live` when ready.
+
+## 10. What was built (files)
+| Part | File(s) |
+|---|---|
+| Records (one SQLite DB per profile, append-only audit, secret redaction) | `jarvis_marketing/store.py` |
+| Modes, permissions, hard-off switches, caps, approvals, emergency stop, schedule | `jarvis_marketing/controls.py` |
+| Evidence provenance (fact / verified / estimate / hypothesis / prediction), fabrication checks | `jarvis_marketing/evidence.py` |
+| Unit economics, break-even CAC/ROAS, scoring and rejections | `jarvis_marketing/scoring.py` |
+| Banned/unsupported claims + number checks | `jarvis_marketing/claims.py` |
+| Verdict statistics (Wilson intervals, two-proportion test, stop rules) | `jarvis_marketing/stats.py` |
+| Agents | `jarvis_marketing/agents/` (`research`, `evaluation`, `creative`, `production`, `qa`, `testing`, `learning`, `base`) |
+| Marketing Director + scheduler | `jarvis_marketing/director.py` |
+| Adapters (mock, live, video) | `jarvis_marketing/adapters/` |
+| Dashboard API (shared) | `jarvis_marketing/api.py` |
+| Laptop server (login, CSRF, lockout, TLS) | `jarvis_marketing/remote.py` |
+| Dashboard page | `jarvis_marketing/ui/marketing.html` |
+| Terminal commands | `jarvis_marketing/__main__.py` |
+| Job safety fix | `jarvis_v2/job_browser.py`: jobs' browser can no longer open this PC, home-network or Tailscale addresses, so a job can never press Approve in a dashboard. Marketing button presses must also carry the window's Origin, as CJ Pay's do. |
+| Jarvis integration | `jarvis_v2/server.py` (`/marketing` page, `/api/marketing/*`, start/stop), `jarvis_v2/ui/index.html` (Marketing tab), `jarvis_v2/tools.py` (`marketing_status`, `marketing_stop` brain tools; marketing approvals in Needs you), `LATER_JOBS.md` |
+| Tests | `jarvis_marketing/tests/` (`test_core`, `test_agents`, `test_dashboard`, `test_live_adapters`) |
+
+### Creative provider comparison (milestone 1)
+| Provider | Cost | Quality | Reliability | Product accuracy | Used? |
+|---|---|---|---|---|---|
+| `local_slideshow` (jarvis_video.py: supplier photos, zooms, captions, edge-tts voice, own music) | free | clean, fast-cut slideshow | high; the voice needs internet | exact: only the supplier's own photos | yes (live) |
+| Generative AI video (text/image-to-video services) | paid per clip | can look more "native" | varies | **can alter the product**, which breaks the accuracy rule | no, until a provider can be checked against the real photos |
+| `mock` | free | none (manifest only, SIMULATED) | n/a | n/a | tests and the demo |
+
+### Known limits (honest)
+- **Organic attribution is weak.** TikTok posts can't hold links and there is one bio link, so variants run one after another. Most organic verdicts will be "inconclusive", and the dashboard says so.
+- **Sessions per post** aren't available live: TikTok Studio shows views/likes/comments only. Shopify sessions by UTM would need the analytics API (`read_reports`). Until then, CVR shows "not available" and verdicts stay "insufficient data". This is by design: nothing is invented.
+- **No language model is required.** All agents are deterministic and work from evidence. An LLM hook writer was deliberately left out of this milestone: OpenAI credit is gone, and every word must pass the fact checks anyway.
+- **Browser-read sources** (Shopify admin orders, TikTok Studio) break when a site changes its layout. They are reported as unavailable, never guessed.
+- **Unverified on Danny's PC:** the CJ, Shopify and TikTok live adapters are tested only against stand-in transports here. The first live run should be watched (section 12).
+
+## 11. Exact steps for Danny
+1. **Restart Jarvis** (close the window, run `START_JARVIS_V2.bat`). Open the **Marketing** tab. It shows a SIMULATED business (purple banner).
+2. **Try it safely in simulation:**
+   - Press REVIEW, then *Run a cycle now*.
+   - Then press TEST and approve one simulated post in *Approvals*.
+   - Nothing real is posted while the profile is mock.
+   - To fill it quickly instead, run in PowerShell in the Jarvis folder: `py -3 -m jarvis_marketing demo`.
+3. **Laptop access** (optional):
+   1. Install Tailscale on this PC and on the laptop (https://tailscale.com/download), and sign in to the same account on both.
+   2. On the PC, note its Tailscale address (100.x.y.z, shown in the Tailscale menu).
+   3. In PowerShell in the Jarvis folder, run: `py -3 -m jarvis_marketing set-password --bind 100.x.y.z`. Type a password of 12+ characters twice.
+   4. Restart Jarvis. If Windows Firewall asks, allow Python on **Private** networks.
+   5. On the laptop, open `http://100.x.y.z:8790` and sign in. Tailscale encrypts the connection.
+4. **Competitor prices** (optional): tell Claude which competitor shop websites to compare against. Claude will write `jarvis_marketing\data\businesses.json` for you.
+5. **Order attribution through the Shopify API** (optional, recommended):
+   1. Go to dev.shopify.com, then Apps, then Jarvis, then Configuration. Add the scope `read_orders`.
+   2. Release a new version.
+   3. In the store admin, approve the updated app.
+   4. Tell Claude "orders scope done", and Claude sets `"orders_source": "api"`.
+   - Without this, orders are read from the admin page in Jarvis's browser, with no attribution.
+6. **Going live:** tell Claude "switch marketing to live". This sets `"profile": "live"` in `businesses.json`, which starts a separate live database in RESEARCH mode.
+   - Then step up through REVIEW to TEST yourself, from the dashboard.
+   - Every post still needs your approval, and Jarvis's browser must be logged in to TikTok.
+7. **Paid ads** stay off in code. Turning them on is a separate, reviewed code change after you decide budgets and limits.
+
+## 12. How to start, stop and verify
+- **Start:** the department starts with the Jarvis window.
+  - It recovers interrupted work first. A post cut off mid-upload is flagged for you to check and is never reposted.
+  - Auto-run is **off** until you switch it on (dashboard button, every 24h).
+- **Stop:** any of these works.
+  - The red **EMERGENCY STOP** button (window or laptop).
+  - Saying "Jarvis, stop marketing" (the `marketing_stop` tool).
+  - `py -3 -m jarvis_marketing stop`.
+  - Only you can resume (button or `py -3 -m jarvis_marketing resume`).
+- **Status:** `py -3 -m jarvis_marketing status`, the Marketing tab, or ask Jarvis ("how's marketing going?").
+- **Verify:**
+  - Run the tests: `py -3 -m unittest discover -s jarvis_marketing/tests -t .` (104 tests).
+  - The *Activity & audit* tab shows every decision and external action, and a reconciliation check that the dashboard numbers match the records.

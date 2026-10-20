@@ -116,5 +116,14 @@ def demo(slug=None):
     return 0
 
 
+def run(argv=None):
+    from jarvis_marketing.director import Busy
+    try:
+        return main(argv)
+    except (C.PermissionDenied, ValueError, Busy) as error:
+        print(f"Refused: {error}")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
