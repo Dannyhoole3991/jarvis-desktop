@@ -70,6 +70,8 @@ class GuardTests(unittest.TestCase):
         for cmd in bad:
             self.assertIsNotNone(self.blocked("Bash", {"command": cmd}), cmd)
             self.assertIsNotNone(self.blocked("PowerShell", {"command": cmd}), cmd)
+        for cmd in ("ssh server 'sudo rm -rf /'", "scp x server:/tmp", "ssh -o BatchMode=yes danny@100.104.113.7 id"):
+            self.assertIn("server", self.blocked("Bash", {"command": cmd}), cmd)
         good = ["git status", "git log --oneline -5", "ls", "dir", "echo hello > notes.txt", "rm old.png",
                 f"Remove-Item \"{self.job}\\screens\\a.png\"", "py -c \"print(1+1)\"", "py --version"]
         for cmd in good:

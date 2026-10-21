@@ -49,6 +49,23 @@ def probe(path):
             "size_bytes": int(fmt.get("size") or 0)}
 
 
+def scene_analysis(path, threshold=0.3):
+    """What can be MEASURED from an ad's video file: length, audio, and the scene cuts ffmpeg detects
+    (first-shot length, cuts per second). Raises Unavailable without ffmpeg. Nothing is guessed."""
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        raise Unavailable("ffmpeg isn't installed, so the ad's video can't be measured.")
+    facts = probe(path)
+    run = subprocess.run([exe, "-hide_banner", "-nostats", "-i", path, "-filter:v", f"select='gt(scene,{threshold})',showinfo",
+                          "-an", "-f", "null", "-"], capture_output=True, text=True, timeout=180)
+    import re
+    cuts = sorted(round(float(m), 2) for m in re.findall(r"pts_time:([\d.]+)", run.stderr))
+    dur = facts["duration_s"] or 0
+    return {"duration_s": dur, "has_audio": facts["has_audio"], "width": facts["width"], "height": facts["height"],
+            "cuts": cuts, "first_shot_s": cuts[0] if cuts else dur, "cuts_per_10s": round(10 * len(cuts) / dur, 2) if dur else None,
+            "threshold": threshold}
+
+
 class MockVideo(Adapter):
     name, simulated = "mock_video", True
 

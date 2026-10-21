@@ -32,6 +32,7 @@ DEFAULT_THRESHOLDS = {
     "min_confidence": 0.5,           # share of the score backed by real data
     "max_competitor_price_ratio": 1.20,   # proposed price vs the median competitor price
     "min_stock": 1,
+    "min_profit_after_ads": 1.00,    # contribution minus the planned ad cost per order (economics.planned_cpa)
 }
 DEFAULT_WEIGHTS = {"margin": 0.30, "demand": 0.25, "competition": 0.15, "supplier": 0.15, "content_fit": 0.15}
 
@@ -42,7 +43,21 @@ DEFAULT_ECONOMICS = {
     "other_variable_cost": 0.00,
     "target_contribution": 5.00,
     "usd_to_business": 0.75,         # fixed rate from jarvis_store config: conversions are labelled estimates
+    "planned_cpa": 3.00,             # ESTIMATE: ad cost to win one order in a paid test, until real CPA exists
 }
+
+# A PROPOSED Facebook/Instagram test (nothing is spent: launching is off in code until Danny authorises it).
+DEFAULT_PAID_TEST = {
+    "daily_per_ad_set": 5.00,        # one ad set per creative, so each variant gets the same budget
+    "days": 4,
+    "max_variants": 3,
+    "placements": ["facebook_reels", "facebook_feed", "instagram_reels", "instagram_stories"],
+    "audience": {"countries": ["GB"], "age_min": 18, "age_max": 65, "targeting": "broad (Advantage+ audience off)"},
+    "optimisation": "purchases (Meta pixel 'Purchase' event)",
+    "attribution": "7-day click, 1-day view (Meta default); Shopify orders by UTM are the record of truth",
+}
+DEFAULT_META = {"ad_account_id": "", "page_id": "", "instagram_account_id": "", "pixel_id": "",
+                "ad_library_countries": ["IE"]}       # an EU country: Meta only returns non-political ads that reached the EU
 
 DEFAULT_TESTING = {
     "attribution_window_days": 7,    # an order counts for a post only within this many days of the post
@@ -66,6 +81,8 @@ DEFAULT_LIMITS = {
     "products_per_keyword": 4,
     "shortlist_size": 3,
     "briefs_per_product": 3,
+    "ads_per_keyword": 15,
+    "listings_per_cycle": 2,         # new Shopify drafts prepared per cycle (each still needs Danny's approval)
 }
 
 COLLECTIVE_FINDS = {
@@ -88,6 +105,9 @@ COLLECTIVE_FINDS = {
     "economics": {},
     "testing": {},
     "limits": {},
+    "paid_test": {},
+    "meta": {},
+    "brand": None,                    # e.g. "Collective" ONLY if Danny decides to sell these as his own brand (Google 'brand')
 }
 
 
@@ -99,7 +119,7 @@ def _merge(defaults, overrides):
 
 def load_businesses(path=None):
     """All businesses, with defaults filled in. A missing file means just Collective Finds."""
-    path = path or BUSINESSES_FILE
+    path = path or os.path.join(DATA_ROOT, "businesses.json")        # follows DATA_ROOT (tests point it at a temp folder)
     items = [copy.deepcopy(COLLECTIVE_FINDS)]
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -114,6 +134,8 @@ def load_businesses(path=None):
         full["economics"] = _merge(DEFAULT_ECONOMICS, b.get("economics"))
         full["testing"] = _merge(DEFAULT_TESTING, b.get("testing"))
         full["limits"] = _merge(DEFAULT_LIMITS, b.get("limits"))
+        full["paid_test"] = _merge(DEFAULT_PAID_TEST, b.get("paid_test"))
+        full["meta"] = _merge(DEFAULT_META, b.get("meta"))
         out.append(full)
     return out
 

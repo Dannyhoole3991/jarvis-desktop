@@ -1,8 +1,10 @@
 """
 The Marketing Director: runs the operating cycle as typed, capped tasks.
 
-    research -> evaluate -> brief -> produce -> qa (<= max_revisions rework rounds) -> design (+ approval requests)
-    -> publish (approved posts only) -> collect -> judge -> learn (+ reports)
+    research -> ads (find + reverse-engineer adverts) -> evaluate -> list (verify supplier, Shopify DRAFT, approval
+    request) -> go_live (approved listings only) -> brief -> produce -> qa (<= max_revisions rework rounds)
+    -> rank (pre-launch assessment) -> design (+ approval requests) -> paid_plan (PAUSED Facebook/Instagram
+    test plans; launching is off) -> publish (approved posts only) -> collect -> judge -> learn (+ reports)
 
 Every task: an idempotency key (unique), a lease, a timeout, an attempt cap, a validated input and
 output, and an explicit end state (done / failed / timed_out / cancelled / blocked). A cycle has a
@@ -18,7 +20,8 @@ import threading
 
 from jarvis_marketing import config, controls as C, evidence as E
 from jarvis_marketing.adapters import build
-from jarvis_marketing.agents import base, creative, evaluation, learning, production, qa, research, testing
+from jarvis_marketing.agents import (adintel, assessment, base, channels, creative, evaluation, learning, listing, production, qa,
+                                     research, testing)
 from jarvis_marketing.store import Store
 
 PUBLISH_IN = {"post_ids?": [int]}
@@ -31,17 +34,25 @@ JUDGE_OUT = {"judged": [{"experiment_id": int, "verdict": str, "status": str}]}
 # stage -> (agent name, permission, function, input schema, output schema)
 STAGES = {
     "research": ("research", "research", research.run, research.INPUT, research.OUTPUT),
+    "ads": ("ad_research", "research", adintel.run, adintel.INPUT, adintel.OUTPUT),
     "evaluate": ("evaluation", "evaluate", evaluation.run, evaluation.INPUT, evaluation.OUTPUT),
+    "list": ("listing", "create_draft", listing.run, listing.INPUT, listing.OUTPUT),
+    "go_live": ("listing", "publish_product", listing.go_live, listing.LIVE_IN, listing.LIVE_OUT),
     "brief": ("creative", "brief", creative.run, creative.INPUT, creative.OUTPUT),
     "produce": ("production", "produce", production.run, production.INPUT, production.OUTPUT),
     "qa": ("qa", "qa", qa.run, qa.INPUT, qa.OUTPUT),
+    "rank": ("assessment", "qa", assessment.run, assessment.INPUT, assessment.OUTPUT),
     "design": ("testing", "design_experiment", testing.design, DESIGN_IN, DESIGN_OUT),
+    "paid_plan": ("testing", "prepare_paid", testing.paid_plan, testing.PAID_IN, testing.PAID_OUT),
     "publish": ("testing", "publish_organic", testing.publish, PUBLISH_IN, PUBLISH_OUT),
     "collect": ("testing", "read_analytics", testing.collect, {}, COLLECT_OUT),
     "judge": ("testing", "evaluate", testing.judge, {}, JUDGE_OUT),
     "learn": ("learning", "learn", learning.run, learning.INPUT, learning.OUTPUT),
+    "channels": ("channels", "evaluate", channels.run, channels.INPUT, channels.OUTPUT),
 }
-CYCLE = ["research", "evaluate", "brief", "produce", "qa", "design", "publish", "collect", "judge", "learn"]
+CYCLE = ["research", "ads", "evaluate", "list", "go_live", "brief", "produce", "qa", "rank", "design", "paid_plan", "publish",
+         "collect", "judge", "channels", "learn"]
+NEVER_RETRY = ("publish", "go_live")       # an interrupted publish is checked by a person, never repeated
 TERMINAL = ("done", "failed", "timed_out", "cancelled", "blocked")
 NO_RETRY = (base.SchemaError, E.FabricatedEvidence, C.PermissionDenied)
 
@@ -207,7 +218,7 @@ class Director:
         blocked = [r["stage"] for r in results if r["status"] == "blocked"]
         failed = [r["stage"] for r in results if r["status"] in ("failed", "timed_out")]
         pending = len(self.approvals.pending(self.bid))
-        text = f"Marketing cycle {cid} {status}." + (f" Waiting for your approval on {pending} post(s)." if pending else "") \
+        text = f"Marketing cycle {cid} {status}." + (f" Waiting for your approval on {pending} item(s)." if pending else "") \
             + (f" Problems in: {', '.join(failed)}." if failed else "") \
             + (f" Not allowed in {self.controls.mode(self.bid)} mode: {', '.join(blocked)}." if blocked else "")
         last = self.store.find("notifications", business_id=self.bid, order="id DESC", limit=1)
@@ -233,6 +244,40 @@ class Director:
         with self.publish_lock:            # one publish at a time (it drives Jarvis's browser)
             return self.run_stage("publish", {"post_ids": post_ids} if post_ids else {})
 
+    def decide(self, principal, approval_id, decision, note=""):
+        """Danny's answer on any approval. Returns (approval, kind, subject row)."""
+        a = self.store.get("approvals", approval_id)
+        if not a or a["business_id"] != self.bid:
+            raise ValueError("No such approval.")
+        if a["action"] == "publish_organic":
+            a, post = self.decide_post(principal, approval_id, decision, note)
+            return a, "post", post
+        a = self.approvals.decide(principal, approval_id, decision, note)
+        if a["action"] == "publish_product":
+            row = self.store.one("listings", approval_id=approval_id)
+            if row and row["status"] == "awaiting_approval":
+                self.store.update("listings", row["id"], where={"status": "awaiting_approval"},
+                                  status="approved" if a["status"] == "approved" else "draft_rejected", updated_at=self.store.clock())
+            return a, "listing", row
+        return a, a["subject_type"], None
+
+    def publish_listing(self, listing_ids=None):
+        with self.publish_lock:
+            return self.run_stage("go_live", {"listing_ids": listing_ids} if listing_ids else {})
+
+    def launch_paid(self, principal, experiment_id):
+        """Danny pressing 'Launch' on a prepared paid test. Paid ads are off in code, so the gate refuses and
+        the refusal is audited; nothing is sent to Meta."""
+        if not isinstance(principal, C.HumanPrincipal):
+            raise C.PermissionDenied("Only Danny can launch a paid test.")
+        e = self.store.get("experiments", experiment_id)
+        if not e or e["business_id"] != self.bid or e["kind"] != "paid_meta":
+            raise ValueError("No such paid test.")
+        if e["data"].get("problems"):
+            raise C.PermissionDenied("Not ready: " + "; ".join(e["data"]["problems"]))
+        self.controls.require(self.bid, "launch_paid", principal, amount=e["data"]["budget"]["money"], campaign_id=e["id"])
+        self.adapters.paid.launch(e["data"])          # unreachable while paid ads are off; launch() refuses too
+
     # ------------------------------------------------------------ recovery
     def recover(self, process_restarted=True):
         """After a restart: interrupted tasks are retried (attempts left) or failed; interrupted posts are flagged."""
@@ -240,7 +285,7 @@ class Director:
         for t in self.store.find("tasks", business_id=self.bid, status="running"):
             if not process_restarted and (t["lease_until"] or 0) > now:
                 continue
-            if t["attempts"] < t["max_attempts"] and t["kind"] != "publish":
+            if t["attempts"] < t["max_attempts"] and t["kind"] not in NEVER_RETRY:
                 self.store.update("tasks", t["id"], where={"status": "running"}, status="queued", lease_token=None, lease_until=None,
                                   error="interrupted; will retry")
                 notes.append(f"task {t['id']} ({t['kind']}) re-queued")
@@ -253,6 +298,12 @@ class Director:
                               error="Jarvis stopped while posting. Check TikTok yourself: it will NOT be posted again automatically.")
             self.store.notify(f"Post {p['id']} was interrupted mid-upload. Please check TikTok; I won't repost it.", "urgent", self.bid)
             notes.append(f"post {p['id']} flagged for a manual check")
+        for row in self.store.find("listings", business_id=self.bid, status="publishing"):
+            self.store.update("listings", row["id"], where={"status": "publishing"}, status="check",
+                              error="Jarvis stopped while publishing. Check the product in Shopify: it will NOT be published again automatically.")
+            self.store.notify(f"Publishing '{row['data'].get('title')}' was interrupted. Please check it in Shopify; I won't retry.",
+                              "urgent", self.bid)
+            notes.append(f"listing {row['id']} flagged for a manual check")
         for c in self.store.find("cycles", business_id=self.bid, status="running"):
             self.store.update("cycles", c["id"], status="interrupted", finished_at=now)
         for t in self.store.find("tasks", business_id=self.bid, status="queued"):

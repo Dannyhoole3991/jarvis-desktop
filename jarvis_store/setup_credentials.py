@@ -12,6 +12,12 @@ don't want to change.
    read_products and write_products scopes and must be installed on the store.
 2. CJ: CJdropshipping -> My CJ -> Authorization -> API -> generate an API key
    (it looks like CJ1234567@api@xxxxxxxx).
+3. Meta Ad Library (optional, for ad research): developers.facebook.com -> create
+   an app, confirm your identity at facebook.com/ID, then in Graph API Explorer
+   make a user token and exchange it for a long-lived one. Paste it here.
+4. Meta Marketing API (optional, for paid tests, which stay OFF until you
+   authorise a campaign): a System User token from Business Settings with the
+   ads_management permission on your ad account.
 """
 
 import getpass
@@ -27,6 +33,8 @@ def main():
         "shopify_client_id": getpass.getpass("Shopify app Client ID: ").strip(),
         "shopify_client_secret": getpass.getpass("Shopify app Client secret: ").strip(),
         "cj_api_key": getpass.getpass("CJ API key: ").strip(),
+        "meta_access_token": getpass.getpass("Meta Ad Library access token (optional): ").strip(),
+        "meta_ads_token": getpass.getpass("Meta Marketing API token (optional, paid tests stay off): ").strip(),
     }
     if not any(updates.values()):
         print("Nothing entered; nothing changed.")

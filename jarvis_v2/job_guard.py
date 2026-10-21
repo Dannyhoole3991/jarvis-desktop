@@ -39,6 +39,8 @@ SHELL_RULES = [
     (r"\bgit\b(?!\s+(status|log|diff|show|ls-files|rev-parse|blame)\b)", "Jobs may only look at git (status, log, diff, show), never change it."),
     (r"\b(curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|httpx|aiohttp|http\.client|urllib|requests\.|socket\.|ftp)\b",
      "Network calls from the shell aren't allowed: use the browser toolkit or WebFetch."),
+    (r"\b(ssh|scp|sftp|plink|putty|rsync|cloudflared|tailscale)\b",
+     "Jobs can't reach Danny's server or other machines: that's for Jarvis's main brain, not a job."),
     (r"9333|playwright|connect_over_cdp|jarvis_browser|msedge|chrome(\.exe)?\b|firefox|start-process|\bstart\s+\S*https?:|"
      r"explorer(\.exe)?\s+\S*https?:|webbrowser|selenium|pyautogui|pywinauto|sendkeys",
      "Browsers and the screen are only driven through the job's browser toolkit."),

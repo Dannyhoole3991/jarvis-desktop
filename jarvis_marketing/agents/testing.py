@@ -128,6 +128,88 @@ def design(ctx, inp):
     return {"experiments": made, "notes": notes}
 
 
+# ------------------------------------------------------------------ paid (Facebook / Instagram), PREPARED only
+PAID_IN = {"candidate_ids?": [int]}
+PAID_OUT = {"prepared": [{"experiment_id": int, "candidate_id": int, "ready": bool, "problems": [str]}], "notes": [str]}
+PAID_OFF = ("Launching is disabled in code (paid ads are off). To run it, Danny must authorise this campaign and its "
+            "budget: switch paid ads on in jarvis_marketing/controls.py, set spend caps, and approve the campaign.")
+
+
+def paid_link(destination, experiment_id, creative_id):
+    q = urllib.parse.urlencode({"utm_source": "meta", "utm_medium": "paid", "utm_campaign": f"exp-{experiment_id}",
+                                "utm_content": f"creative-{creative_id}"})
+    return f"{destination}{'&' if '?' in destination else '?'}{q}"
+
+
+def paid_plan(ctx, inp):
+    """A complete, PAUSED Facebook/Instagram test plan per product: nothing is sent to Meta."""
+    ctx.external("prepare_paid")
+    pt, made, notes = ctx.business["paid_test"], [], []
+    ids = inp.get("candidate_ids")
+    for a in ctx.store.sql("SELECT * FROM assessments WHERE business_id=? AND id IN (SELECT MAX(id) FROM assessments "
+                           "WHERE business_id=? GROUP BY candidate_id)", (ctx.business_id, ctx.business_id)):
+        ctx.check()
+        if ids and a["candidate_id"] not in ids:
+            continue
+        cand = ctx.store.get("candidates", a["candidate_id"])
+        top = a["data"]["test_first"][: pt["max_variants"]]
+        if len(top) < 2:
+            notes.append(f"{cand['title']}: fewer than two passed creatives, nothing to compare")
+            continue
+        key = "paid:" + ",".join(map(str, sorted(top)))
+        if ctx.store.one("experiments", idem_key=key):
+            continue
+        listing = cand["data"].get("listing") or {}
+        page = None
+        if listing.get("handle"):
+            page, _ = ctx.adapters.shop.product_page(listing["handle"])
+        live = bool(page and page.get("available") and page.get("url") == listing.get("url"))
+        econ = (cand["data"].get("card") or {}).get("economics") or {}
+        eid = ctx.store.insert("experiments", business_id=ctx.business_id, candidate_id=cand["id"], kind="paid_meta",
+                               status="preparing", idem_key=key, data_json={}, created_at=ctx.now(), simulated=ctx.simulated)
+        ads = []
+        for cid in top:
+            c = ctx.store.get("creatives", cid)
+            b = ctx.store.get("briefs", c["brief_id"])
+            ads.append({"creative_id": cid, "concept": b["concept"], "video_file": (c["files"] or {}).get("video"),
+                        "primary_text": b["data"]["caption"], "headline": cand["title"][:40], "cta_button": "SHOP_NOW",
+                        "link": paid_link(listing.get("url") or "", eid, cid), "format": "9:16 video"})
+        n = len(ads)
+        budget = {"money": round(pt["daily_per_ad_set"] * pt["days"] * n, 2), "daily_per_ad_set": pt["daily_per_ad_set"],
+                  "days": pt["days"], "currency": ctx.business["currency"], "status": "PROPOSED (not authorised)",
+                  "note": "Proposed only. Nothing can be spent: paid ads are off in code."}
+        plan = {"platform": "Meta (Facebook + Instagram)", "objective": "OUTCOME_SALES", "status_on_create": "PAUSED",
+                "hypothesis": f"For {cand['title']}, the top-ranked concepts ({', '.join(x['concept'] for x in ads)}) differ in cost per purchase.",
+                "variants": [{"creative_id": x["creative_id"], "concept": x["concept"]} for x in ads],
+                "ad_sets": [{"name": f"{x['concept']} (creative {x['creative_id']})", "daily_budget": pt["daily_per_ad_set"],
+                             "audience": pt["audience"], "placements": pt["placements"], "optimisation": pt["optimisation"]} for x in ads],
+                "ads": ads, "audience": f"{', '.join(pt['audience']['countries'])}, ages {pt['audience']['age_min']}-{pt['audience']['age_max']}, "
+                                        f"{pt['audience']['targeting']}", "audiences_approved": False,
+                "placement": ", ".join(pt["placements"]), "budget": budget, "duration_days": pt["days"],
+                "destination": listing.get("url"), "destination_live": live,
+                "tracking": {"meta_pixel_id": ctx.business["meta"].get("pixel_id") or None, "utm": "utm_source=meta, utm_content=creative-<id>",
+                             "record_of_truth": "Shopify orders by UTM; Meta's attributed purchases are kept separately"},
+                "success_criteria": {"primary": "lowest cost per purchase below the break-even CPA, with contribution profit after ad spend > 0",
+                                     "break_even_cpa": econ.get("break_even_cac"), "min_purchases_per_variant": 5,
+                                     "never": "views, clicks or CTR alone decide nothing"},
+                "stopping_rules": [f"stop a variant once its spend reaches {econ.get('break_even_cac')} x 2 with no purchase"
+                                   if econ.get("break_even_cac") else "stop a variant at 2x break-even CPA with no purchase",
+                                   "stop everything on emergency stop or at the spend cap", f"end after {pt['days']} days",
+                                   "no verdict on stale or missing data"],
+                "attribution": {"model": pt["attribution"], "window_days": 7, "data_delay_hours": ctx.testing["data_delay_hours"],
+                                "limitation": "Meta's attributed purchases include view-through and modelled conversions; "
+                                              "Shopify UTM orders are counted separately and are the record of truth."},
+                "unit_contribution_estimate": econ.get("contribution"), "price": econ.get("price"),
+                "break_even_cac": econ.get("break_even_cac"), "assessment_id": a["id"], "launch": PAID_OFF}
+        problems = ctx.adapters.paid.validate(plan) if hasattr(ctx.adapters.paid, "validate") else ["No paid-ads adapter."]
+        plan["problems"] = problems
+        ctx.store.update("experiments", eid, data_json=plan, status="prepared")
+        made.append({"experiment_id": eid, "candidate_id": cand["id"], "ready": not problems, "problems": problems})
+    if not made and not notes:
+        notes.append("No ranked creatives yet (they need QA and the pre-launch ranking first).")
+    return {"prepared": made, "notes": notes}
+
+
 # ------------------------------------------------------------------ publish
 def _post_view(ctx, post):
     creative = ctx.store.get("creatives", post["creative_id"])

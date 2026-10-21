@@ -57,6 +57,28 @@ class CJSupplier(Adapter):
         opts = self.client.uk_shipping(vid)
         return opts, self.record(f"{SC.CJ_API}/logistic/freightCalculate?vid={vid}&to=GB", opts)
 
+    def details_by_spu(self, spu):
+        from jarvis_store import config as SC
+        d = dict(self.client.details_by_spu(spu), stock=None)
+        return d, self.record(f"{SC.CJ_API}/product/query?productSku={spu}", d)
+
+    def stock(self, vid):
+        from jarvis_store import config as SC
+        d = {"vid": vid, "stock": self.client.stock(vid)}
+        return d, self.record(f"{SC.CJ_API}/product/stock/queryByVid?vid={vid}", d)
+
+    def listing_plan(self, pid):
+        """jarvis_store's own product check (photos, UK delivery, price caps, honest copy, real-cost pricing),
+        reused as the listing. Raises with the reason if the product fails it."""
+        from jarvis_store import config as SC, pipeline
+        p = pipeline.evaluate(self.client, pid)
+        plan = {"supplier_product_id": pid, "spu": p["cj"]["spu"], "title": p["title"], "product_type": "Home & Living",
+                "description_html": p["description_html"], "tags": [f"cj:{p['cj']['spu']}"], "options": p["options"],
+                "variants": [{"options": v["options"], "price": v["price_gbp"], "sku": v["sku"], "vid": v["vid"], "cost_usd": v["price_usd"]}
+                             for v in p["variants"]],
+                "images": p["images"], "shipping": p["shipping"], "facts": {}}
+        return plan, self.record(f"{SC.CJ_API}/product/query?pid={pid}#listing-plan", plan)
+
 
 def _spelling(text):
     """US/UK spellings and plurals compare equal ("organizers" ~ "organiser")."""
@@ -296,8 +318,13 @@ class TikTokBrowserPublisher(Adapter):
 
 
 def bundle(business, recorder):
+    from .adlibrary import MetaAdLibrary
+    from .commerce import MetaMarketing, ShopifyAdmin
     orders = ShopifyApiOrders(recorder) if business.get("orders_source") == "api" else BrowserOrders(recorder)
+    meta = business.get("meta") or {}
     return {"supplier": CJSupplier(recorder),
+            "ad_library": MetaAdLibrary(recorder, countries=meta.get("ad_library_countries") or ["IE"]),
+            "shop_admin": ShopifyAdmin(recorder), "paid": MetaMarketing(meta, recorder),
             "competitors": ShopifyPublicCompetitors(business.get("competitor_stores") or [], recorder),
             "trends": Unsupported("trends", "Google Trends' official API is an invite-only alpha; no access is configured.", recorder),
             "shortform": Unsupported("shortform", "TikTok's Research API is for non-profit academic researchers only.", recorder),

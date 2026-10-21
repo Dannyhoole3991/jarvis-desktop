@@ -11,8 +11,13 @@ so evidence can be traced back to it.
     orders       our real orders + attribution    live: Shopify API (read_orders) or Jarvis's browser read
     analytics    per-post platform numbers        live: TikTok Studio (jarvis_v2.advertising)
     publisher    organic posts                    live: TikTok via Jarvis's browser (jarvis_v2.posting)
-    paid         paid campaigns                   ALWAYS REFUSES in this milestone
+    paid         paid campaigns                   live: Meta Marketing API (validate + read insights only;
+                                                  launch/set_budget ALWAYS REFUSE)    mock: MockMetaMarketing
     video        renders                          live: jarvis_video.py slideshow     mock: MockVideo
+    ad_library   existing adverts                 live: Meta Ad Library API           mock: MockAdLibrary
+    ad_imports   adverts Danny saved by hand      live and mock: ManualAdImports (TikTok Creative Center has no API)
+    tiktok_ads   TikTok Commercial Content API    UNAVAILABLE (needs TikTok's approval)
+    shop_admin   Shopify drafts + approved publish live: jarvis_store guarded client  mock: MockShopAdmin
 
 Mock adapters set simulated=True; everything they produce is stored and shown as SIMULATED.
 """
@@ -79,6 +84,24 @@ def build(business, store, business_id, world=None, overrides=None):
     else:
         from . import live
         adapters = live.bundle(business, recorder)
+    import os
+    from jarvis_marketing import config
+    from .adlibrary import ManualAdImports
+    from .mock import Unsupported
+    from .video import scene_analysis
+    adapters.setdefault("ad_imports", ManualAdImports(os.path.join(config.data_dir(business["profile"]), "ad_imports.json"),
+                                                      recorder, analyse_video=scene_analysis))
+    adapters.setdefault("tiktok_ads", Unsupported("tiktok_commercial_content",
+                                                  "TikTok's Commercial Content API needs TikTok's approval (not granted). "
+                                                  "Creative Center Top Ads have no official API: add ads you see there by hand.", recorder))
+    adapters.setdefault("merchant", Unsupported("google_merchant_center",
+                                                "Merchant Center isn't connected: needs a Google Cloud OAuth client with the Merchant API "
+                                                "(Danny signs in once). Products reach Google through Shopify's Google & YouTube channel.", recorder))
+    adapters.setdefault("search_console", Unsupported("google_search_console",
+                                                      "Search Console isn't connected: needs the same OAuth sign-in with the Search Console API.", recorder))
+    adapters.setdefault("google_shopping", Unsupported("google_shopping_results",
+                                                       "Google has no official API for Shopping search results; competitor prices come from "
+                                                       "competitor stores Danny lists.", recorder))
     adapters.update(overrides or {})
     adapters.setdefault("paid", PaidAds(recorder))
     return Bundle(**adapters)

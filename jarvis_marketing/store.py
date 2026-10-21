@@ -115,11 +115,45 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY, business_id INTEGER, ts REAL NOT NULL, level TEXT NOT NULL, text TEXT NOT NULL,
     seen INTEGER NOT NULL DEFAULT 0);
+
+CREATE TABLE IF NOT EXISTS source_runs (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, source TEXT NOT NULL, call TEXT NOT NULL, ok INTEGER NOT NULL,
+    items INTEGER, error TEXT, started_at REAL NOT NULL, finished_at REAL NOT NULL, simulated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS source_runs_source ON source_runs (business_id, source, started_at);
+
+CREATE TABLE IF NOT EXISTS ads (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+    keyword TEXT, advertiser TEXT, data_json TEXT NOT NULL, fetch_id INTEGER, first_seen REAL NOT NULL,
+    last_seen REAL NOT NULL, simulated INTEGER NOT NULL, UNIQUE (business_id, source, external_id));
+
+CREATE TABLE IF NOT EXISTS ad_analyses (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, ad_id INTEGER NOT NULL, keyword TEXT, data_json TEXT NOT NULL,
+    created_at REAL NOT NULL, model_version TEXT NOT NULL, simulated INTEGER NOT NULL, UNIQUE (ad_id, model_version));
+
+CREATE TABLE IF NOT EXISTS listings (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, candidate_id INTEGER UNIQUE NOT NULL, status TEXT NOT NULL,
+    data_json TEXT NOT NULL, checks_json TEXT, product_ref TEXT, handle TEXT, url TEXT, approval_id INTEGER,
+    content_hash TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS catalog (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, key TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL,
+    status TEXT NOT NULL, data_json TEXT NOT NULL, verified_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+    simulated INTEGER NOT NULL, UNIQUE (business_id, key));
+
+CREATE TABLE IF NOT EXISTS channel_listings (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, product_id INTEGER NOT NULL, platform TEXT NOT NULL,
+    readiness TEXT NOT NULL, score REAL, stage TEXT NOT NULL, checks_json TEXT, fixes_json TEXT, escalations_json TEXT,
+    payload_json TEXT, economics_json TEXT, statuses_json TEXT, recommended INTEGER NOT NULL DEFAULT 0, reasons_json TEXT,
+    approval_id INTEGER, external_ref TEXT, checked_at REAL NOT NULL, simulated INTEGER NOT NULL, UNIQUE (product_id, platform));
+
+CREATE TABLE IF NOT EXISTS assessments (
+    id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, candidate_id INTEGER NOT NULL, data_json TEXT NOT NULL,
+    label TEXT NOT NULL, created_at REAL NOT NULL, model_version TEXT NOT NULL, simulated INTEGER NOT NULL);
 """
 
 TABLES = {"businesses", "controls", "audit", "cycles", "tasks", "fetches", "evidence", "opportunities", "candidates",
           "briefs", "creatives", "qa_reviews", "experiments", "posts", "approvals", "metrics", "orders", "lessons",
-          "reports", "notifications"}
+          "reports", "notifications", "source_runs", "ads", "ad_analyses", "listings", "assessments", "catalog", "channel_listings"}
 
 # Anything that looks like a credential is cut out of audit details and logs.
 _SECRET_KEYS = re.compile(r"(?i)(secret|token|password|api[_-]?key|authorization|cookie|cvv|card)")

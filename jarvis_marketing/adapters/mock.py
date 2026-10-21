@@ -130,7 +130,8 @@ class MockSupplier(Adapter):
         p = self.world.product(pid)
         d = {"pid": pid, "name": p["name"], "images": p["images"], "material": p["material"], "packing_list": p["packing_list"],
              "category": p["keyword"], "stock": p["stock"], "options": [{"name": "Colour", "values": p["colours"]}],
-             "variants": [{"vid": f"{pid}-{c}", "name": c, "price_usd": p["price_usd"]} for c in p["colours"]],
+             "variants": [{"vid": f"{pid}-{c}", "sku": f"{pid}-{c}", "name": c, "price_usd": p["price_usd"]} for c in p["colours"]],
+             "spu": pid,
              "description": f"Material: {p['material']}. Packing list: {p['packing_list']}."}
         return d, self.record(f"mock://supplier/product/{pid}", d)
 
@@ -138,6 +139,31 @@ class MockSupplier(Adapter):
         p = self.world.product(vid.rsplit("-", 1)[0])
         opts = [{"name": "Mock Packet UK", "usd": p["shipping_usd"], "min_days": p["delivery_days"][0], "max_days": p["delivery_days"][1]}]
         return opts, self.record(f"mock://supplier/shipping/{vid}", opts)
+
+    def details_by_spu(self, spu):
+        return self.details(spu)            # in the simulation a product's code is its id
+
+    def stock(self, vid):
+        p = self.world.product(vid.rsplit("-", 1)[0])
+        d = {"vid": vid, "stock": p["stock"]}
+        return d, self.record(f"mock://supplier/stock/{vid}", d)
+
+    def listing_plan(self, pid):
+        """What a store listing would hold, priced the way jarvis_store prices (SIMULATED)."""
+        p = self.world.product(pid)
+        price = math.floor(p["price_usd"] * 0.75 + p["shipping_usd"] * 0.75 + 7) + 0.99
+        multi = len(p["colours"]) > 1
+        options = [{"name": "Colour", "values": p["colours"]}] if multi else []
+        variants = [{"options": {"Colour": c} if multi else {}, "price": price, "sku": f"{pid}-{c}", "vid": f"{pid}-{c}",
+                     "cost_usd": p["price_usd"]} for c in (p["colours"] if multi else p["colours"][:1])]
+        d0, d1 = p["delivery_days"]
+        plan = {"supplier_product_id": pid, "spu": pid, "title": p["name"], "product_type": "Home & Living",
+                "description_html": f"<p>The {p['name']}.</p><ul><li>Material: {p['material']}</li><li>In the box: {p['packing_list']}</li>"
+                                    f"<li>UK delivery: usually {d0}-{d1} working days</li></ul>",
+                "tags": [f"cj:{pid}"], "options": options, "variants": variants, "images": p["images"][:8],
+                "shipping": {"name": "Mock Packet UK", "usd": p["shipping_usd"], "min_days": d0, "max_days": d1},
+                "facts": {"material": p["material"], "packing_list": p["packing_list"]}}
+        return plan, self.record(f"mock://supplier/listing-plan/{pid}", plan)
 
 
 class MockCompetitors(Adapter):
@@ -205,6 +231,7 @@ class MockShop(Adapter):
     def __init__(self, world, recorder=None):
         super().__init__(recorder)
         self.world = world
+        self.extra = {}                # products published through MockShopAdmin, by handle
 
     def _listing(self, p):
         price = math.floor(p["price_usd"] * 0.75 + p["shipping_usd"] * 0.75 + 7) + 0.99
@@ -212,7 +239,7 @@ class MockShop(Adapter):
                 "url": f"https://collectivefinds.co.uk/products/{_slug(p['name'])}", "supplier_product_id": p["id"]}
 
     def products(self):
-        items = [self._listing(p) for kw in KEYWORDS for p in self.world.products_for(kw) if p["in_store"]]
+        items = [self._listing(p) for kw in KEYWORDS for p in self.world.products_for(kw) if p["in_store"]] + list(self.extra.values())
         return items, self.record("mock://store/products.json", items)
 
     def product_page(self, handle):
@@ -288,9 +315,13 @@ class Unsupported(Adapter):
 
 
 def bundle(world, recorder):
+    from .adlibrary import MockAdLibrary
+    from .commerce import MockMetaMarketing, MockShopAdmin
     from .video import MockVideo
+    shop = MockShop(world, recorder)
     return {"supplier": MockSupplier(world, recorder), "competitors": MockCompetitors(world, recorder),
             "trends": MockTrends(world, recorder), "shortform": MockShortForm(world, recorder),
-            "reviews": MockReviews(world, recorder), "shop": MockShop(world, recorder),
+            "reviews": MockReviews(world, recorder), "shop": shop, "shop_admin": MockShopAdmin(shop, recorder),
             "orders": MockOrders(world, recorder), "analytics": MockAnalytics(world, recorder),
-            "publisher": MockPublisher(recorder), "video": MockVideo(recorder), "world": world}
+            "publisher": MockPublisher(recorder), "video": MockVideo(recorder), "ad_library": MockAdLibrary(world, recorder),
+            "paid": MockMetaMarketing(recorder=recorder), "world": world}

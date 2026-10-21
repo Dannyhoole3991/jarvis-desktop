@@ -114,8 +114,14 @@ class CJ:
                             "price_usd": price_usd, "image": p.get("bigImage"), "listed": int(p.get("listedNum") or 0)})
         return out
 
+    def details_by_spu(self, spu):
+        """The same as details(), found by CJ product code (the start of our CJ SKUs, e.g. CJJT1538272)."""
+        return self._details(self._get("product/query", {"productSku": spu}) or {}, None)
+
     def details(self, pid):
-        d = self._get("product/query", {"pid": pid}) or {}
+        return self._details(self._get("product/query", {"pid": pid}) or {}, pid)
+
+    def _details(self, d, pid):
         images = d.get("productImageSet") or []
         if isinstance(images, str):
             images = [u for u in images.split(",") if u]
@@ -128,6 +134,21 @@ class CJ:
                 "description": d.get("description") or "", "option_names": d.get("productKeyEn") or "",
                 "images": images, "variants": variants,
                 "category": d.get("categoryName") or "", "material": d.get("materialNameEn") or ""}
+
+    def stock(self, vid):
+        """Units CJ reports in stock for one variant, summed over its warehouses. None if CJ doesn't say."""
+        data = self._get("product/stock/queryByVid", {"vid": vid})
+        rows = data if isinstance(data, list) else (data or {}).get("list") or []
+        found = [r for r in rows if isinstance(r, dict)]
+        if not found:
+            return None
+        total = 0
+        for r in found:
+            n = r.get("totalInventoryNum", r.get("storageNum"))
+            if n is None:
+                return None
+            total += int(n)
+        return total
 
     def uk_shipping(self, vid):
         """Shipping options from China to the UK for one unit: [{name, usd, min_days, max_days}], cheapest first."""

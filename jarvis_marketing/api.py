@@ -16,8 +16,8 @@ import re
 import threading
 import time
 
-from jarvis_marketing import config, controls as C
-from jarvis_marketing.agents import testing
+from jarvis_marketing import config, controls as C, sources
+from jarvis_marketing.agents import adintel, testing
 from jarvis_marketing.director import Busy, Director, Scheduler
 
 
@@ -97,6 +97,14 @@ def overview(dept, slug):
     est_contribution = round(sum((unit.get(s.get("posts", o["post_id"])["experiment_id"]) or 0) for o in attributed), 2)
     pending = [a for a in approvals if a["status"] == "pending"]
     post_by_approval = {p["approval_id"]: p for p in posts if p["approval_id"]}
+    listings = s.find("listings", business_id=bid, order="id DESC", limit=100)
+    listing_by_approval = {l["approval_id"]: l for l in listings if l["approval_id"]}
+    ads = s.find("ads", business_id=bid, order="last_seen DESC", limit=80)
+    analyses = {a["ad_id"]: a["data"] for a in s.find("ad_analyses", business_id=bid, order="id DESC", limit=400)}
+    keywords = sorted({a["keyword"] for a in ads if a["keyword"]})
+    assessments = {}
+    for a in s.find("assessments", business_id=bid, order="id", limit=2000):
+        assessments[a["candidate_id"]] = a                  # the latest per product
     return {
         "business": {k: d.business[k] for k in ("slug", "name", "public_url", "currency", "profile")},
         "simulated": d.adapters.simulated,
@@ -115,7 +123,8 @@ def overview(dept, slug):
         "briefs": [{"id": b["id"], "candidate_id": b["candidate_id"], "concept": b["concept"], "status": b["status"],
                     "label": b["label"], "hook": b["data"]["hook"], "hypothesis": b["data"]["hypothesis"],
                     "scenes": b["data"]["scenes"], "caption": b["data"]["caption"], "destination": b["data"]["destination"],
-                    "test_variable": b["data"]["test_variable"], "duration_s": b["data"]["duration_s"]} for b in briefs],
+                    "test_variable": b["data"]["test_variable"], "duration_s": b["data"]["duration_s"],
+                    "research_note": b["data"].get("research_note"), "informed_by": b["data"].get("informed_by") or []} for b in briefs],
         "creatives": [{"id": c["id"], "brief_id": c["brief_id"], "candidate_id": c["candidate_id"], "status": c["status"],
                        "revision": c["revision"], "provider": c["provider"], "creative_uid": c["creative_uid"],
                        "simulated": bool(c["simulated"]), "has_video": bool((c["files"] or {}).get("video")),
@@ -123,7 +132,16 @@ def overview(dept, slug):
                        "qa": ({"passed": bool(reviews[c["id"]]["passed"]), "overall": reviews[c["id"]]["overall"],
                                "scores": reviews[c["id"]]["scores"], "fixes": reviews[c["id"]]["fixes"],
                                "label": reviews[c["id"]]["label"]} if c["id"] in reviews else None)} for c in creatives],
-        "approvals_pending": [dict(a, post=post_by_approval.get(a["id"])) for a in pending],
+        "approvals_pending": [dict(a, post=post_by_approval.get(a["id"]), listing=_listing_view(listing_by_approval.get(a["id"])))
+                              for a in pending],
+        "sources": sources.coverage(s, bid, d.adapters),
+        "ads": [{"id": a["id"], "source": a["source"], "keyword": a["keyword"], "advertiser": a["advertiser"], "url": a["data"].get("url"),
+                 "text": " ".join(a["data"].get("bodies") or [])[:400], "start": a["data"].get("start"), "stop": a["data"].get("stop"),
+                 "reach": a["data"].get("reach"), "simulated": bool(a["simulated"]), "analysis": analyses.get(a["id"])} for a in ads],
+        "principles": {kw: adintel.principles(s, bid, kw) for kw in keywords},
+        "listings": [_listing_view(l) for l in listings],
+        "assessments": {str(k): v["data"] for k, v in assessments.items()},
+        "channels": channels_view(s, bid, d),
         "approvals_recent": [a for a in approvals if a["status"] != "pending"][:30],
         "posts": posts,
         "experiments": experiments,
@@ -142,6 +160,43 @@ def overview(dept, slug):
         "reconcile_problems": testing.reconcile(s, bid),
         "now": s.clock(),
     }
+
+
+def channels_view(s, bid, d):
+    """The multi-platform overview: platforms (researched facts), products x platforms, Google and sync health."""
+    from jarvis_marketing import platforms as P
+    from jarvis_marketing.agents.channels import google_statuses
+    rows = s.find("channel_listings", business_id=bid, limit=20000)
+    by_product = {}
+    for r in rows:
+        by_product.setdefault(r["product_id"], {})[r["platform"]] = {
+            "readiness": r["readiness"], "score": r["score"], "stage": r["stage"], "recommended": bool(r["recommended"]),
+            "reasons": r["reasons"], "contribution": ((r["economics"] or {}).get("weakest") or {}).get("contribution"),
+            "platform_fees": ((r["economics"] or {}).get("weakest") or {}).get("platform_fees"),
+            "problems": [c["label"] for c in r["checks"] or [] if c["mandatory"] and not c["ok"]], "fixes": len(r["fixes"] or []),
+            "simulated": bool(r["simulated"])}
+    products = [{"id": p["id"], "title": p["title"], "source": p["source"], "status": p["status"], "verified_at": p["verified_at"],
+                 "simulated": bool(p["simulated"]), "platforms": by_product.get(p["id"], {})}
+                for p in s.find("catalog", business_id=bid, order="id", limit=2000)]
+    sync = s.find("reports", business_id=bid, kind="sync", order="id DESC", limit=1)
+    plat = [{"key": k, "name": v["name"], "kind": v["kind"], "dropshipping": v["dropshipping"], "facts": v["dropshipping_facts"],
+             "cj_compatible": v.get("cj_compatible"), "cj_note": v.get("cj_note"), "fees": v["fees"], "integration": v["integration"],
+             "sync": v["sync"], "restrictions": v["restrictions"], "delivery": v.get("delivery")} for k, v in P.PLATFORMS.items()]
+    return {"platforms": plat, "other_uk": P.OTHER_UK, "checked": P.CHECKED, "products": products,
+            "sync": sync[0]["data"] if sync else None, "google": google_statuses(d.adapters),
+            "feed_file": os.path.join(config.data_dir(d.business["profile"]), "google_feed_prepared.tsv")}
+
+
+def _listing_view(l):
+    if not l:
+        return None
+    data = l["data"] or {}
+    return {"id": l["id"], "candidate_id": l["candidate_id"], "status": l["status"], "title": data.get("title"),
+            "prices": sorted({round(float(v["price"]), 2) for v in data.get("variants") or []}), "images": data.get("images") or [],
+            "variants": len(data.get("variants") or []), "shipping": data.get("shipping"), "economics": data.get("economics"),
+            "checks": l["checks"], "admin_url": data.get("admin_url"), "url": l["url"], "error": l["error"],
+            "approval_id": l["approval_id"], "simulated": bool(l["simulated"]), "updated_at": l["updated_at"],
+            "description_html": data.get("description_html")}
 
 
 def describe(dept, slug=None):
@@ -206,6 +261,17 @@ def handle_get(dept, path, query):
             raise ValueError("No such experiment.")
         return {"experiment": e, "posts": d.store.find("posts", experiment_id=e["id"]),
                 "variants": testing.variant_numbers(_ReadCtx(d), e)}
+    if parts[3] == "channels" and len(parts) == 5:
+        p = d.store.get("catalog", int(parts[4]))
+        if not p or p["business_id"] != d.bid:
+            raise ValueError("No such product.")
+        return {"product": p, "listings": d.store.find("channel_listings", product_id=p["id"])}
+    if parts[3] == "ads" and len(parts) == 5:
+        a = d.store.get("ads", int(parts[4]))
+        if not a or a["business_id"] != d.bid:
+            raise ValueError("No such ad.")
+        an = d.store.find("ad_analyses", ad_id=a["id"], order="id DESC", limit=1)
+        return {"ad": a, "analysis": an[0]["data"] if an else None, "evidence": d.store.find("evidence", subject_type="ad", subject_key=str(a["id"]))}
     if parts[3] == "describe":
         return {"text": describe(dept, slug)}
     return None
@@ -249,7 +315,16 @@ def handle_post(dept, path, body, principal=None):
     try:
         m = re.fullmatch(r"approvals/(\d+)/(approve|reject)", "/".join(parts[3:]))
         if m:
-            a, post = d.decide_post(p, int(m.group(1)), m.group(2), str(body.get("note") or ""))
+            a, kind, row = d.decide(p, int(m.group(1)), m.group(2), str(body.get("note") or ""))
+            if kind == "listing":
+                if a["status"] != "approved":
+                    return {"text": "Rejected: the product stays a hidden draft.", "approval": a}
+                if not d.controls.allowed(d.bid, "publish_product"):
+                    return {"text": f"Approved. It will be published in REVIEW mode or above (now {d.controls.mode(d.bid)}). "
+                                    "The approval lasts 24 hours.", "approval": a}
+                dept.run_in_background(slug, f"publishing listing {row['id']}", lambda: d.publish_listing([row["id"]])["output"])
+                return {"text": "Approved: publishing it now, then checking the public page.", "approval": a}
+            post = row
             if a["status"] == "approved" and post:
                 if not d.controls.allowed(d.bid, "publish_organic"):
                     return {"text": f"Approved. It will post once the mode is TEST (now {d.controls.mode(d.bid)}). "
@@ -285,6 +360,20 @@ def handle_post(dept, path, body, principal=None):
             d.store.update("candidates", c["id"], status="rejected", reasons_json=(c["reasons"] or []) + [f"Rejected by Danny: {body.get('note') or 'no reason given'}"])
             d.store.audit(p, "reject_candidate", "ok", subject=f"candidate:{c['id']}", business_id=d.bid)
             return {"text": "Rejected. It won't be shortlisted again unless you change that."}
+        if parts[3:] == ["channels", "run"]:
+            dept.run_in_background(slug, "checking every product on every platform", lambda: d.run_stage("channels")["status"])
+            return {"text": "Checking every product on every platform now (read-only)."}
+        if parts[3:] == ["ads", "import"]:
+            item = d.adapters.ad_imports.add(body, p)
+            d.store.audit(p, "import_ad", "ok", subject=item["url"], business_id=d.bid, source=item["source"])
+            kw = item["keyword"]
+            if kw:
+                dept.run_in_background(slug, f"analysing ads for '{kw}'", lambda: d.run_stage("ads", {"keywords": [kw]})["status"])
+            return {"text": "Saved. " + (f"Analysing the ads for '{kw}' now." if kw else "Give it a keyword to have it analysed."), "ad": item}
+        m = re.fullmatch(r"paid/(\d+)/launch", "/".join(parts[3:]))
+        if m:
+            d.launch_paid(p, int(m.group(1)))
+            return {"text": "Launched."}             # unreachable while paid ads are off in code
         if parts[3] == "notifications" and parts[4:] == ["seen"]:
             with d.store.lock, d.store.conn() as conn:
                 conn.execute("UPDATE notifications SET seen=1 WHERE business_id=?", (d.bid,))

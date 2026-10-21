@@ -241,5 +241,211 @@ Sources: [TikTok Direct Post reference](https://developers.tiktok.com/doc/conten
   - Only you can resume (button or `py -3 -m jarvis_marketing resume`).
 - **Status:** `py -3 -m jarvis_marketing status`, the Marketing tab, or ask Jarvis ("how's marketing going?").
 - **Verify:**
-  - Run the tests: `py -3 -m unittest discover -s jarvis_marketing/tests -t .` (104 tests).
+  - Run the tests: `py -3 -m unittest discover -s jarvis_marketing/tests -t .` (about 5 minutes).
   - The *Activity & audit* tab shows every decision and external action, and a reconciliation check that the dashboard numbers match the records.
+
+## 13. Milestone 6: winning-ad research engine (2026-10-20)
+Built on top of M1-M5; nothing that worked was rebuilt.
+
+**Danny's decisions:**
+- Built locally, not in the cloud.
+- Shopify DRAFT products may be created in REVIEW mode and above.
+- PUBLISHING a product needs Danny's approval of that exact listing.
+- Facebook/Instagram tests may be PREPARED. Launching stays off in code.
+
+### The cycle now
+1. `research`
+2. `ads`: find adverts and reverse-engineer them.
+3. `evaluate`: now includes profit after the planned ad cost.
+4. `list`: fresh supplier check, then a Shopify DRAFT, then read it back, then request approval.
+5. `go_live`: approved listings only; checks the public page.
+6. `brief`: original concepts, ordered by the research.
+7. `produce`
+8. `qa`
+9. `rank`: pre-launch assessment.
+10. `design`: organic test.
+11. `paid_plan`: a PAUSED Facebook/Instagram plan.
+12. `publish`
+13. `collect`
+14. `judge`
+15. `learn`
+
+### Research sources (`jarvis_marketing/sources.py`)
+Every source has its own adapter, access requirement, rate limit and written limits. Every call is logged in `source_runs`, and a failing source never stops the others. The Discovery tab shows coverage and failures.
+
+| Source | Status on Danny's PC (20 Oct) | What it can't show |
+|---|---|---|
+| Meta Ad Library API | Built and tested with a stand-in; **needs Danny's Meta token** | Non-political ads only if they reached the EU (searched via IE); no spend, clicks or sales |
+| TikTok Creative Center Top Ads / Top Products | **No official API.** Danny adds ads he sees (dashboard form: link, hook, text, optional .mp4) | TikTok's CTR/like labels are its own signals |
+| TikTok Commercial Content API | Unavailable: needs TikTok's approval | EU ads only, no performance |
+| CJ supplier (search, details, UK shipping, **stock**) | Live, verified on this PC | "Listed by N stores" is popularity, not sales |
+| Competitor stores (public products.json) | Live once URLs are listed | Prices only |
+| Our store pages and orders | Live | Attribution only via UTM |
+| Google Trends / TikTok Research API / reviews | Unavailable (invite-only / academic-only / none) | |
+
+### Advert reverse-engineering (`agents/adintel.py`)
+Each advert is broken into the same structure:
+- hook and first seconds
+- problem or desire
+- first shot and product reveal
+- scenes and pacing
+- demonstration
+- benefits and objections answered
+- emotional triggers
+- text overlays, captions and audio
+- editing style
+- offer, price presentation and call to action
+- customer and angle
+- performance evidence and its limits
+- what's worth testing
+
+Each element is marked OBSERVED (from the ad's text or dates, or measured from a video file with ffmpeg scene detection) or NOT OBSERVABLE. "Why it might work" is always a hypothesis.
+
+`principles()` summarises a keyword's adverts. Ads that kept running 30+ days count double, but run length is never treated as profit. Social-proof hooks are never turned into our concepts, because we have no reviews to cite.
+
+`too_close()` drops any line of ours that copies an advert. Music from other adverts is never used.
+
+### Listings (`agents/listing.py`)
+- Each product is re-read at CJ: identity, variants, UK shipping and stock.
+- The listing is built by jarvis_store's own rules (`pipeline.evaluate`).
+- Every number in the copy must appear in the supplier's data.
+- Profit is worked out after a planned ad cost per order (`economics.planned_cpa`, an ESTIMATE, default £3). Below `min_profit_after_ads` (default £1), the product is rejected with the reason.
+- The DRAFT is created, read back from Shopify and compared field by field.
+- Approval is bound to that exact content: title, prices, SKUs, photos and description hash.
+- If the draft changes after approval, publishing is refused.
+- Publishing uses `Shopify.publish_jarvis_draft()`. It only works on Jarvis's own DRAFTs and also tries to add the Online Store channel.
+- A product only counts as live when its public page loads, is in stock and shows the planned price. No advert may point anywhere else.
+
+### Creatives and pre-launch ranking
+- **New concepts:** curiosity open, benefit-led, and objection/comparison (answered with a real material fact).
+- **Concept order:** our own verified lessons first, then the research principles.
+- **Brief records:** each brief records which principles and example ads informed it.
+- **Ranking (`agents/assessment.py`):** scores eight criteria (hook clarity, visual clarity, demonstration, pacing compared with measured adverts, offer, CTA, audience suitability, landing-page consistency). Every score is labelled PREDICTION.
+- **No prediction service:** every ranking states that no platform gives a pre-launch prediction through our APIs. No CTR/CVR/ROAS forecast is ever invented.
+
+### Facebook/Instagram tests (`testing.paid_plan`, `adapters/commerce.py`)
+Each prepared plan contains:
+- the objective: sales, created PAUSED;
+- one ad set per creative, all on equal budgets (proposed: £5/day for 4 days);
+- the audience: GB, ages 18-65, broad;
+- Reels/Feed/Stories placements;
+- a link to the verified product page, with a UTM per creative;
+- the pixel;
+- the success criteria: cost per purchase under the break-even CPA, and profit after spend;
+- the stopping rules and attribution.
+
+`check_plan()` lists what's missing.
+
+Launching is refused in three places:
+- `PAID_ADS_ENABLED = False`;
+- spend caps can't exceed £0;
+- `launch()` always refuses.
+
+Every launch attempt is audited.
+
+### End-to-end acceptance (20 Oct 2026, one real product)
+| # | Step | Result |
+|---|---|---|
+| 1 | Find the product through research | **Real.** CJ, keywords "cable organizer" and "sink caddy". 8 products were researched, 3 shortlisted, and the rest rejected with reasons. |
+| 2 | Gather demand evidence and inspect adverts | **Real, partly by hand.** The Meta API needs Danny's token, and TikTok Creative Center shows only 3 unrelated ads when signed out. Two real "cable organiser" adverts were copied from Meta's public Ad Library page through the import path (Orbitkey, running since 14 Aug; Sundaiz, since 9 Oct). |
+| 3 | Explain the creative principles | **Real.** Both were analysed as benefit-led hooks, with their benefits and relief triggers extracted. Principle: "benefit openings" (2 ads, 1 running 30+ days). Visual elements were marked not observable: no video file. |
+| 4 | Verify supplier and calculate profit | **Real.** The CJ product exists, stock is 10k-35k per variant, and delivery is YunExpress 4-7 days. The weakest variant (£13.49) makes about £4.83 per order, or about £1.83 after the planned £3 ad cost (both estimates). |
+| 5 | Prepare and validate a Shopify draft | **Real.** DRAFT "Silicone USB Cable Winder Desktop Organizer Management": 10 variants, £10.99-£15.49, 8 photos. Read back from Shopify: every field matches. |
+| 6-7 | Generate and rank original adverts | Simulated end to end in tests. For the real product they run on the next cycle **after Danny publishes it** (creatives may only point at a live page). |
+| 8 | Publish after approval | **Waiting for Danny** (Marketing, then Approvals). |
+| 9 | Prepare a Facebook/Instagram test | Simulated in tests. For the real product it happens after step 7. It also needs the Meta ad account, page and pixel ids. |
+| 10 | Launch only after authorisation | **Disabled in code.** It refuses and is audited (tested). |
+| 11 | Real performance and profit | Not yet. This needs live posts or ads. The collection code is tested with stand-ins. |
+| 12 | Feed results back | Simulated in tests (lessons, priorities). |
+
+### What Danny must do for the live parts
+1. **Meta Ad Library (ad research):**
+   1. Go to developers.facebook.com. Create an app (type "Business").
+   2. Confirm your identity at facebook.com/ID.
+   3. In Graph API Explorer, make a user token and exchange it for a long-lived one.
+   4. Run `py -3 -m jarvis_store.setup_credentials` and paste it at "Meta Ad Library access token". Press Enter to skip the other fields.
+2. **TikTok Creative Center:** when you see a good ad there, open Marketing → Ad research → *Add an advert you've seen*. Paste its link and opening line. A saved .mp4 lets Jarvis measure its pacing.
+3. **Publishing a product:** Marketing → Approvals. Check the photos, prices, profit and checks, then press *Approve: publish to the store*.
+   - If the public page check fails, open the product in Shopify and tick the Online Store sales channel.
+4. **Before any paid test (later, your decision):**
+   - Put your Meta ad account id, Facebook page id and pixel id in `businesses.json` (tell Claude).
+   - Install the Facebook & Instagram app on Shopify for the pixel.
+   - Approve the audience.
+   - Then decide the budget and ask for paid ads to be switched on. That is a reviewed code change.
+
+## 14. Milestone 7: Google and multi-platform listings (2026-10-20)
+Built on M1-M6 locally. Nothing is registered, submitted or published on any new platform. Readiness and permission to publish stay separate.
+
+### What was built
+| Part | File |
+|---|---|
+| Platform knowledge base: dropshipping rules, fees, integrations, sync and delivery expectations, each fact with its source and status (verified / unconfirmed / unknown) | `jarvis_marketing/platforms.py` |
+| Central product record: one verified record per product. It is built from live Shopify products (read-only) and Jarvis's drafts, and linked to CJ by the product code in each SKU. Supplier, stock and shipping are re-read when over 3 days old, about 10 products per run because CJ allows 1 request a second. | `jarvis_marketing/catalog.py`, table `catalog` |
+| Readiness per product × platform: platform payload, safe auto-fixes (each recorded), mandatory checks, READY / NEEDS_FIXES / REJECTED, profit after that platform's fees, recommendation with reasons | `jarvis_marketing/readiness.py`, table `channel_listings` |
+| Google: Merchant Center feed rows built to Google's product data spec and validated. The prepared feed for READY products is written to `data/<profile>/google_feed_prepared.tsv` for review, never submitted. Merchant Center, Search Console and Shopping results show as unavailable until connected. | `readiness.py`, `adapters/__init__.py`, `sources.py` |
+| Safeguards: oversell risk, price below cost, duplicate products/SKUs, unmapped variants, stale supplier data, platforms without sync. `route_order()` holds any order that can't be fulfilled safely; Jarvis never places supplier orders. | `jarvis_marketing/sync.py` |
+| The `channels` stage in the cycle, plus a "Channels" dashboard tab (matrix, details, fixes, safeguards, Google statuses, platform research) | `agents/channels.py`, `api.py`, `ui/marketing.html` |
+| `CHANNEL_PUBLISH_ENABLED = False`: publishing to any new platform is off in code even with an approval | `controls.py` |
+
+### Readiness rules
+- **Mandatory checks:**
+  - eligibility and dropshipping policy;
+  - product policy (own-store words, plus stricter marketplace words);
+  - electrical safety documents (marketplaces);
+  - supplier verified within 3 days;
+  - every variant mapped to a CJ variant;
+  - supplier stock;
+  - profit after the platform's fees at least the business minimum (£4);
+  - listing data (needs a live page link);
+  - barcodes (Amazon, OnBuy);
+  - brand (Google);
+  - images;
+  - stock/price sync;
+  - orders and tracking;
+  - delivery promise against platform expectations;
+  - evidence of demand.
+- **REJECTED:** the platform forbids the model (Etsy) or the price makes a loss.
+- **NEEDS_FIXES:** any other mandatory check fails, whatever the score.
+- **Safe fixes (always recorded):**
+  - remove promotional words from titles;
+  - shorten over-long titles at a word boundary;
+  - convert HTML to plain text;
+  - drop non-https or excess images;
+  - set `identifier_exists = no` when there's no barcode;
+  - derive availability from supplier stock.
+
+### Platforms (researched 2026-10-20)
+| Platform | Verdict now | Why |
+|---|---|---|
+| Shopify (own store) | Live | Already connected |
+| Google free listings | Strong fit; **needs your brand decision and the Google & YouTube channel** | No fee; syncs through Shopify; field limits verified on Google's spec page |
+| Facebook & Instagram Shops | Strong fit; needs the Shopify channel | UK uses website checkout (unconfirmed), so no selling fee |
+| Pinterest | Good fit; needs the Shopify app | Product Pins link to our site (unconfirmed for the UK) |
+| eBay UK | Possible later | Dropshipping from a *wholesale supplier* allowed, from another retailer forbidden (**verified**). About 1.9-2.4 lower profit per order from fees. Needs eBay account + integration. |
+| Amazon UK | Not now | Seller-of-record and packaging rules (unconfirmed). Needs GTINs or an exemption, £25/month, fast delivery. Delivery metrics are risky with CJ. |
+| TikTok Shop UK | Not now | UK dropshipping rules unclear; delivery deadlines likely too short for CJ (unconfirmed) |
+| OnBuy | Unknown | No dropshipping policy found |
+| Etsy | **Rejected** | Only own-made/designed, vintage or craft supplies (secondary sources; Etsy's pages refused automated reading) |
+
+### Live result (20 Oct 2026, 43 store products)
+- **All 43 products are linked to their CJ product, with every variant mapped.** This took 6 passes at about 10 products a pass.
+- **READY for Shopify, Meta and Pinterest:** 25 products.
+- **Google:** Danny decided the brand is **Collective** (`"brand": "Collective"` in businesses.json). After that, 25 products are READY for Google and the prepared feed has 67 variant rows with no validation problems. The other 18 are held by profit, demand evidence, policy wording or stock.
+- **Below the £4 minimum on our own store:** 7 products. These are estimates at live prices after CJ's cheapest UK shipping. Price changes are Danny's decision.
+  - Flameless LED Taper Candles: £0.80/order
+  - Pinecone Wreath: £1.35
+  - Acacia Chopping Board: £3.24
+  - Motion Sensor Light: £3.47
+  - Oil Sprayer: £3.76
+  - Bauble Set: £3.97
+  - LED Message Board: £3.99
+- **Marketplaces:** none recommended yet. eBay/Amazon fees, unconfirmed dropshipping conditions, no integration and (for Amazon/OnBuy) no barcodes. Some products are REJECTED there because the fees make them loss-making.
+- **Safeguards:** no oversell, duplicate or SKU-mapping problems found.
+### What Danny must do (in order of value)
+1. **Brand for Google:** decide whether these products are sold as your own brand ("Collective"). If yes, tell Claude and it sets `"brand": "Collective"` in `businesses.json`. If not, Google listings stay NEEDS_FIXES.
+2. **Install the Google & YouTube app in Shopify** and link or create a Merchant Center account (UK, GBP). This is the free-listings route.
+3. **Install the Facebook & Instagram and Pinterest apps in Shopify** if you want those catalogues.
+4. **Optional:**
+   - Add the `read_publications` scope to the Jarvis Shopify app so Jarvis can see which channels are installed.
+   - For Jarvis to read Google approval and indexing statuses, a Google Cloud OAuth client (Merchant API + Search Console API). Claude can walk you through it.
+5. **Marketplaces (eBay first, if wanted):** open a business seller account yourself and keep CJ's supplier agreement on file. A connected integration and a reviewed code change are needed before Jarvis lists anything there.

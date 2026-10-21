@@ -55,7 +55,7 @@ def needs_you():
         for b in out.get("businesses") or []:
             if b.get("pending"):
                 sim = " (SIMULATED test data)" if b.get("profile") == "mock" else ""
-                parts.append(f"Marketing posts waiting for your approval{sim}, in the Marketing tab:\n"
+                parts.append(f"Marketing items (posts or products to publish) waiting for your approval{sim}, in the Marketing tab:\n"
                              + "\n".join(f"- {p}" for p in b["pending"][:10]))
     except Exception:
         pass

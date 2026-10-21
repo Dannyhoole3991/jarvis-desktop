@@ -20,7 +20,8 @@ from ctypes import wintypes
 from . import config
 
 DEFAULT_PATH = os.path.join(os.path.expanduser("~"), ".jarvis_store", "credentials.bin")
-FIELDS = ("shopify_client_id", "shopify_client_secret", "shopify_token", "cj_api_key")
+FIELDS = ("shopify_client_id", "shopify_client_secret", "shopify_token", "cj_api_key",
+          "meta_access_token", "meta_ads_token")      # Meta Ad Library (research) / Marketing API (paid tests, off)
 
 
 class SecretsError(Exception):

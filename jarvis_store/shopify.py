@@ -8,8 +8,13 @@ Reads are unrestricted. Writes are limited, in code, to:
   productUpdate              -- only on a DRAFT product tagged "jarvis", and may
                                 never change its status
 Any other mutation (delete, publish, theme, menu, settings, orders, ...) is
-refused before a request is sent. Nothing in this module can publish a product
-or alter anything customers see, so it cannot take the live site down.
+refused before a request is sent.
+
+One exception, kept separate from the guarded writes: publish_jarvis_draft()
+sets one of Jarvis's own DRAFT products to ACTIVE. Only the marketing department
+calls it, and only after Danny approved that exact listing in the dashboard
+(jarvis_marketing.controls consumes the approval first). It can never touch
+Danny's products or anything already live.
 """
 
 import json
@@ -185,6 +190,47 @@ class Shopify:
 
     def existing_titles(self):
         return [p["title"] for p in self.list_products(first=100)]
+
+    def product_snapshot(self, product_id):
+        """What Shopify actually holds for one product (to check a draft against what was meant)."""
+        data = self.query("""query($id: ID!) { product(id: $id) { id title handle status tags descriptionHtml onlineStoreUrl
+                               variants(first: 50) { nodes { price sku title } } media(first: 50) { nodes { id } } } }""",
+                          {"id": product_id})
+        p = data.get("product")
+        if not p:
+            return None
+        return {"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "tags": p.get("tags") or [],
+                "description_html": p.get("descriptionHtml") or "", "online_store_url": p.get("onlineStoreUrl"),
+                "variants": [{"price": v["price"], "sku": v.get("sku") or "", "title": v.get("title")} for v in p["variants"]["nodes"]],
+                "images": len(p["media"]["nodes"])}
+
+    def publish_jarvis_draft(self, product_id, approved_by):
+        """Sets ONE of Jarvis's own DRAFT products to ACTIVE. Only called by the marketing department after
+        Danny approved that exact listing (controls.require consumed the approval). Never touches
+        Danny's products or anything already live. Also tries to make it visible on the Online Store
+        channel; if the app lacks that permission it says so instead of guessing."""
+        self._assert_jarvis_draft(product_id)
+        data = self._post("""mutation($input: ProductInput!) { productUpdate(input: $input) {
+                               product { id status handle } userErrors { field message } } }""",
+                          {"input": {"id": product_id, "status": "ACTIVE"}})
+        result = data["productUpdate"]
+        if result["userErrors"]:
+            raise ShopError(f"Shopify refused to publish: {result['userErrors']}")
+        audit("productPublish", product_id=product_id, status=result["product"]["status"], approved_by=str(approved_by))
+        channel = "unknown"
+        try:
+            pubs = self.query("{ publications(first: 20) { nodes { id name } } }")["publications"]["nodes"]
+            store = next((p for p in pubs if p["name"].lower() == "online store"), None)
+            if store:
+                out = self._post("""mutation($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) {
+                                      userErrors { field message } } }""", {"id": product_id, "input": [{"publicationId": store["id"]}]})
+                channel = "online store" if not out["publishablePublish"]["userErrors"] else f"not added: {out['publishablePublish']['userErrors']}"
+            else:
+                channel = "no Online Store channel found"
+        except ShopError as error:
+            channel = f"couldn't check sales channels ({str(error)[:120]})"
+        audit("productChannel", product_id=product_id, channel=channel)
+        return {"id": product_id, "status": result["product"]["status"], "handle": result["product"]["handle"], "channel": channel}
 
     # ---------------------------------------------------------- guarded writes
     def create_draft_product(self, title, description_html, product_type, tags, options, variants, images):

@@ -97,6 +97,9 @@ def score(econ, signals, thresholds, weights):
              f"Break-even ROAS {econ['break_even_roas']} is above {t['max_break_even_roas']} (paid tests could not pay back).")
         need(econ["price"] <= t["max_price"], f"Proposed price {econ['price']:.2f} is above the {t['max_price']:.2f} limit.")
         need(econ["product_cost"] <= t["max_product_cost"], f"Product cost {econ['product_cost']:.2f} is above {t['max_product_cost']:.2f}.")
+        if econ.get("profit_after_ads") is not None and "min_profit_after_ads" in t:
+            need(econ["profit_after_ads"] >= t["min_profit_after_ads"],
+                 f"After a planned ad cost of {econ.get('planned_cpa', 0):.2f}, profit {econ['profit_after_ads']:.2f} is below {t['min_profit_after_ads']:.2f}.")
         comp = signals.get("competitor_prices") or []
         if comp:
             med = statistics.median(comp)

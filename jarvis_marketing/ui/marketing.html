@@ -65,8 +65,9 @@
   <div id="banners"></div>
   <nav id="nav">
     <button data-p="overview" class="active">Overview</button><button data-p="approvals">Approvals</button>
-    <button data-p="discovery">Discovery</button><button data-p="products">Products</button><button data-p="creatives">Creatives</button>
-    <button data-p="experiments">Experiments</button><button data-p="learning">Lessons &amp; reports</button><button data-p="activity">Activity &amp; audit</button>
+    <button data-p="discovery">Discovery</button><button data-p="ads">Ad research</button><button data-p="products">Products</button>
+    <button data-p="listings">Listings</button><button data-p="channels">Channels</button><button data-p="creatives">Creatives</button>
+    <button data-p="experiments">Experiments</button><button data-p="paid">Paid tests (FB/IG)</button><button data-p="learning">Lessons &amp; reports</button><button data-p="activity">Activity &amp; audit</button>
   </nav>
 </header>
 <main>
@@ -81,10 +82,42 @@
     <p class="hint">Approving a post allows exactly that video, caption and link to be posted once, within 24 hours, and only in TEST mode. Any change needs a new approval.</p>
     <div id="approvals"></div></div>
     <div class="card"><h2>Answered</h2><div id="answered"></div></div></div>
-  <div class="pane" id="p-discovery"><div class="card"><h2>Discovery queue (ranked by evidence)</h2><div id="opps"></div></div></div>
+  <div class="pane" id="p-discovery"><div class="card"><h2>Discovery queue (ranked by evidence)</h2><div id="opps"></div></div>
+    <div class="card"><h2>Research sources (coverage and failures)</h2><div id="coverage"></div></div></div>
+  <div class="pane" id="p-ads">
+    <div class="card"><h2>What the adverts have in common (principles)</h2>
+      <p class="hint">Patterns across the adverts found for each product, weighted towards ads that kept running 30+ days. Run length and reach are not sales: these are ideas to test, never proof.</p><div id="principles"></div></div>
+    <div class="card"><h2>Adverts found and reverse-engineered</h2><div id="adsList"></div><div id="adDetail"></div></div>
+    <div class="card"><h2>Add an advert you've seen</h2>
+      <p class="hint">For sources with no official API (e.g. TikTok Creative Center Top Ads). Paste its link and the opening line; a saved video file (.mp4) lets Jarvis measure its cuts and pacing.</p>
+      <div class="row"><select id="adSrc" class="btn"><option value="tiktok_creative_center">TikTok Creative Center</option><option value="tiktok">TikTok</option>
+        <option value="meta_ad_library_web">Meta Ad Library (web)</option><option value="instagram">Instagram</option><option value="facebook">Facebook</option>
+        <option value="competitor_site">Competitor site</option><option value="other">Other</option></select>
+        <input id="adKw" class="btn" placeholder="keyword (e.g. cable organizer)" size="22"><input id="adUrl" class="btn" placeholder="https:// link to the ad" size="34"></div>
+      <div class="row" style="margin-top:6px"><input id="adHook" class="btn" placeholder="opening line / hook" size="40"><input id="adCta" class="btn" placeholder="call to action" size="14">
+        <input id="adSig" class="btn" placeholder="what the page showed, e.g. likes 120K, CTR top 10%" size="34"></div>
+      <div class="row" style="margin-top:6px"><textarea id="adText" class="btn" rows="2" cols="70" placeholder="ad text / caption"></textarea>
+        <input id="adVideo" class="btn" placeholder="optional: C:\path\to\ad.mp4" size="30"><button class="btn go" id="adSave">Save and analyse</button></div></div>
+  </div>
+  <div class="pane" id="p-listings"><div class="card"><h2>Store listings prepared by Jarvis</h2>
+    <p class="hint">Each product is re-checked at the supplier, created as a hidden DRAFT, read back from Shopify and compared field by field. Publishing needs your approval of that exact listing; no advert may point at a page until it loads publicly, in stock, at the planned price.</p>
+    <div id="listings"></div></div></div>
   <div class="pane" id="p-products"><div class="card"><h2>Shortlist and reserve</h2><div id="shortlist"></div></div>
     <div class="card"><h2>Rejected (with reasons)</h2><div id="rejected"></div></div><div id="candDetail"></div></div>
-  <div class="pane" id="p-creatives"><div class="card"><h2>Briefs and renders</h2><div id="creatives"></div></div></div>
+  <div class="pane" id="p-channels">
+    <div class="card"><div class="row" style="justify-content:space-between"><h2>Where each product can be sold</h2>
+      <button class="btn" id="chRun">Re-check all products and platforms</button></div>
+      <p class="hint">READY means the listing passes every mandatory check; it never means it gets published. Publishing on any platform needs your approval and a connected, authorised integration. Profit is after that platform's fees (estimates from researched rate cards).</p>
+      <div id="chMatrix"></div><div id="chDetail"></div></div>
+    <div class="card"><h2>Stock, price and order safeguards</h2><div id="chSync"></div></div>
+    <div class="card"><h2>Google (free listings, Merchant Center, Search Console)</h2><div id="chGoogle"></div></div>
+    <div class="card"><h2>Platforms researched</h2><div id="chPlatforms"></div></div>
+  </div>
+  <div class="pane" id="p-creatives"><div class="card"><h2>Pre-launch ranking</h2><div id="rankings"></div></div>
+    <div class="card"><h2>Briefs and renders</h2><div id="creatives"></div></div></div>
+  <div class="pane" id="p-paid"><div class="card"><h2>Facebook / Instagram video tests (prepared, not running)</h2>
+    <p class="hint">Plans are complete and checked, but nothing is sent to Meta: paid ads are switched off in code. Launching needs you to authorise the campaign and its budget.</p>
+    <div id="paid"></div></div></div>
   <div class="pane" id="p-experiments"><div class="card"><h2>Experiments</h2>
     <p class="hint">Verdicts use sessions, orders and contribution profit only. Views and likes are shown as diagnostics and never pick a winner. Thin evidence is marked inconclusive.</p>
     <div id="experiments"></div></div></div>
@@ -175,7 +208,7 @@ function renderOverview(d) {
 
 function renderApprovals(d) {
   const cr = Object.fromEntries(d.creatives.map(c => [c.id, c]));
-  $("approvals").innerHTML = d.approvals_pending.map(a => { const p = a.post || {}, c = cr[p.creative_id] || {};
+  $("approvals").innerHTML = d.approvals_pending.map(a => { if (a.listing) return listingAsk(a, a.listing); const p = a.post || {}, c = cr[p.creative_id] || {};
     const media = c.has_video ? `<video src="${mediaUrl(c.id)}" controls preload="metadata"></video>` : `<div class="novideo">${c.simulated ? "SIMULATED render: no video file" : "No video file"}</div>`;
     return `<div class="ask">${media}<div><b>${esc(a.summary)}</b> ${c.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}
       <pre>${esc(p.caption)}</pre><div class="hint">Link (put it in your TikTok bio while this post is live): ${esc(p.link)}</div>
@@ -183,9 +216,135 @@ function renderApprovals(d) {
       <div class="row" style="margin-top:8px"><button class="btn go" data-ap="${a.id}" data-d="approve">Approve this post</button>
       <button class="btn danger" data-ap="${a.id}" data-d="reject">Reject</button></div></div></div>`; }).join("") || '<span class="hint">Nothing waiting for approval.</span>';
   document.querySelectorAll("[data-ap]").forEach(b => b.onclick = () => act(`/api/marketing/${SLUG}/approvals/${b.dataset.ap}/${b.dataset.d}`, {},
-    b.dataset.d === "approve" ? "Approve this exact post? It is posted once, as shown." : "Reject this post?"));
+    b.dataset.d === "approve" ? (b.dataset.kind === "listing" ? "Publish this exact product to the store? It becomes visible to customers." : "Approve this exact post? It is posted once, as shown.")
+      : (b.dataset.kind === "listing" ? "Reject? It stays a hidden draft." : "Reject this post?")));
   $("answered").innerHTML = "<table><tr><th>When</th><th>What</th><th>Answer</th><th>By</th><th>Used</th></tr>" + d.approvals_recent.map(a =>
     `<tr><td>${when(a.decided_at)}</td><td>${esc(a.summary)}</td><td>${pill(a.status)}</td><td>${esc(a.decided_by || "")}</td><td>${a.used_at ? "posted " + when(a.used_at) : ""}</td></tr>`).join("") + "</table>";
+}
+
+function checksList(ch) {
+  return Object.entries(ch || {}).map(([k, v]) => `<div>${v.ok ? '<span class="pill good">ok</span>' : (v.unknown ? '<span class="pill busy">unknown</span>' : '<span class="pill bad">problem</span>')}
+    ${esc(k.replace(/_/g, " "))}: <span class="hint">${esc(v.detail)}</span></div>`).join("");
+}
+function listingEcon(e) {
+  if (!e) return "";
+  return `Price ${money(e.price)} − cost ${money(e.product_cost)} − shipping ${money(e.shipping)} − fees ${money(e.payment_fees)} − returns ${money(e.expected_returns)} = <b>${money(e.contribution)}</b>${lab("estimate")}
+    · after a planned ad cost of ${money(e.planned_cpa)}: <b>${money(e.profit_after_ads)}</b>${lab("estimate")}`;
+}
+function listingAsk(a, l) {
+  const imgs = (l.images || []).slice(0, 3).map(u => u.startsWith("https://") ? `<img src="${esc(u)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;margin:2px">` : "").join("");
+  return `<div class="ask" style="grid-template-columns:1fr"><div><b>${esc(a.summary)}</b> ${l.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}
+    <div>${imgs}</div><div>${esc(l.title)} · ${l.variants} variant(s) · ${l.prices.map(money).join(" / ")} · ${l.shipping ? esc(`${l.shipping.min_days}-${l.shipping.max_days} days delivery`) : ""}</div>
+    <div>${listingEcon(l.economics)}</div>${checksList(l.checks)}
+    <details><summary>Description customers will see</summary><div class="card">${esc((l.description_html || "").replace(/<\/(p|li|h\d)>/gi, "\n").replace(/<[^>]+>/g, " ")).replace(/\n/g, "<br>")}</div></details>
+    ${l.admin_url && l.admin_url.startsWith("https://") ? `<div><a href="${esc(l.admin_url)}" target="_blank" rel="noopener">Open the draft in Shopify</a></div>` : ""}
+    <div class="row" style="margin-top:8px"><button class="btn go" data-ap="${a.id}" data-d="approve" data-kind="listing">Approve: publish to the store</button>
+    <button class="btn danger" data-ap="${a.id}" data-d="reject" data-kind="listing">Reject</button></div></div></div>`;
+}
+
+function renderAds(d) {
+  $("principles").innerHTML = Object.entries(d.principles).map(([kw, ps]) => `<div style="margin-bottom:8px"><b>${esc(kw)}</b>
+    ${ps.length ? "<table><tr><th>Principle</th><th>Ads</th><th>Kept running 30d+</th><th>Weight</th><th>Why it might work</th><th>Our concept</th></tr>" + ps.map(p =>
+      `<tr><td>${esc(p.principle)} ${lab(p.label)}</td><td>${p.ads}</td><td>${p.long_running_ads ?? ""}</td><td>${p.weight ?? ""}</td><td class="hint">${esc(p.why || "")}</td>
+       <td>${p.concept ? esc(p.concept.replace(/_/g, " ")) : (p.usable ? "" : '<span class="hint">not used (needs real reviews)</span>')}</td></tr>`).join("") + "</table>" : '<span class="hint">no clear pattern yet</span>'}</div>`).join("")
+    || '<span class="hint">No adverts analysed yet. Ad research runs in every cycle; see Discovery → Research sources for which sources answered.</span>';
+  $("adsList").innerHTML = "<table><tr><th>Advert</th><th>Hook</th><th>Type</th><th>Running</th><th>Observed / not observable</th><th></th></tr>" + d.ads.map(a => { const an = a.analysis || {}, p = an.performance || {};
+    return `<tr><td>${esc(a.advertiser || "")} ${a.simulated ? '<span class="pill simp">SIM</span>' : ""}<div class="hint">${esc(a.source)} · ${esc(a.keyword || "")}</div></td>
+      <td>${esc(an.hook || "")}</td><td>${esc(an.hook_type || "")}</td><td>${p.run_days ?? "?"} days ${p.run_days !== null && p.run_days !== undefined ? lab("estimate") : ""}<div class="hint">since ${esc(a.start || "?")}${a.reach ? " · EU reach " + esc(a.reach) : ""}</div></td>
+      <td>${an.observed_count ?? 0} observed · ${(an.not_observable || []).length} not observable</td><td><button class="btn" data-ad="${a.id}">Breakdown</button></td></tr>`; }).join("") + "</table>";
+  document.querySelectorAll("[data-ad]").forEach(b => b.onclick = () => showAd(b.dataset.ad));
+}
+async function showAd(id) {
+  const r = await api(`/api/marketing/${SLUG}/ads/${id}`), an = r.analysis || {}, el = an.elements || {};
+  $("adDetail").innerHTML = `<div class="card"><h2>${esc(r.ad.advertiser || "Advert")} · ${esc(r.ad.source)}</h2>
+    <div>${r.ad.data.url && r.ad.data.url.startsWith("https://") ? `<a href="${esc(r.ad.data.url)}" target="_blank" rel="noopener">Open the advert</a>` : esc(r.ad.data.url || "")}</div>
+    <pre>${esc((r.ad.data.bodies || []).join("\n"))}</pre>
+    <table><tr><th>Element</th><th>What the source shows</th><th>Why it might work ${lab("hypothesis")}</th><th>Test it?</th></tr>${Object.entries(el).map(([k, v]) =>
+      `<tr><td>${esc(k.replace(/_/g, " "))}</td><td>${v.observed ? esc(typeof v.value === "object" ? JSON.stringify(v.value) : v.value) + (v.simulated ? ' <span class="pill simp">SIM</span>' : "") + `<div class="hint">from ${esc(v.from || "")}</div>`
+        : `<span class="dim">${esc(v.value || v.note || "not observable")}</span>${v.label ? lab(v.label) : ""}`}</td><td class="hint">${esc(v.why_it_might_work || "")}</td><td>${v.worth_testing ? '<span class="pill good">yes</span>' : ""}</td></tr>`).join("")}</table>
+    <div>Performance evidence: ${esc(JSON.stringify(an.performance || {}))}</div>
+    <div class="err">${(an.limitations || []).map(esc).join("<br>")}</div></div>`;
+  $("adDetail").scrollIntoView({behavior: "smooth"});
+}
+$("adSave").onclick = () => { const sig = $("adSig").value.trim();
+  act(`/api/marketing/${SLUG}/ads/import`, {source: $("adSrc").value, keyword: $("adKw").value, url: $("adUrl").value, hook: $("adHook").value,
+    text: $("adText").value, cta: $("adCta").value, video_path: $("adVideo").value, observed_signals: sig ? {as_shown: sig} : {}}); };
+
+function renderListings(d) {
+  $("listings").innerHTML = d.listings.map(l => `<div class="card"><div class="row" style="justify-content:space-between"><div><b>${esc(l.title || "listing " + l.id)}</b> ${pill(l.status)}
+      ${l.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}</div><div>${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">Public page</a>` : ""}
+      ${l.admin_url && l.admin_url.startsWith("https://") ? ` · <a href="${esc(l.admin_url)}" target="_blank" rel="noopener">Shopify admin</a>` : ""}</div></div>
+    <div>${l.prices.map(money).join(" / ")} · ${l.variants} variant(s) · ${l.images.length} photos</div><div>${listingEcon(l.economics)}</div>${checksList(l.checks)}
+    ${l.error ? `<div class="err">${esc(l.error)}</div>` : ""}</div>`).join("") || '<span class="hint">No listings yet: products not already in the store get one in REVIEW mode.</span>';
+}
+
+function renderRankings(d) {
+  const title = Object.fromEntries(d.candidates.map(c => [c.id, c.title]));
+  $("rankings").innerHTML = Object.entries(d.assessments).map(([cid, a]) => `<div style="margin-bottom:8px"><b>${esc(title[cid] || "product " + cid)}</b> ${lab(a.label)}
+    <div class="hint">${esc(a.prediction_service.why)}</div>
+    <table><tr><th>#</th><th>Concept</th><th>Score</th>${["hook_clarity","visual_clarity","product_demonstration","pacing","offer","call_to_action","audience_suitability","landing_page_consistency"].map(k => `<th>${esc(k.replace(/_/g, " "))}</th>`).join("")}<th>Why</th></tr>
+    ${a.ranking.map(r => `<tr><td>${r.rank}</td><td>${esc(r.concept.replace(/_/g, " "))}</td><td><b>${r.total}</b></td>${Object.values(r.scores).map(s => `<td title="${esc(s.why)}">${s.score}</td>`).join("")}
+      <td class="hint">${esc(r.explanation)}</td></tr>`).join("")}</table><div class="hint">${esc(a.why_first)}</div></div>`).join("") || '<span class="hint">No ranked creatives yet.</span>';
+}
+
+function renderPaid(d) {
+  $("paid").innerHTML = d.experiments.filter(e => e.kind === "paid_meta").map(e => { const p = e.data;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><div><b>Paid test ${e.id}</b> ${pill(e.status)} ${e.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}
+      ${(p.problems || []).length ? '<span class="pill bad">not ready</span>' : '<span class="pill good">ready for your authorisation</span>'}</div>
+      <button class="btn" data-launch="${e.id}">Launch…</button></div>
+      <div>${esc(p.hypothesis)}</div>
+      <div class="hint">${esc(p.platform)} · ${esc(p.objective)} · created ${esc(p.status_on_create)} · ${esc(p.audience)} · ${esc(p.placement)}</div>
+      <div>Budget ${lab("proposed")}: ${money(p.budget.daily_per_ad_set)}/day per ad set × ${p.budget.days} days × ${p.ads.length} = <b>${money(p.budget.money)}</b> (${esc(p.budget.status)})</div>
+      <table><tr><th>Creative</th><th>Concept</th><th>Video</th><th>Link (UTM)</th></tr>${p.ads.map(a => `<tr><td>${a.creative_id}</td><td>${esc(a.concept)}</td><td>${a.video_file ? "rendered" : '<span class="dim">no file</span>'}</td><td class="hint">${esc(a.link)}</td></tr>`).join("")}</table>
+      <div class="hint">Success: ${esc(p.success_criteria.primary)} (break-even CPA ${money(p.success_criteria.break_even_cpa)}). Stopping: ${esc(p.stopping_rules.join("; "))}</div>
+      <div class="hint">Tracking: ${esc(JSON.stringify(p.tracking))}</div>
+      ${(p.problems || []).length ? `<div class="err">${p.problems.map(esc).join("<br>")}</div>` : ""}<div class="err">${esc(p.launch)}</div></div>`; }).join("")
+    || '<span class="hint">No paid tests prepared yet (they need ranked creatives first).</span>';
+  document.querySelectorAll("[data-launch]").forEach(b => b.onclick = () => act(`/api/marketing/${SLUG}/paid/${b.dataset.launch}/launch`, {}, "Launch this paid test? (Paid ads are off in code, so this will be refused and logged.)"));
+}
+
+const RD = s => s ? `<span class="pill ${s === "READY" ? "good" : s === "REJECTED" ? "bad" : "busy"}">${esc(s.replace("_", " "))}</span>` : '<span class="dim">–</span>';
+function renderChannels(d) {
+  const ch = d.channels, keys = ch.platforms.map(p => p.key);
+  $("chMatrix").innerHTML = ch.products.length ? `<table><tr><th>Product</th>${ch.platforms.map(p => `<th>${esc(p.name.split(" (")[0])}</th>`).join("")}</tr>` + ch.products.map(p =>
+    `<tr><td>${esc(p.title)} ${p.simulated ? '<span class="pill simp">SIM</span>' : ""}<div class="hint">${esc(p.source)} · ${esc(p.status)} · supplier checked ${when(p.verified_at) || "never"}</div>
+      <button class="btn" data-chp="${p.id}">Details</button></td>${keys.map(k => { const c = p.platforms[k];
+        return `<td>${c ? RD(c.readiness) + (c.recommended ? ' <span class="pill good">recommended</span>' : "") + `<div class="hint">${c.contribution === null || c.contribution === undefined ? "profit n/a" : money(c.contribution) + "/order"}${c.problems.length ? " · " + esc(c.problems.slice(0, 2).join(", ")) : ""}</div>` : "–"}</td>`; }).join("")}</tr>`).join("") + "</table>"
+    : '<span class="hint">No products checked yet. Press "Re-check all products and platforms".</span>';
+  document.querySelectorAll("[data-chp]").forEach(b => b.onclick = () => showChannel(b.dataset.chp));
+  const s = ch.sync;
+  $("chSync").innerHTML = s ? `<div>${s.ok ? '<span class="pill good">no problems found</span>' : '<span class="pill bad">' + s.problems.length + ' problem(s)</span>'} <span class="hint">checked ${when(s.checked_at)} across ${s.products} products</span></div>
+    <table><tr><th>Problem</th><th>Product</th><th>What's wrong</th><th>What to do</th></tr>${s.problems.map(p => `<tr><td>${esc(p.kind.replace(/_/g, " "))}</td><td>${esc(p.title || "")}</td><td>${esc(p.text)}</td><td class="hint">${esc(p.action)}</td></tr>`).join("")}</table>
+    <div class="hint">Jarvis never changes a live price, pauses a listing, places a supplier order or refunds by itself: those need your approval.</div>` : '<span class="hint">Not checked yet.</span>';
+  const g = ch.google;
+  $("chGoogle").innerHTML = `<table>${["submission","approval","indexing","performance"].map(k => `<tr><td>${k}</td><td>${g[k].value ?? '<span class="dim">' + esc(g[k].note) + "</span>"}</td></tr>`).join("")}</table>
+    <div class="hint">Prepared feed (READY products only, for review; not submitted): ${esc(ch.feed_file)}. Free listings and organic search are never guaranteed: Google decides approval, indexing and ranking.</div>`;
+  $("chPlatforms").innerHTML = `<div class="hint">Researched ${esc(ch.checked)}. "unconfirmed" = only third-party sources agree; check the platform before acting.</div>
+    <table><tr><th>Platform</th><th>Dropshipping</th><th>Fees (estimate)</th><th>Integration</th><th>Stock/price/orders</th><th>What's needed</th></tr>${ch.platforms.map(p =>
+    `<tr><td><b>${esc(p.name)}</b><div class="hint">${esc(p.kind.replace(/_/g, " "))}</div></td>
+     <td>${pill(p.dropshipping === "allowed" ? "done" : p.dropshipping === "not_allowed" ? "rejected" : "pending")} ${esc(p.dropshipping.replace(/_/g, " "))}${p.facts.map(f => `<div class="hint">${esc(f.text)} <i>(${esc(f.status)}: ${esc(f.source)})</i></div>`).join("")}${p.cj_note ? `<div class="hint">CJ: ${esc(p.cj_note)}</div>` : ""}</td>
+     <td class="hint">${esc(p.fees.basis)} <i>(${esc(p.fees.status)})</i></td>
+     <td>${p.integration.connected === true ? '<span class="pill good">connected</span>' : p.integration.connected === false ? '<span class="pill bad">not connected</span>' : '<span class="pill busy">unknown</span>'}<div class="hint">${esc(p.integration.name)}</div></td>
+     <td class="hint">${esc(p.sync.stock)} / ${esc(p.sync.price)} / ${esc(p.sync.orders)}</td><td class="hint">${(p.integration.needs || []).map(esc).join("<br>")}</td></tr>`).join("")}
+    ${ch.other_uk.map(o => `<tr><td>${esc(o.name)}</td><td colspan="5" class="hint">${esc(o.verdict)}: ${esc(o.why)}</td></tr>`).join("")}</table>`;
+}
+async function showChannel(id) {
+  const r = await api(`/api/marketing/${SLUG}/channels/${id}`);
+  $("chDetail").innerHTML = `<div class="card"><h2>${esc(r.product.title)}</h2>` + r.listings.map(l => `<details><summary>${esc(l.platform)} ${RD(l.readiness)} score ${l.score} ${l.recommended ? '<span class="pill good">recommended</span>' : ""}</summary>
+    <div class="hint">${esc((l.reasons || []).join("; "))}</div>
+    <table><tr><th>Check</th><th></th><th>Detail</th><th>Needed</th></tr>${(l.checks || []).map(c => `<tr><td>${esc(c.label)}${c.mandatory ? "" : " (optional)"}</td><td>${c.ok ? '<span class="pill good">ok</span>' : c.blocking ? '<span class="pill bad">blocking</span>' : '<span class="pill busy">fix</span>'}</td><td class="hint">${esc(c.detail)}</td><td class="hint">${esc(c.needs || "")}</td></tr>`).join("")}</table>
+    ${(l.fixes || []).length ? `<div>Fixed automatically:</div>${l.fixes.map(f => `<div class="hint">• ${esc(f.field)}: ${esc(f.rule)} (${esc(f.before)} → ${esc(f.after)})</div>`).join("")}` : ""}
+    ${l.economics && l.economics.weakest ? `<div>Weakest variant: ${money(l.economics.weakest.price)} − cost ${money(l.economics.weakest.product_cost)} − shipping ${money(l.economics.weakest.shipping)} − platform fees ${money(l.economics.weakest.platform_fees)} − payment ${money(l.economics.weakest.payment_fees)} − returns ${money(l.economics.weakest.expected_returns)} = <b>${money(l.economics.weakest.contribution)}</b>${lab("estimate")}<div class="hint">${esc(l.economics.weakest.basis)}</div></div>` : ""}
+    <details><summary>Prepared listing</summary><pre>${esc(JSON.stringify(l.payload, null, 1))}</pre></details></details>`).join("") + "</div>";
+  $("chDetail").scrollIntoView({behavior: "smooth"});
+}
+$("chRun").onclick = () => act(`/api/marketing/${SLUG}/channels/run`, {});
+
+function renderCoverage(d) {
+  $("coverage").innerHTML = "<table><tr><th>Source</th><th>State</th><th>Runs (14d)</th><th>Success</th><th>Last OK</th><th>Last problem</th><th>Needs</th><th>Can't show</th></tr>" + d.sources.map(s =>
+    `<tr><td>${esc(s.source)} ${s.simulated ? '<span class="pill simp">SIM</span>' : ""}</td><td>${pill(s.state === "ok" ? "done" : s.state === "failing" ? "failed" : s.state)}</td><td>${s.runs}</td>
+     <td>${s.success_rate === null ? "" : Math.round(s.success_rate * 100) + "%"}</td><td class="hint">${when(s.last_ok)}</td><td class="hint">${esc(s.last_error || "")}</td>
+     <td class="hint">${esc(s.access)}</td><td class="hint">${esc(s.limits)}</td></tr>`).join("") + "</table>";
 }
 
 function renderDiscovery(d) {
@@ -229,6 +388,7 @@ function renderCreatives(d) {
   const title = Object.fromEntries(d.candidates.map(c => [c.id, c.title]));
   $("creatives").innerHTML = d.briefs.map(b => `<details><summary>${esc(title[b.candidate_id] || "product " + b.candidate_id)} · <b>${esc(b.concept.replace(/_/g, " "))}</b> · "${esc(b.hook)}" ${pill(b.status)}</summary>
     <div class="card"><div>Hypothesis ${lab("hypothesis")}: ${esc(b.hypothesis)}</div><div class="hint">Testing: ${esc(b.test_variable)} · ${b.duration_s}s · 9:16 · ${esc(b.destination || "")}</div>
+    <div class="hint">Research: ${esc(b.research_note || "none")}${b.informed_by.length ? " · informed by " + b.informed_by.map(p => esc(p.principle) + " (" + p.ads + " ads)").join(", ") : ""}. Original wording: never copied from an advert.</div>
     <table class="scenes"><tr><th>#</th><th>s</th><th>Visual</th><th>On screen</th><th>Voice-over</th></tr>${b.scenes.map(s => `<tr><td>${s.n}</td><td>${s.seconds}</td><td>${esc(s.visual)}</td><td>${esc(s.on_screen_text)}</td><td>${esc(s.vo)}</td></tr>`).join("")}</table>
     ${(byBrief[b.id] || []).map(c => `<div style="margin-top:6px">Render r${c.revision} ${pill(c.status)} ${c.simulated ? '<span class="pill simp">SIMULATED</span>' : ""} <span class="hint">${esc(c.provider)} · ${esc(c.creative_uid)}</span>
       ${c.has_video ? `<div><video src="${mediaUrl(c.id)}" controls preload="none" style="width:140px;border-radius:8px"></video></div>` : ""}
@@ -238,7 +398,7 @@ function renderCreatives(d) {
 }
 
 function renderExperiments(d) {
-  $("experiments").innerHTML = d.experiments.map(e => { const r = e.result || {}, dt = e.data;
+  $("experiments").innerHTML = d.experiments.filter(e => e.kind !== "paid_meta").map(e => { const r = e.result || {}, dt = e.data;
     return `<div class="card"><div class="row" style="justify-content:space-between"><div><b>Experiment ${e.id}</b> ${pill(e.status)} ${e.verdict ? pill(e.verdict) : ""} ${e.simulated ? '<span class="pill simp">SIMULATED</span>' : ""}</div>
       ${["designed","awaiting_approval","running"].includes(e.status) ? `<button class="btn danger" data-stopexp="${e.id}">Stop experiment</button>` : ""}</div>
       <div>${esc(dt.hypothesis)}</div><div class="hint">Audience: ${esc(dt.audience)} · ${esc(dt.placement)} · budget ${money(dt.budget.money)} (${esc(dt.budget.note)}) · ${dt.duration_days} days ·
@@ -275,6 +435,7 @@ async function load() {
     DATA = await api(`/api/marketing/${SLUG}`);
     renderHeader(DATA); renderOverview(DATA); renderApprovals(DATA); renderDiscovery(DATA); renderProducts(DATA);
     renderCreatives(DATA); renderExperiments(DATA); renderLearning(DATA); renderActivity(DATA);
+    renderCoverage(DATA); renderAds(DATA); renderListings(DATA); renderRankings(DATA); renderPaid(DATA); renderChannels(DATA);
   } catch (e) { toast("Couldn't load: " + e.message); }
 }
 load(); setInterval(() => { if (!document.querySelector("details[open]") && !document.activeElement?.matches("video")) load(); }, 15000);

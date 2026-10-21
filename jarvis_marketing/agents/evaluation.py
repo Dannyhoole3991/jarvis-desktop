@@ -45,6 +45,17 @@ def signals_for(ctx, cand):
             "_shipping_usd": ship.get("usd"), "_listing_price": f.get("store_listing"), "_key": key}
 
 
+def _angles(ctx, keyword):
+    """Advert angles to try: from the ad research when there is any, otherwise the defaults. Always hypotheses."""
+    from jarvis_marketing.agents import adintel
+    found = [p for p in adintel.principles(ctx.store, ctx.business_id, keyword) if p.get("usable") and p.get("concept")]
+    if found:
+        return [{"angle": p["principle"], "why": p["why"], "seen_in_ads": p["ads"], "long_running_ads": p["long_running_ads"],
+                 "label": E.HYPOTHESIS} for p in found[:4]]
+    return [{"angle": a, "label": E.HYPOTHESIS} for a in ("show the problem, then the fix", "close-up demo of it working",
+                                                           "the exact price and free delivery")]
+
+
 def evaluate_one(ctx, cand):
     s, econ_cfg, bid = signals_for(ctx, cand), ctx.economics, ctx.business_id
     key, fx = s["_key"], econ_cfg["usd_to_business"]
@@ -61,6 +72,9 @@ def evaluate_one(ctx, cand):
         price = s["_listing_price"] if listed else scoring.propose_price(cost, ship, econ_cfg["target_contribution"], **fees)
         econ = scoring.unit_economics(price, cost, ship, **fees)
         econ["price_source"] = "live store price (fact)" if listed else "PROPOSED (not set: price changes are disabled)"
+        econ["planned_cpa"] = econ_cfg["planned_cpa"]
+        econ["profit_after_ads"] = round(econ["contribution"] - econ_cfg["planned_cpa"], 2)
+        econ["profit_after_ads_basis"] = f"contribution minus a planned ad cost of {econ_cfg['planned_cpa']:.2f} per order (ESTIMATE)"
         ev.append(E.add(ctx.store, bid, "candidate", key, E.ESTIMATE, "contribution", f"Contribution about {econ['contribution']:.2f} per order",
                         value=econ["contribution"], basis=econ["formula"] + f"; return rate {fees['return_rate']} assumed", confidence=0.6))
     result = scoring.score(econ, s, ctx.thresholds, ctx.business["weights"])
@@ -75,8 +89,7 @@ def evaluate_one(ctx, cand):
                                    "median": sorted(comp)[len(comp) // 2] if comp else None},
             "economics": econ, "score": result, "risks": cand["data"].get("risks") or [], "gaps": cand["data"].get("gaps") or [],
             "evidence_ids": cand["data"].get("evidence_ids", []) + ev,
-            "ad_angles": [{"angle": a, "label": E.HYPOTHESIS} for a in ("show the problem, then the fix", "close-up demo of it working",
-                                                                         "the exact price and free delivery")],
+            "ad_angles": _angles(ctx, kw),
             "test_budget": {"money": 0.0, "posts_per_variant": ctx.testing["posts_per_experiment"],
                             "note": "Organic posts only: paid spend is disabled in this milestone."},
             "success_criteria": {"primary": "contribution profit from attributed orders",
@@ -85,7 +98,8 @@ def evaluate_one(ctx, cand):
                                  "break_even_cac": econ["break_even_cac"] if econ else None},
             "listed": s["_listing_price"] is not None,
             "next_step": None if s["_listing_price"] is not None else
-            "Not in the store yet: list it (a jarvis_store draft Danny publishes) before any post can link to it."}
+            "Not in the store yet: the listing agent re-checks the supplier, creates a Shopify DRAFT and asks Danny to approve "
+            "publishing it. No advert can point at it until its public page is live and checked."}
     return result, econ, card
 
 

@@ -8,6 +8,11 @@ are held constant, so a difference in results can be put down to the concept.
 
 Briefs are built only from the product's facts. A concept whose facts are missing (no options, no
 packing list, no listed price) is not offered. All visible text passes claims.check.
+
+Which concepts come first is decided by evidence: our own verified lessons first, then the principles
+the ad research found in existing adverts for this product (adintel.principles, weighted towards
+ads that kept running). Each brief records the principles and example ads that informed it. Ad copy
+is never reused: any line too close to an analysed advert is dropped (adintel.too_close).
 """
 
 import hashlib
@@ -22,8 +27,10 @@ from jarvis_marketing.agents.evaluation import target_for
 INPUT = {"candidate_ids?": [int]}
 OUTPUT = {"briefs": [{"brief_id": int, "candidate_id": int, "concept": str, "hook": str}], "needs_listing": [int],
           "skipped": [str]}
-ORDER = ["problem_solution", "demo_closeup", "price_reveal", "options_showcase", "gift_idea", "unboxing"]
+ORDER = ["problem_solution", "demo_closeup", "price_reveal", "options_showcase", "gift_idea", "unboxing",
+         "curiosity_open", "benefit_led", "objection_comparison"]
 DURATION_S = 15
+CAPTION_LIMIT = 32
 DISTINCT_MAX_SIMILARITY = 0.6
 
 
@@ -120,6 +127,33 @@ def concepts_for(ctx, cand):
                           (4.0, "photo 2", f["packing_list"], f"You get {f['packing_list']}."),
                           (4.0, "photo 3", name, f"The {name}."),
                           (4.5, "end card with the shop name", offer, cta + ".")))
+    out["curiosity_open"] = dict(
+        hypothesis="Opening on a close detail and asking what it is makes viewers wait for the reveal.",
+        hook="What do you think this is?",
+        demo="an extreme close-up first, then the full product and what it's for",
+        scenes=scenes((2.0, "photo 2, extreme close-up, slow rotate", "What is this?", "What do you think this is?"),
+                      (3.5, "photo 1, full product reveal", name, f"It's the {name}."),
+                      (4.0, "photo 3", "Made for this", f"For when {target['problem']}."),
+                      (5.0, "end card with the shop name", offer, cta + ".")))
+    if f.get("material") or f.get("packing_list"):
+        detail = f"Made from {f['material']}" if f.get("material") else f"Comes with {f['packing_list']}"
+        out["benefit_led"] = dict(
+            hypothesis="Leading with the outcome, then backing it with one real product fact, earns the click.",
+            hook=f"The simple fix for {target['problem'].split(',')[0]}.",
+            demo="the outcome first, then the product and one verified detail",
+            scenes=scenes((2.5, "photo 1, slow push-in", "The simple fix", f"The simple fix for {target['problem'].split(',')[0]}."),
+                          (3.5, "photo 2, close-up", name, f"The {name}."),
+                          (4.0, "photo 3", detail[:CAPTION_LIMIT], detail + "."),
+                          (5.0, "end card with the shop name", offer, cta + ".")))
+    if f.get("material"):
+        out["objection_comparison"] = dict(
+            hypothesis="Answering the 'will it be flimsy?' doubt with a real material fact removes a reason not to buy.",
+            hook="Worried it'll feel cheap?",
+            demo="name the doubt, then show the material up close",
+            scenes=scenes((2.5, "photo 1", "Worried it'll feel cheap?", "Worried it'll feel cheap?"),
+                          (4.0, "photo 2, extreme close-up", f"Made from {f['material']}"[:CAPTION_LIMIT], f"It's made from {f['material']}."),
+                          (3.5, "photo 3", name, f"The {name}."),
+                          (5.0, "end card with the shop name", offer, cta + ".")))
     allowed = [price] if price is not None else []
     allowed += [ship.get("min_days"), ship.get("max_days")] if ship else []
     allowed += [float(n) for n in re.findall(r"\d+(?:\.\d+)?", " ".join(str(f.get(k) or "") for k in ("packing_list", "material")))]
@@ -129,7 +163,10 @@ def concepts_for(ctx, cand):
               "placement": "TikTok organic post", "test_variable": "concept (angle + hook + scene order)",
               "held_constant": ["product", "photos", "price", "call to action", "destination", "length"],
               "allowed_numbers": allowed, "product_identity": identity(cand), "label": E.HYPOTHESIS,
-              "hashtags": ctx.business.get("hashtags") or []}
+              "hashtags": ctx.business.get("hashtags") or [],
+              "paid_placements": list(ctx.business.get("paid_test", {}).get("placements") or []),
+              "paid_note": "9:16 suits Facebook/Instagram Reels and Stories; a paid test only runs after Danny authorises it.",
+              "music": "Jarvis's own licensed track only; never audio from another advert."}
     for key, b in out.items():
         b.update(common, concept=key)
         b["vo_lines"] = [s["vo"] for s in b["scenes"]]
@@ -150,7 +187,7 @@ def _distinct(briefs):
 
 
 def run(ctx, inp):
-    from jarvis_marketing.agents import learning
+    from jarvis_marketing.agents import adintel, learning
     ids = inp.get("candidate_ids")
     cands = [ctx.store.get("candidates", i) for i in ids] if ids else ctx.store.find("candidates", business_id=ctx.business_id, status="shortlisted")
     prio = learning.priorities(ctx.store, ctx.business_id)
@@ -161,15 +198,26 @@ def run(ctx, inp):
             needs_listing.append(cand["id"])
             continue
         available = concepts_for(ctx, cand)
-        order = sorted(available, key=lambda c: (-prio.get(f"concept:{c}", 0), ORDER.index(c)))
+        kw = cand["data"].get("keyword") or ""
+        found = adintel.principles(ctx.store, ctx.business_id, kw)
+        weight = {p["concept"]: p["weight"] for p in found if p.get("concept") and p.get("weight")}
+        rivals = adintel.ad_texts(ctx.store, ctx.business_id, kw)
+        order = sorted(available, key=lambda c: (-prio.get(f"concept:{c}", 0), -weight.get(c, 0), ORDER.index(c)))
         chosen = []
         for concept in order:
             b = available[concept]
+            b["informed_by"] = [{k: p[k] for k in ("principle", "ads", "long_running_ads", "weight", "example_ad_ids", "label")}
+                                for p in found if p.get("concept") == concept]
+            b["research_note"] = (f"{len(rivals)} adverts analysed for '{kw}'; this angle appeared in "
+                                  f"{sum(p['ads'] for p in b['informed_by'])} of them" if rivals else "no adverts analysed for this keyword yet")
+            texts = [b["hook"], b["caption"], b["cta"], *b["vo_lines"], *(s["on_screen_text"] for s in b["scenes"])]
             try:
-                claims.check_all([b["hook"], b["caption"], b["cta"], *b["vo_lines"], *(s["on_screen_text"] for s in b["scenes"])],
-                                 b["allowed_numbers"])
+                claims.check_all(texts, b["allowed_numbers"])
             except claims.UnsupportedClaim as why:
                 skipped.append(f"{cand['title']} / {concept}: {why}")
+                continue
+            if any(adintel.too_close(t, rivals) for t in texts if len(str(t).split()) >= 4):
+                skipped.append(f"{cand['title']} / {concept}: too close to an existing advert's wording; not copied")
                 continue
             if _distinct(chosen + [b]):
                 chosen.append(b)

@@ -8,6 +8,12 @@ Milestone 1 (Danny's decision, 2026-10-20):
   * ORGANIC posts are allowed in TEST mode, each one only with Danny's approval of that exact post;
   * paid ads, spend, purchases and price changes are OFF below, as constants. Raising them is a
     code change Danny reviews, never a setting the department can reach.
+
+Winning-ad research engine (Danny's decision, 2026-10-20):
+  * Shopify DRAFT products may be created in REVIEW mode and above (hidden from customers);
+  * PUBLISHING a product needs Danny's approval of that exact listing (title, prices, photos, copy);
+  * Facebook/Instagram paid tests may be PREPARED (a paused plan, nothing sent to Meta); launching
+    stays hard-off until Danny authorises a campaign and its budget.
 """
 
 import hashlib
@@ -18,6 +24,7 @@ MODES = (RESEARCH, REVIEW, TEST, SCALE)
 MAX_MODE = TEST                      # SCALE stays refused until Danny sets limits
 
 PAID_ADS_ENABLED = False
+CHANNEL_PUBLISH_ENABLED = False      # listing on Google/Meta/Pinterest/marketplaces: off until Danny authorises a connected integration
 PURCHASES_ENABLED = False
 PRICE_CHANGES_ENABLED = False
 HARD_SPEND_CEILING = 0.0             # no cap may exceed this while paid ads are disabled
@@ -28,12 +35,14 @@ PERMISSIONS = {
     "brief": {REVIEW, TEST, SCALE}, "produce": {REVIEW, TEST, SCALE}, "qa": {REVIEW, TEST, SCALE},
     "design_experiment": {REVIEW, TEST, SCALE}, "request_approval": {REVIEW, TEST, SCALE},
     "publish_organic": {TEST, SCALE},
+    "create_draft": {REVIEW, TEST, SCALE}, "publish_product": {REVIEW, TEST, SCALE}, "prepare_paid": {REVIEW, TEST, SCALE},
     # Hard-off in this milestone, whatever the mode:
     "paid_spend": set(), "launch_paid": set(), "scale_budget": set(), "purchase": set(), "price_change": set(),
+    "publish_channel": {REVIEW, TEST, SCALE},
 }
 HARD_OFF = {"paid_spend": PAID_ADS_ENABLED, "launch_paid": PAID_ADS_ENABLED, "scale_budget": PAID_ADS_ENABLED,
-            "purchase": PURCHASES_ENABLED, "price_change": PRICE_CHANGES_ENABLED}
-NEEDS_APPROVAL = {"publish_organic", "launch_paid", "scale_budget", "purchase", "price_change"}
+            "purchase": PURCHASES_ENABLED, "price_change": PRICE_CHANGES_ENABLED, "publish_channel": CHANNEL_PUBLISH_ENABLED}
+NEEDS_APPROVAL = {"publish_organic", "publish_product", "publish_channel", "launch_paid", "scale_budget", "purchase", "price_change"}
 APPROVAL_SECONDS = 24 * 3600
 
 
@@ -110,7 +119,7 @@ class Controls:
         return {"mode": mode, "max_mode": MAX_MODE, "emergency_stop": self.stopped(), "caps": self.caps(business_id),
                 "schedule": self.schedule(business_id), "spent": self.spent(business_id),
                 "hard_off": {"paid_ads": not PAID_ADS_ENABLED, "purchases": not PURCHASES_ENABLED,
-                             "price_changes": not PRICE_CHANGES_ENABLED},
+                             "price_changes": not PRICE_CHANGES_ENABLED, "channel_publishing": not CHANNEL_PUBLISH_ENABLED},
                 "allowed": sorted(a for a in PERMISSIONS if self.allowed(business_id, a)),
                 "modes": [{"mode": m, "allowed": sorted(a for a, ms in PERMISSIONS.items() if m in ms and HARD_OFF.get(a, True)),
                            "available": mode_index(m) <= mode_index(MAX_MODE)} for m in MODES]}
