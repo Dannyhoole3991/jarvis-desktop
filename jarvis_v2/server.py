@@ -984,8 +984,15 @@ def api_post(state, path, body, from_ui=False):
         return {"text": builds.approve_document(str(body.get("project", "")), str(body.get("doc", "")), ex)}
     if path == "/api/proposals":
         p = selfimprove.propose(str(body.get("goal", "")), ex)
-        return {"proposal": p, "text": f"I'm working on that in a separate copy of myself (change {p['id']}). "
-                                       "When it's done and its tests pass, it'll be waiting for you in the Changes tab."}
+        where = ("I'm sending that to a Claude Code cloud session, so it doesn't use this PC's allowance (change {id}); "
+                 "if the cloud can't take it I'll do it on this PC instead." if p.get("where") == "cloud" else
+                 "I'm working on that in a separate copy of myself on this PC (change {id}).").format(id=p["id"])
+        return {"proposal": p, "text": where + " When it's done and it passes my checks and tests, it'll be waiting for you in the Changes tab."}
+    if parts[1:2] in (["proposals"], ["builds"]) and parts[0] == "api" and len(parts) == 4 and parts[3] == "local":
+        if not from_ui:
+            raise PermissionError("Only Danny can move a cloud job onto this PC, from the window.")
+        fn = selfimprove.run_locally if parts[1] == "proposals" else builds.run_locally
+        return {"text": fn(int(parts[2]), ex)}
     if parts[:2] == ["api", "proposals"] and len(parts) == 4 and parts[3] in ("approve", "reject", "undo"):
         if not from_ui:
             raise PermissionError("Only Danny can apply, reject or undo Jarvis's changes, from the Changes tab.")
@@ -1112,6 +1119,8 @@ def start(router=None, port=PORT, executor=None, announcer=None, watch=None):
     server = _Server(("127.0.0.1", port), make_handler(state))
     if real:
         executor.start()
+        selfimprove.resume_cloud_watches(executor)    # cloud coding jobs carry on being watched after a restart
+        builds.resume_cloud_watches(executor)
     state.announcer = announcer
     announcer.thinking = lambda: state.thinking
     state.router.on_handoff = announcer.urgent          # the quick voice's "On it, sir" is spoken at once

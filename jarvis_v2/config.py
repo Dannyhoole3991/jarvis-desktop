@@ -50,6 +50,14 @@ OLLAMA_MODEL = os.environ.get("JARVIS_OLLAMA_MODEL", "gpt-oss:20b")
 # listens on IPv4, which cost ~1.5 s on EVERY call (measured).
 ENGINE_URL = os.environ.get("JARVIS_ENGINE_URL", "http://127.0.0.1:8765")
 
+# Where Jarvis's coding work (self-improvements and builds) runs: "cloud" = a Claude Code cloud session first,
+# falling back to this PC when the cloud can't take it; "local" = always this PC. Chat, browser, shop and
+# jobs always stay on this PC.
+CODE_JOBS = os.environ.get("JARVIS_CODE_JOBS", "cloud").strip().lower()
+CLOUD_WAIT_SECONDS = float(os.environ.get("JARVIS_CLOUD_WAIT_HOURS", "3")) * 3600   # give up on a cloud result after this
+CLOUD_POLL_SECONDS = float(os.environ.get("JARVIS_CLOUD_POLL_SECONDS", "120"))      # how often GitHub is checked for it
+CLOUD_START_TIMEOUT = float(os.environ.get("JARVIS_CLOUD_START_TIMEOUT", "180"))    # `claude --cloud` must start a session by then
+
 MAX_TOOL_ROUNDS = 8                   # fallback brains: tool calls per turn before giving up
 HANDOVER_TURNS = 10                   # recent exchanges passed to whichever brain takes over
 

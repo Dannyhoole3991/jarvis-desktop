@@ -8,6 +8,12 @@ Builds: real projects, done properly. Spec -> Danny's approval -> plan -> test-d
      (docs/plans/...-plan.md), then build it task by task, test first, ticking each box.
   4. "How far has it got" is answered by counting ticked boxes in the plan, not by guessing.
 
+Cloud first (cloud.py, setting JARVIS_CODE_JOBS): when the project is a git repository on GitHub with nothing
+unsaved, the approved spec is committed and pushed and a Claude Code cloud session does the build on its own branch.
+When that branch arrives it is fetched; if the project is still clean on the same branch it's fast-forwarded to it
+(exactly what a build on this PC leaves behind), otherwise it is kept as branch jarvis/build-<id> for Danny.
+If the cloud can't take it, the build runs on this PC as before.
+
 Builds of Jarvis himself go through selfimprove.py instead (separate copy, tests, approval).
 """
 
@@ -15,9 +21,11 @@ import datetime
 import json
 import os
 import re
+import subprocess
+import threading
 import time
 
-from . import config, projects as P
+from . import cloud, config, projects as P
 
 BUILDS_FILE = os.path.join(config.DATA_DIR, "builds.json")
 APPROVALS_FILE = os.path.join(config.DATA_DIR, "approvals.jsonl")
@@ -35,6 +43,14 @@ BUILD_BRIEF = """You are building a project for Danny, working unattended. The a
 4. Commit with git at the end of each phase (clear messages). Never push. Never delete files you didn't create.
 5. If something in the spec is unclear, choose the simplest safe option and note the decision in the plan.
 6. Finish with a short summary: what was built, how to run it, and anything Danny needs to do himself.
+"""
+
+CLOUD_BUILD_BRIEF = """You are building a project for Danny in a cloud session on its GitHub repository, working unattended.
+Start from the {base} branch as it is on GitHub. The agreed design is in {spec}.
+
+""" + BUILD_BRIEF.split("\n\n", 1)[1].replace("Never push.", "Push only your own branch (below).") + """
+Commit your work to a branch named {branch} and push THAT branch only. Never push to {base}, never open or merge a pull request.
+Your LAST commit's message is your short summary for Danny and must end with this line on its own: """ + cloud.DONE_MARK + """ {build_id}
 """
 
 
@@ -93,7 +109,7 @@ def _find_build(project_path, doc):
     return None
 
 
-def approve_document(project_name, doc, executor, approver="Danny"):
+def approve_document(project_name, doc, executor, approver="Danny", background=True):
     """Records Danny's approval. Approving a build's spec is what starts the build."""
     project = P.find(project_name)
     if not project:
@@ -108,15 +124,168 @@ def approve_document(project_name, doc, executor, approver="Danny"):
         f.write(json.dumps({"ts": time.time(), "project": project["name"], "doc": doc, "approver": approver}) + "\n")
     build = _find_build(project["path"], doc)
     if build and build["status"] == "awaiting_approval" and doc == build["spec"]:
-        brief = BUILD_BRIEF.format(spec=build["spec"], plan=build["plan"])
-        run_id = executor.submit(project["name"], project["path"], brief, kind="build", meta={"build_id": build["id"], "title": build["title"]})
-        builds = _load()
-        for b in builds:
-            if b["id"] == build["id"]:
-                b.update(status="building", run_ids=b["run_ids"] + [run_id], approved_at=time.time())
-        _save(builds)
+        _update(build["id"], approved_at=time.time())
+        if cloud.mode() == "cloud":
+            _update(build["id"], status="building", where="cloud", cloud={"branch": f"claude/jarvis-build-{build['id']}", "starting": True})
+            if background:
+                threading.Thread(target=_start_cloud, args=(build["id"], executor), daemon=True, name=f"cloud-build-{build['id']}").start()
+            else:
+                _start_cloud(build["id"], executor, watch=False)
+            return (f"Approved, sir. I'm sending the build of '{build['title']}' to a Claude Code cloud session; "
+                    "if the cloud can't take it, it'll run on this PC instead.")
+        run_id = _start_local(_get(build["id"]), executor)
         return f"Approved, sir. The build of '{build['title']}' has started (run {run_id})."
     return f"Noted your approval of {doc}."
+
+
+def _get(build_id):
+    return next((b for b in _load() if b["id"] == build_id), None)
+
+
+_lock = threading.Lock()
+
+
+def _update(build_id, **fields):
+    with _lock:
+        builds = _load()
+        for b in builds:
+            if b["id"] == build_id:
+                b.update(fields)
+        _save(builds)
+
+
+def _git(cwd, *args):
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=120, creationflags=0x08000000 if os.name == "nt" else 0)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return -1, str(error)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def _start_local(build, executor, why=None):
+    brief = BUILD_BRIEF.format(spec=build["spec"], plan=build["plan"])
+    run_id = executor.submit(build["project"], build["path"], brief, kind="build", meta={"build_id": build["id"], "title": build["title"]})
+    fields = dict(status="building", where=cloud.LOCAL, run_ids=build["run_ids"] + [run_id])
+    if why:
+        fields["cloud_fallback"] = why
+    _update(build["id"], **fields)
+    return run_id
+
+
+def _cloud_ready(build):
+    """(base branch, None) when the project can go to the cloud, else (None, why not). Commits the approved spec."""
+    path = build["path"]
+    code, base = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
+    if code != 0 or not base or base == "HEAD":
+        return None, "the project isn't a git repository on a branch"
+    if _git(path, "remote", "get-url", "origin")[0] != 0:
+        return None, "the project has no GitHub remote (origin)"
+    _, status = _git(path, "status", "--porcelain", "--untracked-files=no")
+    spec = build["spec"].replace("\\", "/")
+    others = [l[3:] for l in status.splitlines() if l.strip() and l[3:].strip('"') != spec]
+    if others:
+        return None, "the project has unsaved changes the cloud wouldn't see (" + ", ".join(others[:3]) + ")"
+    _git(path, "add", "-f", "--", spec)
+    _, staged = _git(path, "diff", "--cached", "--name-only")
+    if staged.strip():
+        code, out = _git(path, "commit", "-m", f"Spec approved: {build['title'][:60]}", "--", spec)
+        if code != 0:
+            return None, f"couldn't commit the approved spec ({out[-200:]})"
+    return base, None
+
+
+def _start_cloud(build_id, executor, watch=True):
+    build = _get(build_id)
+    c = build["cloud"]
+    try:
+        base, why = _cloud_ready(build)
+        info = None
+        if base:
+            brief = CLOUD_BUILD_BRIEF.format(spec=build["spec"], plan=build["plan"], base=base, branch=c["branch"], build_id=build_id)
+            info, why = cloud.start_session(build["path"], brief, push_branch=base)
+    except Exception as error:
+        info, why = None, f"the cloud couldn't be started ({error})"
+    if not info:
+        _start_local(build, executor, why)
+        return _get(build_id)
+    _update(build_id, cloud=dict(c, starting=False, base=base, session_id=info["session_id"], url=info["url"], hint=info["branch"],
+                                 started_at=time.time(), deadline=time.time() + config.CLOUD_WAIT_SECONDS))
+    if watch:
+        watch_cloud(build_id)
+    return _get(build_id)
+
+
+def check_cloud(build_id, now=None):
+    """One look at GitHub for a cloud build. When its branch is there and marked done (or the time is up and it is
+    there anyway) it's fetched: fast-forwarded into the project if nothing moved, else kept as jarvis/build-<id>."""
+    b = _get(build_id)
+    if not b or b.get("status") != "building" or b.get("where") != "cloud" or (b.get("cloud") or {}).get("starting"):
+        return b
+    c, now, path = b["cloud"], now or time.time(), b["path"]
+    late = now >= c.get("deadline", 0)
+    found = cloud.find_branch(path, c["branch"], key=f"build-{build_id}", hint=c.get("hint"))
+    if found:
+        ok, message = cloud.fetch(path, found)
+        if ok and (cloud.is_done(message) or late):
+            local = f"jarvis/build-{build_id}"
+            _git(path, "branch", "-f", local, cloud.remote_ref(found))
+            _, head = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
+            _, dirty = _git(path, "status", "--porcelain", "--untracked-files=no")
+            merged = head == c.get("base") and not dirty.strip() and _git(path, "merge", "--ff-only", local)[0] == 0
+            note = "" if cloud.is_done(message) else "The cloud session never said it had finished; this is what it had pushed. "
+            if not merged:
+                note += f"It's on branch {local} in the project (the project had moved on, so I didn't put it in place). "
+            _update(build_id, status="finished", finished_at=now, summary=(note + cloud.summary(message))[:3000],
+                    cloud=dict(c, branch=found, arrived_at=now, local_branch=local, merged=merged))
+            return _get(build_id)
+    if late:
+        hours = round(config.CLOUD_WAIT_SECONDS / 3600, 1)
+        _update(build_id, status="stopped (cloud result never arrived)", finished_at=now,
+                detail=f"No branch {c['branch']} on GitHub after {hours:g} hours. You can run it on this PC instead.")
+    return _get(build_id)
+
+
+_watching = set()
+
+
+def watch_cloud(build_id, sleep=time.sleep):
+    if build_id in _watching:
+        return
+    _watching.add(build_id)
+    try:
+        while True:
+            try:
+                b = check_cloud(build_id)
+            except Exception as error:
+                print("builds: cloud check failed:", error)
+                b = _get(build_id)
+            if not b or b.get("status") != "building":
+                return
+            sleep(config.CLOUD_POLL_SECONDS)
+    finally:
+        _watching.discard(build_id)
+
+
+def resume_cloud_watches(executor):
+    """After a restart: carry on watching cloud builds; one whose start was cut off runs on this PC."""
+    for b in _load():
+        if b.get("status") != "building" or b.get("where") != "cloud":
+            continue
+        if (b.get("cloud") or {}).get("starting"):
+            target, args = _start_local, (b, executor, "Jarvis was restarted while starting the cloud session")
+        else:
+            target, args = watch_cloud, (b["id"],)
+        threading.Thread(target=target, args=args, daemon=True, name=f"cloud-build-{b['id']}").start()
+
+
+def run_locally(build_id, executor):
+    """Danny's 'Run it on this PC instead' for a cloud build that never arrived."""
+    b = _get(int(build_id))
+    if not b or b.get("where") != "cloud" or not str(b.get("status", "")).startswith("stopped"):
+        raise ValueError("Only a cloud build that didn't arrive can be re-run on this PC.")
+    run_id = _start_local(b, executor, "Danny asked for it to run on this PC")
+    return f"Building '{b['title']}' on this PC now (run {run_id})."
 
 
 def progress(path):
@@ -144,13 +313,18 @@ def build_status(project_name=None, store=None):
     status = b["status"]
     if run and run["status"] in ("succeeded", "failed", "cancelled", "timed_out"):
         status = {"succeeded": "finished", "failed": "stopped with a problem", "cancelled": "cancelled", "timed_out": "ran out of time"}[run["status"]]
-    text = f"'{b['title']}' in {b['project']}: {status.replace('_', ' ')}."
+    text = f"'{b['title']}' in {b['project']}: {status.replace('_', ' ')}"
+    text += f" ({cloud.where_phrase(b.get('where'))})." if b.get("where") else "."
     if total:
         text += f" {done} of {total} plan tasks done."
     elif b["status"] == "awaiting_approval":
         text += f" The spec ({b['spec']}) is waiting for your approval."
     if run and run.get("error") and run["status"] != "succeeded":
         text += f" Problem: {run['error'][:200]}"
+    if b.get("detail"):
+        text += f" {b['detail'][:200]}"
+    if b.get("where") == "cloud" and b.get("summary"):
+        text += f" {b['summary'][:400]}"
     return text
 
 
